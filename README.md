@@ -102,8 +102,38 @@ Available stats:
 | `hotspots` | Most frequently changed files with churn and unique developer count |
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
+| `coupling` | Files that frequently change together, revealing hidden architectural dependencies |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
+
+### Coupling analysis
+
+File coupling detects files that co-change in the same commits, revealing architectural coupling invisible in the code structure. Based on Adam Tornhill's ["Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) methodology.
+
+```bash
+# Top 20 coupled file pairs
+gitcortex stats --input data.jsonl --stat coupling --top 20
+
+# Stricter: at least 10 co-changes, skip commits with 30+ files
+gitcortex stats --input data.jsonl --stat coupling --coupling-min-changes 10 --coupling-max-files 30
+
+# Export for visualization
+gitcortex stats --input data.jsonl --stat coupling --format csv > coupling.csv
+```
+
+Example output:
+
+```
+FILE A                                           FILE B                                           CO-CHANGES  COUPLING  CHANGES A  CHANGES B
+ApplicationDbContext.cs                           ApplicationDbContextModelSnapshot.cs              54          61%       100        89
+GuardianPortalControllerTests.cs                 GuardianPortalController.cs                       40          91%       44         61
+IWorkspaceRepository.cs                          WorkspaceRepository.cs                            19          100%      19         29
+```
+
+What the columns mean:
+- **Co-changes**: number of commits where both files changed together
+- **Coupling %**: co-changes / min(changes A, changes B) — how tightly linked the pair is
+- **100% coupling**: every time the less-active file changes, the other changes too
 
 ## Architecture
 
