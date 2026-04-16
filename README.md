@@ -6,14 +6,39 @@ Extracts commit metadata, file changes, blob sizes, and developer info into JSON
 
 ## Performance
 
-Tested on real repositories:
+Benchmarked on real open-source repositories (bare clones, SSD):
 
-| Repository | Commits | Extract time | Throughput |
-|------------|---------|-------------|------------|
-| Small project (829 commits) | 829 | 0.3s | ~2,700/s |
-| **Linux kernel** | **1,438,443** | **11m 55s** | **~2,000/s** |
+| Repository | Commits | Devs | Extract time | Throughput | JSONL size |
+|------------|---------|------|-------------|------------|------------|
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 286 | 0.9s | 7,800/s | 23K lines |
+| [Praat](https://github.com/praat/praat) | 10,221 | 24 | 26s | 393/s | 95K lines |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 1,140/s | 298K lines |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | ~12m | ~2,000/s | 6M lines |
 
-The extraction uses only **2 git processes** regardless of repository size (one `git log` stream, one `cat-file` for blob sizes), keeping memory usage at ~21MB for the application itself.
+Throughput varies by commit complexity — repos with large diffs per commit (Praat: binary-heavy, ~1260 lines/commit average) are slower than repos with small commits (Pi-hole: ~10 lines/commit average).
+
+### Why it's fast
+
+The extraction uses only **2 git processes** for the entire run, regardless of repository size:
+
+```
+git log --raw --numstat    → single stream for all commit data
+git cat-file --batch-check → single process for all blob sizes
+```
+
+No per-commit process spawning. Memory usage stays at ~21MB for the application (git itself uses more for packfile access).
+
+### Stats memory
+
+Stats use streaming aggregation — the JSONL file is read once, line by line, without storing raw records. Only compact aggregation maps are kept in memory.
+
+| Repository | JSONL size | Stats RAM (estimated) |
+|------------|-----------|----------------------|
+| Pi-hole (7K commits) | 0.7 MB | ~5 MB |
+| WordPress (52K commits) | 85 MB | ~30 MB |
+| Kubernetes (137K commits) | 270 MB | ~80 MB |
+| Linux kernel (1.4M commits) | 1.9 GB | ~360 MB |
 
 ## Install
 
