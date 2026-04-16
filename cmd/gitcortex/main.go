@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"gitcortex/internal/extract"
+	"gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
 )
@@ -69,12 +70,60 @@ func extractCmd() *cobra.Command {
 }
 
 func statsCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		input       string
+		format      string
+		topN        int
+		granularity string
+	)
+
+	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Generate statistics from extracted JSONL data",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("stats command not yet implemented")
+			ds, err := stats.LoadJSONL(input)
+			if err != nil {
+				return err
+			}
+
+			f := stats.NewFormatter(os.Stdout, format)
+
+			fmt.Fprintf(os.Stderr, "Loaded %d commits, %d files, %d devs\n\n",
+				len(ds.Commits), len(ds.Files), len(ds.Devs))
+
+			fmt.Fprintln(os.Stderr, "=== Summary ===")
+			if err := f.PrintSummary(stats.ComputeSummary(ds)); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", topN)
+			if err := f.PrintContributors(stats.TopContributors(ds, topN)); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", topN)
+			if err := f.PrintHotspots(stats.FileHotspots(ds, topN)); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", granularity)
+			if err := f.PrintActivity(stats.ActivityOverTime(ds, granularity)); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\n=== Top %d Bus Factor Risk ===\n", topN)
+			if err := f.PrintBusFactor(stats.BusFactor(ds, topN)); err != nil {
+				return err
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file from extract")
+	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")
+	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries to show")
+	cmd.Flags().StringVar(&granularity, "granularity", "month", "Activity granularity: day, week, month, year")
+
+	return cmd
 }
