@@ -50,8 +50,6 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Additions</div><div class="value">{{.Summary.TotalAdditions}}</div></div>
   <div class="card"><div class="label">Deletions</div><div class="value">{{.Summary.TotalDeletions}}</div></div>
   <div class="card"><div class="label">Merges</div><div class="value">{{.Summary.MergeCommits}}</div></div>
-  <div class="card"><div class="label">Avg lines/commit</div><div class="value">{{printf "%.0f" .Summary.AvgAdditions}}</div><div class="detail">additions</div></div>
-  <div class="card"><div class="label">Avg files/commit</div><div class="value">{{printf "%.1f" .Summary.AvgFilesChanged}}</div></div>
 </div>
 
 {{if .Activity}}
