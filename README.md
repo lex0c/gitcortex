@@ -140,8 +140,24 @@ Available stats:
 | `churn-risk` | Files ranked by recency-weighted churn combined with bus factor |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
+| `profile` | Per-developer report: score, top files, activity timeline, weekend % |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
+
+### Developer profile
+
+Full report per developer with score, top files, monthly activity, and working patterns.
+
+```bash
+# All developers, ranked by score
+gitcortex stats --input data.jsonl --stat profile
+
+# Single developer
+gitcortex stats --input data.jsonl --stat profile --email alice@company.com
+
+# JSON export
+gitcortex stats --input data.jsonl --stat profile --format json
+```
 
 ### Coupling analysis
 
