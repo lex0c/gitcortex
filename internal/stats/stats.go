@@ -439,6 +439,7 @@ type BigCommit struct {
 	AuthorName   string
 	AuthorEmail  string
 	Date         string
+	Message      string
 	Additions    int64
 	Deletions    int64
 	LinesChanged int64
@@ -448,11 +449,16 @@ type BigCommit struct {
 func TopCommits(ds *Dataset, n int) []BigCommit {
 	result := make([]BigCommit, 0, len(ds.commits))
 	for sha, cm := range ds.commits {
+		msg := cm.message
+		if len(msg) > 80 {
+			msg = msg[:77] + "..."
+		}
 		result = append(result, BigCommit{
 			SHA:          sha,
 			AuthorName:   ds.contributors[cm.email].Name,
 			AuthorEmail:  cm.email,
 			Date:         cm.date.Format("2006-01-02"),
+			Message:      msg,
 			Additions:    cm.add,
 			Deletions:    cm.del,
 			LinesChanged: cm.add + cm.del,

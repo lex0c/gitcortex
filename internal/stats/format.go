@@ -322,16 +322,33 @@ func (f *Formatter) PrintTopCommits(commits []BigCommit) error {
 				c.SHA[:12], c.AuthorName, c.AuthorEmail, c.Date,
 				fmt.Sprintf("%d", c.Additions), fmt.Sprintf("%d", c.Deletions),
 				fmt.Sprintf("%d", c.LinesChanged), fmt.Sprintf("%d", c.FilesChanged),
+				c.Message,
 			}
 		}
-		return f.writeCSV([]string{"sha", "author", "email", "date", "additions", "deletions", "lines_changed", "files_changed"}, rows)
+		return f.writeCSV([]string{"sha", "author", "email", "date", "additions", "deletions", "lines_changed", "files_changed", "message"}, rows)
 	default:
-		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(tw, "SHA\tAUTHOR\tDATE\tADDITIONS\tDELETIONS\tLINES\tFILES\n")
-		fmt.Fprintf(tw, "---\t------\t----\t---------\t---------\t-----\t-----\n")
+		hasMsg := false
 		for _, c := range commits {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
-				c.SHA[:12], c.AuthorName, c.Date, c.Additions, c.Deletions, c.LinesChanged, c.FilesChanged)
+			if c.Message != "" {
+				hasMsg = true
+				break
+			}
+		}
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		if hasMsg {
+			fmt.Fprintf(tw, "SHA\tAUTHOR\tDATE\tLINES\tFILES\tMESSAGE\n")
+			fmt.Fprintf(tw, "---\t------\t----\t-----\t-----\t-------\n")
+			for _, c := range commits {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
+					c.SHA[:12], c.AuthorName, c.Date, c.LinesChanged, c.FilesChanged, c.Message)
+			}
+		} else {
+			fmt.Fprintf(tw, "SHA\tAUTHOR\tDATE\tADDITIONS\tDELETIONS\tLINES\tFILES\n")
+			fmt.Fprintf(tw, "---\t------\t----\t---------\t---------\t-----\t-----\n")
+			for _, c := range commits {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
+					c.SHA[:12], c.AuthorName, c.Date, c.Additions, c.Deletions, c.LinesChanged, c.FilesChanged)
+			}
 		}
 		return tw.Flush()
 	}

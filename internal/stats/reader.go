@@ -15,11 +15,12 @@ import (
 )
 
 type commitEntry struct {
-	email string
-	date  time.Time
-	add   int64
-	del   int64
-	files int
+	email   string
+	date    time.Time
+	add     int64
+	del     int64
+	files   int
+	message string
 }
 
 type fileEntry struct {
@@ -199,11 +200,12 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			ds.TotalFilesChanged += int64(c.FilesChanged)
 
 			ds.commits[c.SHA] = &commitEntry{
-				email: c.AuthorEmail,
-				date:  t,
-				add:   c.Additions,
-				del:   c.Deletions,
-				files: c.FilesChanged,
+				email:   c.AuthorEmail,
+				date:    t,
+				add:     c.Additions,
+				del:     c.Deletions,
+				files:   c.FilesChanged,
+				message: c.Message,
 			}
 
 			// Contributors
