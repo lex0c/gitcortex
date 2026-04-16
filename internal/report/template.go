@@ -70,20 +70,19 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
-{{if .Ranking}}
-<h2>Contributor Ranking</h2>
+{{if .Contributors}}
+<h2>Top Contributors</h2>
 <table>
-<tr><th>Name</th><th>Email</th><th>Score</th><th></th><th>Commits</th><th>Lines</th><th>Files</th><th>Days</th></tr>
-{{range .Ranking}}
+<tr><th>Name</th><th>Email</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
+{{$maxContrib := 0}}{{range .Contributors}}{{if gt .Commits $maxContrib}}{{$maxContrib = .Commits}}{{end}}{{end}}
+{{range .Contributors}}
 <tr>
   <td>{{.Name}}</td>
   <td class="mono" style="font-size:11px">{{.Email}}</td>
-  <td>{{printf "%.1f" .Score}}</td>
-  <td style="width:20%"><div class="bar-container"><div class="bar bar-score" style="width: {{.Score}}%"></div></div></td>
   <td>{{.Commits}}</td>
-  <td>{{.LinesChanged}}</td>
-  <td>{{.FilesTouched}}</td>
-  <td>{{.ActiveDays}}</td>
+  <td style="width:20%"><div class="bar-container"><div class="bar bar-commits" style="width: {{pctInt .Commits $maxContrib}}%"></div></div></td>
+  <td>{{.Additions}}</td>
+  <td>{{.Deletions}}</td>
 </tr>
 {{end}}
 </table>
@@ -206,7 +205,6 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
   <div style="font-size:16px; font-weight:600;">{{.Name}} <span class="mono" style="font-size:12px; color:#656d76;">&lt;{{.Email}}&gt;</span></div>
   <div style="margin:8px 0; display:flex; gap:24px; flex-wrap:wrap; font-size:13px; color:#656d76;">
-    <span>Score: <b style="color:#24292f">{{printf "%.1f" .Score}}</b></span>
     <span>Commits: <b style="color:#24292f">{{.Commits}}</b></span>
     <span>Lines: <b style="color:#24292f">{{.LinesChanged}}</b></span>
     <span>Files: <b style="color:#24292f">{{.FilesTouched}}</b></span>

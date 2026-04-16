@@ -12,7 +12,6 @@ import (
 type ReportData struct {
 	Summary      stats.Summary
 	Contributors []stats.ContributorStat
-	Ranking      []stats.RankedContributor
 	Hotspots     []stats.FileStat
 	Activity     []stats.ActivityBucket
 	BusFactor    []stats.BusFactorResult
@@ -45,7 +44,6 @@ func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) err
 	data := ReportData{
 		Summary:      stats.ComputeSummary(ds),
 		Contributors: stats.TopContributors(ds, topN),
-		Ranking:      stats.ContributorRanking(ds, topN),
 		Hotspots:     stats.FileHotspots(ds, topN),
 		Activity:     stats.ActivityOverTime(ds, "month"),
 		BusFactor:    stats.BusFactor(ds, topN),

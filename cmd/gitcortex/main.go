@@ -82,7 +82,7 @@ func extractCmd() *cobra.Command {
 var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
 var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
 var validStats = map[string]bool{
-	"summary": true, "contributors": true, "ranking": true, "hotspots": true,
+	"summary": true, "contributors": true, "hotspots": true,
 	"activity": true, "busfactor": true, "coupling": true,
 	"churn-risk": true, "working-patterns": true, "dev-network": true,
 	"profile": true, "top-commits": true,
@@ -122,7 +122,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !validStats[sf.stat] {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
 	}
 	return nil
 }
@@ -174,12 +174,6 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	if showAll || sf.stat == "contributors" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Contributors ===\n", sf.topN)
 		if err := f.PrintContributors(stats.TopContributors(ds, sf.topN)); err != nil {
-			return err
-		}
-	}
-	if showAll || sf.stat == "ranking" {
-		fmt.Fprintf(os.Stderr, "\n=== Top %d Contributor Ranking ===\n", sf.topN)
-		if err := f.PrintRanking(stats.ContributorRanking(ds, sf.topN)); err != nil {
 			return err
 		}
 	}
@@ -254,9 +248,6 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "contributors" {
 		report["contributors"] = stats.TopContributors(ds, sf.topN)
-	}
-	if showAll || sf.stat == "ranking" {
-		report["ranking"] = stats.ContributorRanking(ds, sf.topN)
 	}
 	if showAll || sf.stat == "hotspots" {
 		report["hotspots"] = stats.FileHotspots(ds, sf.topN)

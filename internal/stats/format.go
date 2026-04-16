@@ -56,36 +56,6 @@ func (f *Formatter) PrintSummary(s Summary) error {
 	}
 }
 
-func (f *Formatter) PrintRanking(ranked []RankedContributor) error {
-	switch f.format {
-	case "json":
-		return f.writeJSON(ranked)
-	case "csv":
-		rows := make([][]string, len(ranked))
-		for i, r := range ranked {
-			rows[i] = []string{
-				r.Name, r.Email,
-				fmt.Sprintf("%.1f", r.Score),
-				fmt.Sprintf("%d", r.Commits),
-				fmt.Sprintf("%d", r.LinesChanged),
-				fmt.Sprintf("%d", r.FilesTouched),
-				fmt.Sprintf("%d", r.ActiveDays),
-				r.FirstDate, r.LastDate,
-			}
-		}
-		return f.writeCSV([]string{"name", "email", "score", "commits", "lines_changed", "files_touched", "active_days", "first_date", "last_date"}, rows)
-	default:
-		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(tw, "NAME\tEMAIL\tSCORE\tCOMMITS\tLINES\tFILES\tACTIVE DAYS\tFIRST\tLAST\n")
-		fmt.Fprintf(tw, "----\t-----\t-----\t-------\t-----\t-----\t-----------\t-----\t----\n")
-		for _, r := range ranked {
-			fmt.Fprintf(tw, "%s\t%s\t%.1f\t%d\t%d\t%d\t%d\t%s\t%s\n",
-				r.Name, r.Email, r.Score, r.Commits, r.LinesChanged, r.FilesTouched, r.ActiveDays, r.FirstDate, r.LastDate)
-		}
-		return tw.Flush()
-	}
-}
-
 func (f *Formatter) PrintContributors(contributors []ContributorStat) error {
 	switch f.format {
 	case "json":
@@ -363,7 +333,6 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 		for i, p := range profiles {
 			rows[i] = []string{
 				p.Name, p.Email,
-				fmt.Sprintf("%.1f", p.Score),
 				fmt.Sprintf("%d", p.Commits),
 				fmt.Sprintf("%d", p.LinesChanged),
 				fmt.Sprintf("%d", p.FilesTouched),
@@ -372,15 +341,15 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				p.FirstDate, p.LastDate,
 			}
 		}
-		return f.writeCSV([]string{"name", "email", "score", "commits", "lines_changed", "files_touched", "active_days", "weekend_pct", "first_date", "last_date"}, rows)
+		return f.writeCSV([]string{"name", "email", "commits", "lines_changed", "files_touched", "active_days", "weekend_pct", "first_date", "last_date"}, rows)
 	default:
 		for i, p := range profiles {
 			if i > 0 {
 				fmt.Fprintln(f.w)
 			}
 			fmt.Fprintf(f.w, "%s <%s>\n", p.Name, p.Email)
-			fmt.Fprintf(f.w, "  Score: %.1f | Commits: %d | Lines: %d | Files: %d | Active: %d days | Weekend: %.1f%%\n",
-				p.Score, p.Commits, p.LinesChanged, p.FilesTouched, p.ActiveDays, p.WeekendPct)
+			fmt.Fprintf(f.w, "  Commits: %d | Lines: %d | Files: %d | Active: %d days | Weekend: %.1f%%\n",
+				p.Commits, p.LinesChanged, p.FilesTouched, p.ActiveDays, p.WeekendPct)
 			fmt.Fprintf(f.w, "  Period: %s to %s\n", p.FirstDate, p.LastDate)
 
 			if len(p.TopFiles) > 0 {
