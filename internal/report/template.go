@@ -54,19 +54,29 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Activity}}
 <h2>Activity</h2>
-<p class="hint">Commit volume over time. Spikes may indicate releases or sprints. Sustained drops may signal attrition. Green = additions, red = deletions.</p>
+<p class="hint">Green = additions, red = deletions. Ratio = del/add (0 = pure growth, ~1 = rewrite, >1 = cleanup). Trend vs previous period. MA = 3-period moving average.</p>
 {{$max := .MaxActivityLines}}
-<div style="display:flex; flex-direction:column; gap:4px;">
+<div style="display:flex; flex-direction:column; gap:3px;">
 {{range .Activity}}
-<div style="display:flex; align-items:center; gap:8px;">
-  <span class="mono" style="min-width:60px; text-align:right; color:#656d76;">{{.Period}}</span>
-  <div style="flex:1; display:flex; height:20px;">
+<div style="display:flex; align-items:center; gap:6px; font-size:12px;">
+  <span class="mono" style="min-width:55px; text-align:right; color:#656d76;">{{.Period}}</span>
+  <div style="flex:1; display:flex; height:18px;">
     <div class="bar bar-add" style="width: {{pct .Additions $max}}%" title="{{.Additions}} additions"></div>
     <div class="bar bar-del" style="width: {{pct .Deletions $max}}%" title="{{.Deletions}} deletions"></div>
   </div>
-  <span class="bar-value" style="min-width:70px;">{{.Commits}} commits</span>
+  <span style="min-width:22px; text-align:center;">{{.Trend}}</span>
+  <span class="mono" style="min-width:55px; text-align:right;">{{.Commits}}</span>
+  <span class="mono" style="min-width:45px; text-align:right; color:{{if eq .RatioClass "growth"}}#2da44e{{else if eq .RatioClass "rewrite"}}#bf8700{{else}}#cf222e{{end}};">{{.Ratio}}</span>
+  <span class="mono" style="min-width:40px; text-align:right; color:#656d76;">~{{.MovingAvg}}</span>
 </div>
 {{end}}
+</div>
+<div style="font-size:11px; color:#656d76; margin-top:6px; display:flex; gap:16px;">
+  <span>↑↓→ trend</span>
+  <span style="color:#2da44e;">■</span> <span>additions</span>
+  <span style="color:#cf222e;">■</span> <span>deletions</span>
+  <span>ratio: <span style="color:#2da44e;">growth</span> · <span style="color:#bf8700;">rewrite</span> · <span style="color:#cf222e;">cleanup</span></span>
+  <span>~MA = 3-period avg</span>
 </div>
 {{end}}
 

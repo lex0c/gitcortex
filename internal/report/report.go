@@ -13,7 +13,7 @@ type ReportData struct {
 	Summary      stats.Summary
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
-	Activity     []stats.ActivityBucket
+	Activity     []EnrichedActivity
 	BusFactor    []stats.BusFactorResult
 	Coupling     []stats.CouplingResult
 	ChurnRisk    []stats.ChurnRiskResult
@@ -24,6 +24,80 @@ type ReportData struct {
 	PatternGrid    [7][24]int
 	MaxPattern     int
 	MaxActivityLines int64
+}
+
+type EnrichedActivity struct {
+	Period    string
+	Commits   int
+	Additions int64
+	Deletions int64
+	Ratio     string // del/add ratio formatted
+	RatioClass string // "growth", "rewrite", "cleanup"
+	Trend     string // "↑", "↓", "→"
+	MovingAvg int    // 3-period moving average of commits
+}
+
+func enrichActivity(raw []stats.ActivityBucket) ([]EnrichedActivity, int64) {
+	result := make([]EnrichedActivity, len(raw))
+	var maxLines int64
+
+	for i, a := range raw {
+		total := a.Additions + a.Deletions
+		if total > maxLines {
+			maxLines = total
+		}
+
+		// Ratio
+		ratio := 0.0
+		ratioStr := "—"
+		ratioClass := "growth"
+		if a.Additions > 0 {
+			ratio = float64(a.Deletions) / float64(a.Additions)
+			ratioStr = fmt.Sprintf("%.2f", ratio)
+		}
+		if ratio >= 1.0 {
+			ratioClass = "cleanup"
+		} else if ratio >= 0.5 {
+			ratioClass = "rewrite"
+		}
+
+		// Trend vs previous period
+		trend := "→"
+		if i > 0 {
+			prev := raw[i-1].Commits
+			if a.Commits > prev+prev/5 {
+				trend = "↑"
+			} else if a.Commits < prev-prev/5 {
+				trend = "↓"
+			}
+		}
+
+		// 3-period moving average
+		ma := a.Commits
+		count := 1
+		if i >= 1 {
+			ma += raw[i-1].Commits
+			count++
+		}
+		if i >= 2 {
+			ma += raw[i-2].Commits
+			count++
+		}
+		ma = ma / count
+
+		result[i] = EnrichedActivity{
+			Period:     a.Period,
+			Commits:    a.Commits,
+			Additions:  a.Additions,
+			Deletions:  a.Deletions,
+			Ratio:      ratioStr,
+			RatioClass: ratioClass,
+			Trend:      trend,
+			MovingAvg:  ma,
+		}
+	}
+
+	return result, maxLines
 }
 
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
@@ -42,21 +116,14 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		}
 	}
 
-	activity := stats.ActivityOverTime(ds, "month")
-	var maxActLines int64
-	for _, a := range activity {
-		total := a.Additions + a.Deletions
-		if total > maxActLines {
-			maxActLines = total
-		}
-	}
+	activityEnriched, maxActLines := enrichActivity(stats.ActivityOverTime(ds, "month"))
 
 	data := ReportData{
 		RepoName:     repoName,
 		Summary:      stats.ComputeSummary(ds),
 		Contributors: stats.TopContributors(ds, topN),
 		Hotspots:     stats.FileHotspots(ds, topN),
-		Activity:     activity,
+		Activity:     activityEnriched,
 		BusFactor:    stats.BusFactor(ds, topN),
 		Coupling:     stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
 		ChurnRisk:    stats.ChurnRisk(ds, topN),
