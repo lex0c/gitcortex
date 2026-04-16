@@ -58,7 +58,6 @@ type Dataset struct {
 	couplingFileChanges map[string]int
 
 	// Internal accumulators
-	devSeen      map[string]struct{}            // dedup dev records across files
 	contribDays  map[string]map[string]struct{} // email → set of active dates
 	contribFiles map[string]map[string]struct{} // email → set of file paths
 	contribFirst map[string]time.Time           // email → earliest date
@@ -123,7 +122,6 @@ func newDataset() *Dataset {
 		files:               make(map[string]*fileEntry),
 		couplingPairs:       make(map[filePair]int),
 		couplingFileChanges: make(map[string]int),
-		devSeen:             make(map[string]struct{}),
 		contribDays:         make(map[string]map[string]struct{}),
 		contribFiles:        make(map[string]map[string]struct{}),
 		contribFirst:        make(map[string]time.Time),
@@ -318,14 +316,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			coupCurrentFiles = append(coupCurrentFiles, path)
 
 		case model.DevType:
-			var d model.DevInfo
-			if err := json.Unmarshal(line, &d); err != nil {
-				return fmt.Errorf("line %d: parse dev: %w", lineNum, err)
-			}
-			if _, seen := ds.devSeen[d.DevID]; !seen {
-				ds.devSeen[d.DevID] = struct{}{}
-				ds.DevCount++
-			}
+			// dev records are skipped — DevCount is derived from contributors (authors only)
 		}
 	}
 
@@ -340,6 +331,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 }
 
 func finalizeDataset(ds *Dataset) {
+	ds.DevCount = len(ds.contributors)
 	ds.MergeCount = 0
 	for sha := range ds.parentCounts {
 		if ds.parentCounts[sha] > 1 {
