@@ -222,6 +222,43 @@ Shows side-by-side delta for summary, contributors, and hotspots.
   --format json > q1_vs_q2.json
 ```
 
+## CI
+
+### GitHub Actions
+
+```yaml
+- name: Extract git metrics
+  run: gitcortex extract --repo . --output data.jsonl
+
+- name: Check quality gates
+  run: gitcortex ci --input data.jsonl --fail-on-busfactor 1 --fail-on-churn-risk 500 --format github-actions
+```
+
+### GitLab CI
+
+```yaml
+code_quality:
+  script:
+    - gitcortex extract --repo . --output data.jsonl
+    - gitcortex ci --input data.jsonl --fail-on-busfactor 1 --format gitlab > gl-code-quality-report.json
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+```
+
+### Custom thresholds
+
+```bash
+# Only flag bus factor (ignore churn)
+./gitcortex ci --input data.jsonl --fail-on-busfactor 1
+
+# Only flag churn risk
+./gitcortex ci --input data.jsonl --fail-on-churn-risk 500
+
+# Both rules, stricter churn decay
+./gitcortex ci --input data.jsonl --fail-on-busfactor 1 --fail-on-churn-risk 300 --churn-half-life 60
+```
+
 ## Recipes
 
 ### Weekly team report

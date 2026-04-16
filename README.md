@@ -259,6 +259,28 @@ Files touched                  320  →       410  (+90)
 Merge commits                   45  →        38  (-7)
 ```
 
+### CI: quality gates for pipelines
+
+Run automated checks and fail the build when thresholds are exceeded.
+
+```bash
+# Fail if any file has bus factor of 1
+gitcortex ci --input data.jsonl --fail-on-busfactor 1
+
+# Fail if any file has churn risk >= 500
+gitcortex ci --input data.jsonl --fail-on-churn-risk 500
+
+# Both rules, GitHub Actions format
+gitcortex ci --input data.jsonl \
+  --fail-on-busfactor 1 \
+  --fail-on-churn-risk 500 \
+  --format github-actions
+```
+
+Output formats: `text` (default), `github-actions` (annotations), `gitlab` (Code Quality JSON), `json`.
+
+Exit code 1 when violations are found, 0 when clean.
+
 ## Architecture
 
 ```
