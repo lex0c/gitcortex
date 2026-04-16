@@ -142,6 +142,7 @@ Section headers go to stderr, data to stdout. To capture only data:
 ./gitcortex stats --input data.jsonl --stat dev-network --top 20
 ./gitcortex stats --input data.jsonl --stat profile
 ./gitcortex stats --input data.jsonl --stat profile --email alice@company.com
+./gitcortex stats --input data.jsonl --stat top-commits --top 20
 ```
 
 ### Output formats

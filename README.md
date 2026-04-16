@@ -141,6 +141,7 @@ Available stats:
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
 | `profile` | Per-developer report: score, top files, activity timeline, weekend % |
+| `top-commits` | Largest commits ranked by lines changed |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
 
