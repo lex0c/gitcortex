@@ -11,6 +11,7 @@ import (
 
 	"gitcortex/internal/extract"
 	"gitcortex/internal/git"
+	"gitcortex/internal/report"
 	"gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
@@ -26,6 +27,7 @@ func main() {
 	rootCmd.AddCommand(statsCmd())
 	rootCmd.AddCommand(diffCmd())
 	rootCmd.AddCommand(ciCmd())
+	rootCmd.AddCommand(reportCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -539,4 +541,59 @@ func printCIJSON(violations []ciViolation) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	enc.Encode(violations)
+}
+
+// --- Report ---
+
+func reportCmd() *cobra.Command {
+	var (
+		input              string
+		output             string
+		topN               int
+		couplingMaxFiles   int
+		couplingMinChanges int
+		churnHalfLife      int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "Generate a self-contained HTML report",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ds, err := stats.LoadJSONL(input, stats.LoadOptions{
+				HalfLifeDays: churnHalfLife,
+				CoupMaxFiles: couplingMaxFiles,
+			})
+			if err != nil {
+				return err
+			}
+
+			f, err := os.Create(output)
+			if err != nil {
+				return fmt.Errorf("create %s: %w", output, err)
+			}
+			defer f.Close()
+
+			sf := stats.StatsFlags{
+				CouplingMaxFiles:   couplingMaxFiles,
+				CouplingMinChanges: couplingMinChanges,
+				ChurnHalfLife:      churnHalfLife,
+			}
+
+			if err := report.Generate(f, ds, topN, sf); err != nil {
+				return fmt.Errorf("generate report: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", output, ds.CommitCount, ds.DevCount)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file")
+	cmd.Flags().StringVar(&output, "output", "report.html", "Output HTML file")
+	cmd.Flags().IntVar(&topN, "top", 20, "Number of top entries per section")
+	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling")
+	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling")
+	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay")
+
+	return cmd
 }

@@ -85,6 +85,12 @@ type DevEdge struct {
 	Weight      float64
 }
 
+type StatsFlags struct {
+	CouplingMaxFiles   int
+	CouplingMinChanges int
+	ChurnHalfLife      int
+}
+
 // --- Stats from pre-aggregated Dataset ---
 
 func ComputeSummary(ds *Dataset) Summary {
