@@ -25,8 +25,10 @@ func makeDataset() *Dataset {
 		},
 		parentCounts: map[string]int{"sha1": 2},
 		contributors: map[string]*ContributorStat{
-			"alice@test.com": {Name: "Alice", Email: "alice@test.com", Commits: 3, Additions: 80, Deletions: 20},
-			"bob@test.com":   {Name: "Bob", Email: "bob@test.com", Commits: 1, Additions: 20, Deletions: 10},
+			"alice@test.com": {Name: "Alice", Email: "alice@test.com", Commits: 3, Additions: 80, Deletions: 20,
+				FilesTouched: 2, ActiveDays: 3, FirstDate: "2024-01-10", LastDate: "2024-03-15"},
+			"bob@test.com": {Name: "Bob", Email: "bob@test.com", Commits: 1, Additions: 20, Deletions: 10,
+				FilesTouched: 1, ActiveDays: 1, FirstDate: "2024-02-20", LastDate: "2024-02-20"},
 		},
 		files: map[string]*fileEntry{
 			"main.go": {commits: 3, additions: 60, deletions: 15, devLines: map[string]int64{
@@ -253,6 +255,135 @@ func TestDeveloperNetworkMinThreshold(t *testing.T) {
 	result := DeveloperNetwork(ds, 10, 100) // min 100 shared files
 	if len(result) != 0 {
 		t.Errorf("expected empty with high threshold, got %d", len(result))
+	}
+}
+
+func TestContributorRanking(t *testing.T) {
+	ds := makeDataset()
+	result := ContributorRanking(ds, 10)
+
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+
+	// Alice is top: 3 commits (max), 100 lines (max), 2 files (max), 3 days (max) → score 100
+	if result[0].Email != "alice@test.com" {
+		t.Errorf("result[0].Email = %q, want alice", result[0].Email)
+	}
+	if result[0].Score != 100.0 {
+		t.Errorf("alice score = %.1f, want 100.0", result[0].Score)
+	}
+	if result[0].Commits != 3 {
+		t.Errorf("alice commits = %d, want 3", result[0].Commits)
+	}
+	if result[0].LinesChanged != 100 {
+		t.Errorf("alice lines = %d, want 100", result[0].LinesChanged)
+	}
+	if result[0].FilesTouched != 2 {
+		t.Errorf("alice files = %d, want 2", result[0].FilesTouched)
+	}
+	if result[0].ActiveDays != 3 {
+		t.Errorf("alice days = %d, want 3", result[0].ActiveDays)
+	}
+
+	// Bob: 1/3 commits, 30/100 lines, 1/2 files, 1/3 days
+	// = (0.333 + 0.3 + 0.5 + 0.333) / 4 * 100 = 36.7
+	if result[1].Email != "bob@test.com" {
+		t.Errorf("result[1].Email = %q, want bob", result[1].Email)
+	}
+	if result[1].Score < 36.0 || result[1].Score > 37.0 {
+		t.Errorf("bob score = %.1f, want ~36.7", result[1].Score)
+	}
+}
+
+func TestContributorRankingTopN(t *testing.T) {
+	ds := makeDataset()
+	result := ContributorRanking(ds, 1)
+	if len(result) != 1 {
+		t.Fatalf("len = %d, want 1", len(result))
+	}
+	if result[0].Email != "alice@test.com" {
+		t.Errorf("top 1 = %q, want alice", result[0].Email)
+	}
+}
+
+func TestContributorRankingEmpty(t *testing.T) {
+	ds := &Dataset{contributors: map[string]*ContributorStat{}}
+	result := ContributorRanking(ds, 10)
+	if len(result) != 0 {
+		t.Errorf("empty dataset ranking len = %d", len(result))
+	}
+}
+
+func TestContributorRankingSingleDev(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"solo@x.com": {Name: "Solo", Email: "solo@x.com", Commits: 50, Additions: 1000, Deletions: 200,
+				FilesTouched: 30, ActiveDays: 20, FirstDate: "2024-01-01", LastDate: "2024-03-01"},
+		},
+	}
+	result := ContributorRanking(ds, 10)
+	if len(result) != 1 {
+		t.Fatalf("len = %d", len(result))
+	}
+	// Single dev is max in all dimensions → score 100
+	if result[0].Score != 100.0 {
+		t.Errorf("single dev score = %.1f, want 100.0", result[0].Score)
+	}
+}
+
+func TestStreamLoadContributorDetails(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"c1","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-10T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-01-10T10:00:00Z","message":"","additions":10,"deletions":2,"files_changed":2}
+{"type":"commit_file","commit":"c1","path_current":"a.go","path_previous":"a.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":5,"deletions":1}
+{"type":"commit_file","commit":"c1","path_current":"b.go","path_previous":"b.go","status":"M","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":5,"deletions":1}
+{"type":"commit","sha":"c2","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-15T14:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-01-15T14:00:00Z","message":"","additions":8,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"a.go","path_previous":"a.go","status":"M","old_hash":"0","new_hash":"3","old_size":0,"new_size":0,"additions":8,"deletions":0}
+{"type":"commit","sha":"c3","tree":"t","parents":[],"author_name":"Bob","author_email":"bob@x.com","author_date":"2024-02-01T09:00:00Z","committer_name":"Bob","committer_email":"bob@x.com","committer_date":"2024-02-01T09:00:00Z","message":"","additions":20,"deletions":5,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"c.go","path_previous":"c.go","status":"A","old_hash":"0","new_hash":"4","old_size":0,"new_size":0,"additions":20,"deletions":5}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	alice := ds.contributors["alice@x.com"]
+	if alice == nil {
+		t.Fatal("alice not found")
+	}
+	if alice.Commits != 2 {
+		t.Errorf("alice commits = %d, want 2", alice.Commits)
+	}
+	if alice.FilesTouched != 2 {
+		t.Errorf("alice files = %d, want 2 (a.go, b.go)", alice.FilesTouched)
+	}
+	if alice.ActiveDays != 2 {
+		t.Errorf("alice active days = %d, want 2 (Jan 10, Jan 15)", alice.ActiveDays)
+	}
+	if alice.FirstDate != "2024-01-10" {
+		t.Errorf("alice first = %q", alice.FirstDate)
+	}
+	if alice.LastDate != "2024-01-15" {
+		t.Errorf("alice last = %q", alice.LastDate)
+	}
+
+	bob := ds.contributors["bob@x.com"]
+	if bob == nil {
+		t.Fatal("bob not found")
+	}
+	if bob.FilesTouched != 1 {
+		t.Errorf("bob files = %d, want 1", bob.FilesTouched)
+	}
+	if bob.ActiveDays != 1 {
+		t.Errorf("bob active days = %d, want 1", bob.ActiveDays)
+	}
+
+	// Verify ranking uses loaded data correctly
+	ranked := ContributorRanking(ds, 10)
+	if len(ranked) != 2 {
+		t.Fatalf("ranked len = %d", len(ranked))
+	}
+	if ranked[0].Email != "alice@x.com" {
+		t.Errorf("top ranked = %q, want alice", ranked[0].Email)
 	}
 }
 
