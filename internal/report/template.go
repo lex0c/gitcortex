@@ -53,7 +53,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 
 {{if .ActivityYears}}
-<h2>Activity <span style="font-size:12px; font-weight:normal; margin-left:8px;"><a href="#" onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table';return false" style="color:#0969da; text-decoration:none;">table</a></span></h2>
+<h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
 <p class="hint">Monthly commit heatmap. Darker = more commits. Hover for details. Toggle to table for exact numbers.</p>
 {{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
 <div id="act-heatmap">
