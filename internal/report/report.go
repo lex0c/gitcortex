@@ -89,80 +89,6 @@ func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, 
 	return yearLabels, grid, maxCommits
 }
 
-type EnrichedActivity struct {
-	Period    string
-	Commits   int
-	Additions int64
-	Deletions int64
-	Ratio     string // del/add ratio formatted
-	RatioClass string // "growth", "rewrite", "cleanup"
-	Trend     string // "↑", "↓", "→"
-	MovingAvg int    // 3-period moving average of commits
-}
-
-func enrichActivity(raw []stats.ActivityBucket) ([]EnrichedActivity, int64) {
-	result := make([]EnrichedActivity, len(raw))
-	var maxLines int64
-
-	for i, a := range raw {
-		total := a.Additions + a.Deletions
-		if total > maxLines {
-			maxLines = total
-		}
-
-		// Ratio
-		ratio := 0.0
-		ratioStr := "—"
-		ratioClass := "growth"
-		if a.Additions > 0 {
-			ratio = float64(a.Deletions) / float64(a.Additions)
-			ratioStr = fmt.Sprintf("%.2f", ratio)
-		}
-		if ratio >= 1.0 {
-			ratioClass = "cleanup"
-		} else if ratio >= 0.5 {
-			ratioClass = "rewrite"
-		}
-
-		// Trend vs previous period
-		trend := "→"
-		if i > 0 {
-			prev := raw[i-1].Commits
-			if a.Commits > prev+prev/5 {
-				trend = "↑"
-			} else if a.Commits < prev-prev/5 {
-				trend = "↓"
-			}
-		}
-
-		// 3-period moving average
-		ma := a.Commits
-		count := 1
-		if i >= 1 {
-			ma += raw[i-1].Commits
-			count++
-		}
-		if i >= 2 {
-			ma += raw[i-2].Commits
-			count++
-		}
-		ma = ma / count
-
-		result[i] = EnrichedActivity{
-			Period:     a.Period,
-			Commits:    a.Commits,
-			Additions:  a.Additions,
-			Deletions:  a.Deletions,
-			Ratio:      ratioStr,
-			RatioClass: ratioClass,
-			Trend:      trend,
-			MovingAvg:  ma,
-		}
-	}
-
-	return result, maxLines
-}
-
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
 	patterns := stats.WorkingPatterns(ds)
 	var grid [7][24]int
@@ -277,14 +203,6 @@ func actColor(commits, max int) string {
 	return "#216e39"
 }
 
-func ratioColor(ratio float64) string {
-	if ratio >= 1.0 {
-		return "#cf222e"
-	} else if ratio >= 0.5 {
-		return "#bf8700"
-	}
-	return "#2da44e"
-}
 
 var funcMap = template.FuncMap{
 	"pct":       pct,
@@ -297,7 +215,6 @@ var funcMap = template.FuncMap{
 	"int64":      toInt64,
 	"plus":       plus,
 	"actColor":   actColor,
-	"ratioColor": ratioColor,
 	"plusInt":    plusInt,
 }
 
