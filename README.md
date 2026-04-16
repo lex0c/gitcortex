@@ -14,7 +14,7 @@ Benchmarked on real open-source repositories (bare clones, SSD):
 | [Praat](https://github.com/praat/praat) | 10,221 | 24 | 26s | 393/s | 95K lines |
 | [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 1,140/s | 298K lines |
 | [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | ~12m | ~2,000/s | 6M lines |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | 13m 12s | 1,816/s | 6M lines |
 
 Throughput varies by commit complexity — repos with large diffs per commit (Praat: binary-heavy, ~1260 lines/commit average) are slower than repos with small commits (Pi-hole: ~10 lines/commit average).
 
