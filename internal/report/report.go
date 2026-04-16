@@ -14,6 +14,7 @@ type ReportData struct {
 	Summary      stats.Summary
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
+	ActivityRaw    []stats.ActivityBucket
 	ActivityYears  []string
 	ActivityGrid   [][]ActivityCell // [year][month 0-11]
 	MaxActivityCommits int
@@ -105,13 +106,15 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		}
 	}
 
-	actYears, actGrid, maxActCommits := buildActivityGrid(stats.ActivityOverTime(ds, "month"))
+	actRaw := stats.ActivityOverTime(ds, "month")
+	actYears, actGrid, maxActCommits := buildActivityGrid(actRaw)
 
 	data := ReportData{
 		RepoName:           repoName,
 		Summary:            stats.ComputeSummary(ds),
 		Contributors:       stats.TopContributors(ds, topN),
 		Hotspots:           stats.FileHotspots(ds, topN),
+		ActivityRaw:        actRaw,
 		ActivityYears:      actYears,
 		ActivityGrid:       actGrid,
 		MaxActivityCommits: maxActCommits,
@@ -184,6 +187,13 @@ func plusInt(a, b int) int {
 	return a + b
 }
 
+func pctRatio(del, add int64) float64 {
+	if add == 0 {
+		return 0
+	}
+	return float64(del) / float64(add)
+}
+
 func actColor(commits, max int) string {
 	if max == 0 || commits == 0 {
 		return "#ebedf0"
@@ -215,6 +225,7 @@ var funcMap = template.FuncMap{
 	"int64":      toInt64,
 	"plus":       plus,
 	"actColor":   actColor,
+	"pctRatio":   pctRatio,
 	"plusInt":    plusInt,
 }
 

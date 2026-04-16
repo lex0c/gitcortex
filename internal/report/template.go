@@ -53,9 +53,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 
 {{if .ActivityYears}}
-<h2>Activity</h2>
-<p class="hint">Monthly commit heatmap. Darker = more commits. Hover for details (commits, additions, deletions, del/add ratio).</p>
+<h2>Activity <span style="font-size:12px; font-weight:normal; margin-left:8px;"><a href="#" onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table';return false" style="color:#0969da; text-decoration:none;">table</a></span></h2>
+<p class="hint">Monthly commit heatmap. Darker = more commits. Hover for details. Toggle to table for exact numbers.</p>
 {{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
+<div id="act-heatmap">
 <div style="display:grid; grid-template-columns:40px repeat(12, 1fr); gap:2px; margin-bottom:8px;">
   <div></div>
   {{range (list "J" "F" "M" "A" "M" "J" "J" "A" "S" "O" "N" "D")}}<div style="text-align:center; font-size:10px; color:#656d76;">{{.}}</div>{{end}}
@@ -72,6 +73,21 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div style="width:12px; height:12px; background:#30a14e; border-radius:2px;"></div>
   <div style="width:12px; height:12px; background:#216e39; border-radius:2px;"></div>
   <span>More</span>
+</div>
+</div>
+<div id="act-table" hidden>
+<table>
+<tr><th>Period</th><th>Commits</th><th>Additions</th><th>Deletions</th><th>Ratio</th></tr>
+{{range .ActivityRaw}}
+<tr>
+  <td class="mono">{{.Period}}</td>
+  <td>{{.Commits}}</td>
+  <td>{{.Additions}}</td>
+  <td>{{.Deletions}}</td>
+  <td class="mono">{{if gt .Additions 0}}{{printf "%.2f" (pctRatio .Deletions .Additions)}}{{else}}—{{end}}</td>
+</tr>
+{{end}}
+</table>
 </div>
 {{end}}
 
