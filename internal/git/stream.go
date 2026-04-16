@@ -74,9 +74,8 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 	}
 
 	args := []string{"-C", repo, "log",
-		"--raw", "--numstat", "--reverse", "-M", "-C",
+		"--raw", "--numstat", "-M",
 		"--abbrev=40",
-		"--diff-merges=first-parent",
 		fmt.Sprintf("--format=%s", format),
 	}
 
@@ -84,17 +83,16 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 		args = append(args, "--first-parent")
 	}
 
+	ref := branch
+	if ref == "" {
+		ref = "HEAD"
+	}
+
 	if resumeSHA != "" {
-		ref := branch
-		if ref == "" {
-			ref = "HEAD"
-		}
-		args = append(args, fmt.Sprintf("%s..%s", resumeSHA, ref))
+		// Log goes newest-first (no --reverse). We already processed from tip
+		// down to resumeSHA. Continue with older commits: start from its parent.
+		args = append(args, resumeSHA+"^")
 	} else {
-		ref := branch
-		if ref == "" {
-			ref = "HEAD"
-		}
 		args = append(args, ref)
 	}
 

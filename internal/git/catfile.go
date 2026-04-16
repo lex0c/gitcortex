@@ -65,11 +65,19 @@ func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error)
 		return map[string]int64{}, nil
 	}
 
-	for h := range needed {
-		if _, err := io.WriteString(r.stdin, h+"\n"); err != nil {
-			return nil, fmt.Errorf("cat-file write: %w", err)
+	// Write hashes in a goroutine to avoid deadlock: if we write all hashes
+	// before reading, the OS pipe buffer (64KB) can fill up. cat-file blocks
+	// trying to write responses, and we block trying to write more hashes.
+	writeErr := make(chan error, 1)
+	go func() {
+		for h := range needed {
+			if _, err := io.WriteString(r.stdin, h+"\n"); err != nil {
+				writeErr <- fmt.Errorf("cat-file write: %w", err)
+				return
+			}
 		}
-	}
+		writeErr <- nil
+	}()
 
 	sizes := make(map[string]int64, len(needed))
 	for i := 0; i < len(needed); i++ {
@@ -90,6 +98,10 @@ func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error)
 			continue
 		}
 		sizes[parts[0]] = size
+	}
+
+	if err := <-writeErr; err != nil {
+		return nil, err
 	}
 
 	return sizes, nil
