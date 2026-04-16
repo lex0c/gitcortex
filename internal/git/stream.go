@@ -23,6 +23,7 @@ type StreamCommit struct {
 
 type LogStreamer struct {
 	cmd    *exec.Cmd
+	stderr *bytes.Buffer
 	reader *bufReader
 	cancel context.CancelFunc
 	done   bool
@@ -99,6 +100,9 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 	cmdCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -112,6 +116,7 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 
 	return &LogStreamer{
 		cmd:    cmd,
+		stderr: &stderr,
 		reader: newBufReader(stdout, 4<<20),
 		cancel: cancel,
 	}, nil
@@ -144,7 +149,10 @@ func (ls *LogStreamer) Next() (*StreamCommit, error) {
 
 func (ls *LogStreamer) Close() error {
 	ls.cancel()
-	_ = ls.cmd.Wait()
+	err := ls.cmd.Wait()
+	if err != nil && ls.stderr.Len() > 0 {
+		return fmt.Errorf("git log: %s", strings.TrimSpace(ls.stderr.String()))
+	}
 	return nil
 }
 

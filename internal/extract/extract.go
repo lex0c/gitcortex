@@ -126,7 +126,7 @@ func Run(ctx context.Context, cfg Config) error {
 	return streamExtract(ctx, cfg, initialState, writer, devCache)
 }
 
-func streamExtract(ctx context.Context, cfg Config, initialState State, writer *bufio.Writer, devCache map[string]struct{}) error {
+func streamExtract(ctx context.Context, cfg Config, initialState State, writer *bufio.Writer, devCache map[string]struct{}) (err error) {
 	resumeSHA := initialState.LastProcessedSHA
 	processedCount := initialState.CommitOffset
 
@@ -146,7 +146,11 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 	if err != nil {
 		return fmt.Errorf("start log stream: %w", err)
 	}
-	defer streamer.Close()
+	defer func() {
+		if closeErr := streamer.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	resolver, err := git.NewBlobSizeResolver(ctx, cfg.Repo)
 	if err != nil {
