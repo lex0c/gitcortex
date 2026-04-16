@@ -230,3 +230,47 @@ var funcMap = template.FuncMap{
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(reportHTML))
+var profileTmpl = template.Must(template.New("profile").Funcs(funcMap).Parse(profileHTML))
+
+type ProfileReportData struct {
+	RepoName        string
+	Profile         stats.DevProfile
+	ActivityYears   []string
+	ActivityGrid    [][]ActivityCell
+	MaxActivityCommits int
+	PatternGrid     [7][24]int
+	MaxPattern      int
+}
+
+func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) error {
+	profiles := stats.DevProfiles(ds, email)
+	if len(profiles) == 0 {
+		return fmt.Errorf("developer %s not found", email)
+	}
+	p := profiles[0]
+
+	// Build activity grid from this dev's monthly data
+	actYears, actGrid, maxAct := buildActivityGrid(p.MonthlyActivity)
+
+	// Pattern grid
+	maxP := 0
+	for d := 0; d < 7; d++ {
+		for h := 0; h < 24; h++ {
+			if p.WorkGrid[d][h] > maxP {
+				maxP = p.WorkGrid[d][h]
+			}
+		}
+	}
+
+	data := ProfileReportData{
+		RepoName:           repoName,
+		Profile:            p,
+		ActivityYears:      actYears,
+		ActivityGrid:       actGrid,
+		MaxActivityCommits: maxAct,
+		PatternGrid:        p.WorkGrid,
+		MaxPattern:         maxP,
+	}
+
+	return profileTmpl.Execute(w, data)
+}

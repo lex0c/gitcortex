@@ -545,6 +545,7 @@ func reportCmd() *cobra.Command {
 		input              string
 		output             string
 		topN               int
+		email              string
 		couplingMaxFiles   int
 		couplingMinChanges int
 		churnHalfLife      int
@@ -579,17 +580,24 @@ func reportCmd() *cobra.Command {
 				repoName = filepath.Base(filepath.Dir(absPath(input)))
 			}
 
-			if err := report.Generate(f, ds, repoName, topN, sf); err != nil {
-				return fmt.Errorf("generate report: %w", err)
+			if email != "" {
+				if err := report.GenerateProfile(f, ds, repoName, email); err != nil {
+					return fmt.Errorf("generate profile: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, output)
+			} else {
+				if err := report.Generate(f, ds, repoName, topN, sf); err != nil {
+					return fmt.Errorf("generate report: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", output, ds.CommitCount, ds.DevCount)
 			}
-
-			fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", output, ds.CommitCount, ds.DevCount)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file")
 	cmd.Flags().StringVar(&output, "output", "report.html", "Output HTML file")
+	cmd.Flags().StringVar(&email, "email", "", "Generate profile report for a specific developer")
 	cmd.Flags().IntVar(&topN, "top", 20, "Number of top entries per section")
 	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling")
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling")
