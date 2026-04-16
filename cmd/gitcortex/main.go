@@ -87,7 +87,7 @@ var validStats = map[string]bool{
 }
 
 type statsFlags struct {
-	input              string
+	inputs             []string
 	format             string
 	topN               int
 	granularity        string
@@ -99,7 +99,7 @@ type statsFlags struct {
 }
 
 func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
-	cmd.Flags().StringVar(&sf.input, "input", "git_data.jsonl", "Input JSONL file from extract")
+	cmd.Flags().StringSliceVar(&sf.inputs, "input", []string{"git_data.jsonl"}, "Input JSONL file(s) from extract (repeatable for multi-repo)")
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
@@ -134,7 +134,7 @@ func statsCmd() *cobra.Command {
 				return err
 			}
 
-			ds, err := stats.LoadJSONL(sf.input, stats.LoadOptions{
+			ds, err := stats.LoadMultiJSONL(sf.inputs, stats.LoadOptions{
 				HalfLifeDays: sf.churnHalfLife,
 				CoupMaxFiles: sf.couplingMaxFiles,
 			})

@@ -7,6 +7,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gitcortex/internal/model"
@@ -68,22 +70,51 @@ type LoadOptions struct {
 }
 
 func LoadJSONL(path string, opts ...LoadOptions) (*Dataset, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
+	return LoadMultiJSONL([]string{path}, opts...)
+}
 
+func LoadMultiJSONL(paths []string, opts ...LoadOptions) (*Dataset, error) {
 	opt := LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50}
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
 
-	return streamLoad(f, opt)
+	ds := newDataset()
+
+	for _, path := range paths {
+		prefix := ""
+		if len(paths) > 1 {
+			base := filepath.Base(path)
+			prefix = strings.TrimSuffix(base, filepath.Ext(base)) + ":"
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", path, err)
+		}
+
+		if err := streamLoadInto(ds, f, opt, prefix); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		f.Close()
+	}
+
+	finalizeDataset(ds)
+	return ds, nil
 }
 
 func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
-	ds := &Dataset{
+	ds := newDataset()
+	if err := streamLoadInto(ds, r, opt, ""); err != nil {
+		return nil, err
+	}
+	finalizeDataset(ds)
+	return ds, nil
+}
+
+func newDataset() *Dataset {
+	return &Dataset{
 		commits:             make(map[string]*commitEntry),
 		parentCounts:        make(map[string]int),
 		contributors:        make(map[string]*ContributorStat),
@@ -95,7 +126,9 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 		contribFirst:        make(map[string]time.Time),
 		contribLast:         make(map[string]time.Time),
 	}
+}
 
+func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string) error {
 	devSeen := make(map[string]struct{})
 	uniqueFiles := make(map[string]struct{})
 	commitInRange := make(map[string]bool)
@@ -137,14 +170,14 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			Type string `json:"type"`
 		}
 		if err := json.Unmarshal(line, &peek); err != nil {
-			return nil, fmt.Errorf("line %d: parse type: %w", lineNum, err)
+			return fmt.Errorf("line %d: parse type: %w", lineNum, err)
 		}
 
 		switch peek.Type {
 		case model.CommitType:
 			var c model.CommitInfo
 			if err := json.Unmarshal(line, &c); err != nil {
-				return nil, fmt.Errorf("line %d: parse commit: %w", lineNum, err)
+				return fmt.Errorf("line %d: parse commit: %w", lineNum, err)
 			}
 
 			t := parseDate(c.AuthorDate)
@@ -216,7 +249,7 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 		case model.CommitParentType:
 			var cp model.CommitParentInfo
 			if err := json.Unmarshal(line, &cp); err != nil {
-				return nil, fmt.Errorf("line %d: parse parent: %w", lineNum, err)
+				return fmt.Errorf("line %d: parse parent: %w", lineNum, err)
 			}
 			if hasFilter && !commitInRange[cp.SHA] {
 				continue
@@ -226,7 +259,7 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 		case model.CommitFileType:
 			var cf model.CommitFileInfo
 			if err := json.Unmarshal(line, &cf); err != nil {
-				return nil, fmt.Errorf("line %d: parse file: %w", lineNum, err)
+				return fmt.Errorf("line %d: parse file: %w", lineNum, err)
 			}
 			if hasFilter && !commitInRange[cf.Commit] {
 				continue
@@ -239,6 +272,7 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			if path == "" {
 				continue
 			}
+			path = pathPrefix + path
 
 			uniqueFiles[path] = struct{}{}
 
@@ -283,7 +317,7 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 		case model.DevType:
 			var d model.DevInfo
 			if err := json.Unmarshal(line, &d); err != nil {
-				return nil, fmt.Errorf("line %d: parse dev: %w", lineNum, err)
+				return fmt.Errorf("line %d: parse dev: %w", lineNum, err)
 			}
 			if _, seen := devSeen[d.DevID]; !seen {
 				devSeen[d.DevID] = struct{}{}
@@ -293,21 +327,23 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return fmt.Errorf("read: %w", err)
 	}
 
-	// Flush last coupling batch
 	flushCoupling(ds, coupCurrentFiles, opt.CoupMaxFiles)
+	ds.UniqueFileCount += len(uniqueFiles)
 
-	// Finalize
-	ds.UniqueFileCount = len(uniqueFiles)
+	return nil
+}
+
+func finalizeDataset(ds *Dataset) {
+	ds.MergeCount = 0
 	for sha := range ds.parentCounts {
 		if ds.parentCounts[sha] > 1 {
 			ds.MergeCount++
 		}
 	}
 
-	// Finalize contributor details
 	for email, cs := range ds.contributors {
 		cs.ActiveDays = len(ds.contribDays[email])
 		cs.FilesTouched = len(ds.contribFiles[email])
@@ -318,13 +354,10 @@ func streamLoad(r io.Reader, opt LoadOptions) (*Dataset, error) {
 			cs.LastDate = t.Format("2006-01-02")
 		}
 	}
-	// Free accumulator maps
 	ds.contribDays = nil
 	ds.contribFiles = nil
 	ds.contribFirst = nil
 	ds.contribLast = nil
-
-	return ds, nil
 }
 
 func flushCoupling(ds *Dataset, files []string, maxFiles int) {
