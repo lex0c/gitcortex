@@ -1,15 +1,9 @@
 # TODO
 
-Future features, ordered by impact.
+Future features.
 
-## 1. `gitcortex serve` — web dashboard
+## 1. `gitcortex serve` — live web dashboard
 
-Local HTTP server rendering stats as interactive visualizations.
+Local HTTP server with auto-refresh for real-time monitoring. Extends the static `report` with interactive features: zoom on activity charts, click-to-filter by developer, drill-down from directory to file.
 
-- Activity timeline chart
-- Coupling as a force-directed graph
-- Working patterns as a color heatmap
-- Contributors as a ranked bar chart
-- Churn risk as a treemap by directory
-
-Transforms the CLI from a personal tool into a team tool. Could use embedded static assets (no external dependencies) with a lightweight charting library.
+Would reuse the existing HTML template with added JavaScript for interactivity and a WebSocket or polling mechanism for live updates.

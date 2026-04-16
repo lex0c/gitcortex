@@ -276,6 +276,17 @@ Files touched                  320  →       410  (+90)
 Merge commits                   45  →        38  (-7)
 ```
 
+### HTML report
+
+Generate a self-contained HTML dashboard with all stats visualized. Pure HTML+CSS, zero external dependencies, opens in any browser.
+
+```bash
+gitcortex report --input data.jsonl --output report.html
+gitcortex report --input data.jsonl --output report.html --top 30
+```
+
+Includes: summary cards, activity bar chart, contributor ranking, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
+
 ### CI: quality gates for pipelines
 
 Run automated checks and fail the build when thresholds are exceeded.

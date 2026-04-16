@@ -225,6 +225,17 @@ Shows side-by-side delta for summary, contributors, and hotspots.
   --format json > q1_vs_q2.json
 ```
 
+## Report
+
+### Generate HTML report
+
+```bash
+./gitcortex report --input data.jsonl --output report.html
+./gitcortex report --input data.jsonl --output report.html --top 30
+```
+
+Self-contained HTML file with all 12 stats visualized. Open directly in a browser, share via Slack/email, or upload as a CI artifact.
+
 ## CI
 
 ### GitHub Actions
