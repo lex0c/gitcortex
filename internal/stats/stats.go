@@ -432,6 +432,44 @@ func WorkingPatterns(ds *Dataset) []WorkingPattern {
 	return results
 }
 
+// --- Top Commits ---
+
+type BigCommit struct {
+	SHA          string
+	AuthorName   string
+	AuthorEmail  string
+	Date         string
+	Additions    int64
+	Deletions    int64
+	LinesChanged int64
+	FilesChanged int
+}
+
+func TopCommits(ds *Dataset, n int) []BigCommit {
+	result := make([]BigCommit, 0, len(ds.commits))
+	for sha, cm := range ds.commits {
+		result = append(result, BigCommit{
+			SHA:          sha,
+			AuthorName:   ds.contributors[cm.email].Name,
+			AuthorEmail:  cm.email,
+			Date:         cm.date.Format("2006-01-02"),
+			Additions:    cm.add,
+			Deletions:    cm.del,
+			LinesChanged: cm.add + cm.del,
+			FilesChanged: cm.files,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].LinesChanged > result[j].LinesChanged
+	})
+
+	if n > 0 && n < len(result) {
+		result = result[:n]
+	}
+	return result
+}
+
 // --- Dev Profile ---
 
 type DevProfile struct {

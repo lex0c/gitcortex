@@ -82,7 +82,8 @@ var validGranularities = map[string]bool{"day": true, "week": true, "month": tru
 var validStats = map[string]bool{
 	"summary": true, "contributors": true, "ranking": true, "hotspots": true,
 	"activity": true, "busfactor": true, "coupling": true,
-	"churn-risk": true, "working-patterns": true, "dev-network": true, "profile": true,
+	"churn-risk": true, "working-patterns": true, "dev-network": true,
+	"profile": true, "top-commits": true,
 }
 
 type statsFlags struct {
@@ -119,7 +120,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !validStats[sf.stat] {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, ranking, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
 	}
 	return nil
 }
@@ -232,6 +233,12 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if showAll || sf.stat == "top-commits" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Commits ===\n", sf.topN)
+		if err := f.PrintTopCommits(stats.TopCommits(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -272,6 +279,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if sf.stat == "profile" {
 		report["profiles"] = stats.DevProfiles(ds, sf.email)
+	}
+	if showAll || sf.stat == "top-commits" {
+		report["top_commits"] = stats.TopCommits(ds, sf.topN)
 	}
 
 	return f.PrintReport(report)

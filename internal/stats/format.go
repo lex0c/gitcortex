@@ -311,6 +311,32 @@ func (f *Formatter) PrintDevNetwork(edges []DevEdge) error {
 	}
 }
 
+func (f *Formatter) PrintTopCommits(commits []BigCommit) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(commits)
+	case "csv":
+		rows := make([][]string, len(commits))
+		for i, c := range commits {
+			rows[i] = []string{
+				c.SHA[:12], c.AuthorName, c.AuthorEmail, c.Date,
+				fmt.Sprintf("%d", c.Additions), fmt.Sprintf("%d", c.Deletions),
+				fmt.Sprintf("%d", c.LinesChanged), fmt.Sprintf("%d", c.FilesChanged),
+			}
+		}
+		return f.writeCSV([]string{"sha", "author", "email", "date", "additions", "deletions", "lines_changed", "files_changed"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "SHA\tAUTHOR\tDATE\tADDITIONS\tDELETIONS\tLINES\tFILES\n")
+		fmt.Fprintf(tw, "---\t------\t----\t---------\t---------\t-----\t-----\n")
+		for _, c := range commits {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
+				c.SHA[:12], c.AuthorName, c.Date, c.Additions, c.Deletions, c.LinesChanged, c.FilesChanged)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 	switch f.format {
 	case "json":
