@@ -142,6 +142,10 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 	if err != nil {
 		return fmt.Errorf("start log stream: %w", err)
 	}
+	if streamer == nil {
+		log.Printf("done; all commits already processed")
+		return nil
+	}
 	defer func() {
 		if closeErr := streamer.Close(); closeErr != nil && err == nil {
 			err = closeErr

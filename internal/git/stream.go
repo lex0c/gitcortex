@@ -59,6 +59,10 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 	if resumeSHA != "" {
 		// Log goes newest-first (no --reverse). We already processed from tip
 		// down to resumeSHA. Continue with older commits: start from its parent.
+		// If resumeSHA is the root commit (no parent), there's nothing left.
+		if err := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", resumeSHA+"^").Run(); err != nil {
+			return nil, nil // root commit — all history already processed
+		}
 		args = append(args, resumeSHA+"^")
 	} else {
 		args = append(args, ref)
