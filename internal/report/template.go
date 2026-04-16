@@ -230,20 +230,31 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Profiles}}
 <h2>Developer Profiles</h2>
-<p class="hint">Per-developer breakdown showing their top files, monthly activity, and weekend work percentage.</p>
+<p class="hint">Per-developer breakdown for managers. Shows scope (where they work), contribution type (growth vs refactor), pace, and collaboration.</p>
 {{range .Profiles}}
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
   <div style="font-size:16px; font-weight:600;">{{.Name}} <span class="mono" style="font-size:12px; color:#656d76;">&lt;{{.Email}}&gt;</span></div>
-  <div style="margin:8px 0; display:flex; gap:24px; flex-wrap:wrap; font-size:13px; color:#656d76;">
-    <span>Commits: <b style="color:#24292f">{{.Commits}}</b></span>
-    <span>Lines: <b style="color:#24292f">{{.LinesChanged}}</b></span>
-    <span>Files: <b style="color:#24292f">{{.FilesTouched}}</b></span>
-    <span>Active: <b style="color:#24292f">{{.ActiveDays}} days</b></span>
-    <span>Weekend: <b style="color:#24292f">{{printf "%.1f" .WeekendPct}}%</b></span>
-    <span>Period: <b style="color:#24292f">{{.FirstDate}} to {{.LastDate}}</b></span>
+  <div style="margin:6px 0 12px; font-size:13px; color:#656d76;">{{.FirstDate}} to {{.LastDate}} · {{.ActiveDays}} active days · {{.Commits}} commits</div>
+
+  <div style="display:grid; grid-template-columns:110px 1fr; gap:4px 12px; font-size:13px; margin-bottom:12px;">
+    <span style="color:#656d76;">Scope</span>
+    <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
+
+    <span style="color:#656d76;">Contribution</span>
+    <span>{{if eq .ContribType "growth"}}<span style="color:#2da44e;">{{.ContribType}}</span>{{else if eq .ContribType "refactor"}}<span style="color:#cf222e;">{{.ContribType}}</span>{{else}}<span style="color:#bf8700;">{{.ContribType}}</span>{{end}} <span style="color:#656d76;">(ratio {{printf "%.2f" .ContribRatio}} · +{{.Additions}} −{{.Deletions}})</span></span>
+
+    <span style="color:#656d76;">Pace</span>
+    <span>{{printf "%.1f" .Pace}} commits/active day</span>
+
+    <span style="color:#656d76;">Collaboration</span>
+    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}}){{end}}{{else}}solo contributor{{end}}</span>
+
+    <span style="color:#656d76;">Weekend</span>
+    <span>{{printf "%.1f" .WeekendPct}}%</span>
   </div>
+
   {{if .TopFiles}}
-  <div style="margin-top:8px; font-size:12px;">
+  <div style="font-size:12px;">
     <div style="font-weight:600; margin-bottom:4px;">Top files:</div>
     {{range .TopFiles}}
     <div class="mono" style="display:flex; gap:8px;">

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 type ContributorStat struct {
@@ -407,9 +408,25 @@ type DevProfile struct {
 	FirstDate       string
 	LastDate        string
 	TopFiles        []DevFileContrib
+	Scope           []DirScope
+	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
+	ContribType     string  // "growth", "balanced", "refactor"
+	Pace            float64 // commits per active day
+	Collaborators   []DevCollaborator
 	MonthlyActivity []ActivityBucket
 	WorkGrid        [7][24]int
 	WeekendPct      float64
+}
+
+type DirScope struct {
+	Dir     string
+	Files   int
+	Pct     float64
+}
+
+type DevCollaborator struct {
+	Email       string
+	SharedFiles int
 }
 
 type DevFileContrib struct {
@@ -520,12 +537,86 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			wpct = math.Round(float64(weekend)/float64(total)*1000) / 10
 		}
 
+		// Scope: top directories by file count
+		dirCount := make(map[string]int)
+		if files, ok := devFiles[email]; ok {
+			for path := range files {
+				dir := path
+				if idx := strings.LastIndex(path, "/"); idx >= 0 {
+					dir = path[:idx]
+				}
+				dirCount[dir]++
+			}
+		}
+		var scope []DirScope
+		for dir, count := range dirCount {
+			pct := 0.0
+			if cs.FilesTouched > 0 {
+				pct = math.Round(float64(count)/float64(cs.FilesTouched)*1000) / 10
+			}
+			scope = append(scope, DirScope{Dir: dir, Files: count, Pct: pct})
+		}
+		sort.Slice(scope, func(i, j int) bool { return scope[i].Files > scope[j].Files })
+		if len(scope) > 5 {
+			scope = scope[:5]
+		}
+
+		// Contribution type
+		contribRatio := 0.0
+		contribType := "growth"
+		if cs.Additions > 0 {
+			contribRatio = math.Round(float64(cs.Deletions)/float64(cs.Additions)*100) / 100
+		}
+		if contribRatio >= 0.8 {
+			contribType = "refactor"
+		} else if contribRatio >= 0.4 {
+			contribType = "balanced"
+		}
+
+		// Pace
+		pace := 0.0
+		if cs.ActiveDays > 0 {
+			pace = math.Round(float64(cs.Commits)/float64(cs.ActiveDays)*10) / 10
+		}
+
+		// Collaborators: devs sharing files with this dev
+		var collabs []DevCollaborator
+		for path, fe := range ds.files {
+			if _, ok := fe.devLines[email]; !ok {
+				continue
+			}
+			for otherEmail := range fe.devLines {
+				if otherEmail == email {
+					continue
+				}
+				_ = path
+				found := false
+				for i := range collabs {
+					if collabs[i].Email == otherEmail {
+						collabs[i].SharedFiles++
+						found = true
+						break
+					}
+				}
+				if !found {
+					collabs = append(collabs, DevCollaborator{Email: otherEmail, SharedFiles: 1})
+				}
+			}
+		}
+		sort.Slice(collabs, func(i, j int) bool { return collabs[i].SharedFiles > collabs[j].SharedFiles })
+		if len(collabs) > 5 {
+			collabs = collabs[:5]
+		}
+
 		profiles = append(profiles, DevProfile{
 			Name: cs.Name, Email: cs.Email,
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,
+			TopFiles: topFiles, Scope: scope,
+			ContribRatio: contribRatio, ContribType: contribType,
+			Pace: pace, Collaborators: collabs,
+			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,
 		})
 	}
 

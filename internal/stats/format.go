@@ -355,11 +355,34 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintln(f.w)
 			}
 			fmt.Fprintf(f.w, "%s <%s>\n", p.Name, p.Email)
-			fmt.Fprintf(f.w, "  Commits: %d | Lines: %d | Files: %d | Active: %d days | Weekend: %.1f%%\n",
-				p.Commits, p.LinesChanged, p.FilesTouched, p.ActiveDays, p.WeekendPct)
-			fmt.Fprintf(f.w, "  Period: %s to %s\n", p.FirstDate, p.LastDate)
+			fmt.Fprintf(f.w, "  %s to %s | %d active days | %d commits\n", p.FirstDate, p.LastDate, p.ActiveDays, p.Commits)
+			fmt.Fprintln(f.w)
+			fmt.Fprintf(f.w, "  Scope:         ")
+			for j, s := range p.Scope {
+				if j > 0 {
+					fmt.Fprintf(f.w, ", ")
+				}
+				fmt.Fprintf(f.w, "%s (%.0f%%)", s.Dir, s.Pct)
+			}
+			fmt.Fprintln(f.w)
+			fmt.Fprintf(f.w, "  Contribution:  %s (ratio %.2f — add: %d, del: %d)\n", p.ContribType, p.ContribRatio, p.Additions, p.Deletions)
+			fmt.Fprintf(f.w, "  Pace:          %.1f commits/active day\n", p.Pace)
+			fmt.Fprintf(f.w, "  Collaboration: ")
+			if len(p.Collaborators) > 0 {
+				for j, c := range p.Collaborators {
+					if j > 0 {
+						fmt.Fprintf(f.w, ", ")
+					}
+					fmt.Fprintf(f.w, "%s (%d shared)", c.Email, c.SharedFiles)
+				}
+			} else {
+				fmt.Fprintf(f.w, "solo contributor")
+			}
+			fmt.Fprintln(f.w)
+			fmt.Fprintf(f.w, "  Weekend:       %.1f%%\n", p.WeekendPct)
 
 			if len(p.TopFiles) > 0 {
+				fmt.Fprintln(f.w)
 				fmt.Fprintln(f.w, "  Top files:")
 				for _, tf := range p.TopFiles {
 					fmt.Fprintf(f.w, "    %-50s %3d commits  %6d churn\n", tf.Path, tf.Commits, tf.Churn)
