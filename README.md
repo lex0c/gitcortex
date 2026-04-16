@@ -221,12 +221,14 @@ internal/
     discard.go                 Malformed entry tracking
   extract/extract.go           Extraction orchestration, state, JSONL writing
   stats/
-    reader.go                  JSONL dataset loader
-    stats.go                   Stat computations (9 stats + date filtering)
+    reader.go                  Streaming JSONL aggregator (single-pass)
+    stats.go                   Stat computations (9 stats)
     format.go                  Table/CSV/JSON output formatting
 ```
 
-The extraction pipeline:
+### Extraction pipeline
+
+Two long-running git processes for the entire extraction, regardless of repository size:
 
 ```
 git log --raw --numstat -M --- single stream ---- parse ---- emit JSONL
@@ -234,7 +236,24 @@ git log --raw --numstat -M --- single stream ---- parse ---- emit JSONL
 git cat-file --batch-check -- long-running ---- resolve blob sizes
 ```
 
-Two git processes for the entire extraction, regardless of repository size.
+### Stats pipeline
+
+Single-pass streaming aggregation. The JSONL file is read once, line by line, aggregating into compact maps. Raw records are never stored — only pre-computed aggregation state is kept in memory.
+
+```
+JSONL file ---- line by line ----> aggregate ----> lean Dataset ----> stat functions
+                (no raw storage)    commits: SHA → {email, date, add, del}
+                                    files:   path → {commits, devs, churn}
+                                    coupling: computed on-the-fly
+```
+
+Memory usage for the Linux kernel (1.4M commits, 3M file records):
+
+| | Raw storage | Streaming aggregation |
+|--|-------------|----------------------|
+| Commit data | 700 MB (1.4M structs) | 184 MB (lean index) |
+| File data | 1,200 MB (3M structs) | 44 MB (172K aggregated) |
+| **Total** | **~2.1 GB** | **~360 MB** |
 
 ## License
 
