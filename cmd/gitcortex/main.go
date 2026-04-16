@@ -553,6 +553,7 @@ func reportCmd() *cobra.Command {
 		couplingMaxFiles   int
 		couplingMinChanges int
 		churnHalfLife      int
+		networkMinFiles    int
 	)
 
 	cmd := &cobra.Command{
@@ -577,6 +578,7 @@ func reportCmd() *cobra.Command {
 				CouplingMaxFiles:   couplingMaxFiles,
 				CouplingMinChanges: couplingMinChanges,
 				ChurnHalfLife:      churnHalfLife,
+				NetworkMinFiles:    networkMinFiles,
 			}
 
 			if err := report.Generate(f, ds, topN, sf); err != nil {
@@ -594,6 +596,7 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling")
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling")
 	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay")
+	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
 
 	return cmd
 }

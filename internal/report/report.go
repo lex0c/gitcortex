@@ -20,6 +20,8 @@ type ReportData struct {
 	ChurnRisk    []stats.ChurnRiskResult
 	Patterns     []stats.WorkingPattern
 	TopCommits   []stats.BigCommit
+	DevNetwork   []stats.DevEdge
+	Profiles     []stats.DevProfile
 	PatternGrid  [7][24]int
 	MaxPattern   int
 }
@@ -51,6 +53,8 @@ func Generate(w io.Writer, ds *stats.Dataset, topN int, sf stats.StatsFlags) err
 		ChurnRisk:    stats.ChurnRisk(ds, topN, sf.ChurnHalfLife),
 		Patterns:     patterns,
 		TopCommits:   stats.TopCommits(ds, topN),
+		DevNetwork:   stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
+		Profiles:     stats.DevProfiles(ds, ""),
 		PatternGrid:  grid,
 		MaxPattern:   maxP,
 	}

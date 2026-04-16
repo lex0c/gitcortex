@@ -89,6 +89,7 @@ type StatsFlags struct {
 	CouplingMaxFiles   int
 	CouplingMinChanges int
 	ChurnHalfLife      int
+	NetworkMinFiles    int
 }
 
 // --- Stats from pre-aggregated Dataset ---
