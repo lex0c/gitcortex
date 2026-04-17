@@ -236,6 +236,20 @@ git cat-file --batch-check ─── sizes  ─↗
 
 ## Behavior and caveats
 
+### Thresholds
+
+Every classification boundary is a named constant in `internal/stats/stats.go`. Values below are the defaults; there is no runtime flag to override them yet — changing a threshold requires editing the source and rebuilding.
+
+| Constant | Default | Controls |
+|----------|---------|----------|
+| `classifyColdChurnRatio` | `0.5` | A file is `cold` when `recent_churn ≤ ratio × median(recent_churn)`. |
+| `classifyActiveBusFactor` | `3` | A file is `active` (shared, healthy) when `bus_factor ≥ this`. |
+| `classifyOldAgeDays` | `180` | Age cutoff for `active-core` vs `silo`/`legacy-hotspot`. |
+| `classifyDecliningTrend` | `0.5` | Trend ratio below this marks `legacy-hotspot` (old + declining). |
+| `classifyTrendWindowMonths` | `3` | Window (months, relative to latest commit) for the recent vs earlier split in `trend`. |
+| `contribRefactorRatio` | `0.8` | `del/add ≥ this` → dev profile `contribType = refactor`. |
+| `contribBalancedRatio` | `0.4` | `0.4 ≤ del/add < 0.8` → `balanced`; below 0.4 → `growth`. |
+
 ### Reproducibility
 
 Every ranking function has an explicit tiebreaker so the same input produces the same output across runs and between the CLI (`stats --format json`) and the HTML report. Without this, ties on integer keys (ubiquitous — e.g. many files with `bus_factor = 1`) would let Go's randomized map iteration produce a different top-N each time.
