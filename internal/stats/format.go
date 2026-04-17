@@ -115,6 +115,34 @@ func (f *Formatter) PrintHotspots(hotspots []FileStat) error {
 	}
 }
 
+func (f *Formatter) PrintDirectories(dirs []DirStat) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(dirs)
+	case "csv":
+		rows := make([][]string, len(dirs))
+		for i, d := range dirs {
+			rows[i] = []string{
+				d.Dir,
+				fmt.Sprintf("%d", d.Commits),
+				fmt.Sprintf("%d", d.Churn),
+				fmt.Sprintf("%d", d.Files),
+				fmt.Sprintf("%d", d.UniqueDevs),
+				fmt.Sprintf("%d", d.BusFactor),
+			}
+		}
+		return f.writeCSV([]string{"directory", "commits", "churn", "files", "devs", "bus_factor"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "DIRECTORY\tCOMMITS\tCHURN\tFILES\tDEVS\tBUS FACTOR\n")
+		fmt.Fprintf(tw, "---------\t-------\t-----\t-----\t----\t----------\n")
+		for _, d := range dirs {
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\n", d.Dir, d.Commits, d.Churn, d.Files, d.UniqueDevs, d.BusFactor)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintActivity(buckets []ActivityBucket) error {
 	switch f.format {
 	case "json":

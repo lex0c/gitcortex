@@ -103,9 +103,9 @@ func isValidGranularity(s string) bool {
 
 func isValidStat(s string) bool {
 	switch s {
-	case "summary", "contributors", "hotspots", "activity", "busfactor",
-		"coupling", "churn-risk", "working-patterns", "dev-network",
-		"profile", "top-commits":
+	case "summary", "contributors", "hotspots", "directories", "activity",
+		"busfactor", "coupling", "churn-risk", "working-patterns",
+		"dev-network", "profile", "top-commits":
 		return true
 	}
 	return false
@@ -147,7 +147,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
 	}
 	return nil
 }
@@ -211,6 +211,12 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	if showAll || sf.stat == "hotspots" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d File Hotspots ===\n", sf.topN)
 		if err := f.PrintHotspots(stats.FileHotspots(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
+	if showAll || sf.stat == "directories" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Directories ===\n", sf.topN)
+		if err := f.PrintDirectories(stats.DirectoryStats(ds, sf.topN)); err != nil {
 			return err
 		}
 	}
@@ -282,6 +288,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "hotspots" {
 		report["hotspots"] = stats.FileHotspots(ds, sf.topN)
+	}
+	if showAll || sf.stat == "directories" {
+		report["directories"] = stats.DirectoryStats(ds, sf.topN)
 	}
 	if showAll || sf.stat == "activity" {
 		report["activity"] = stats.ActivityOverTime(ds, sf.granularity)

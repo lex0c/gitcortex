@@ -158,6 +158,86 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 	return result
 }
 
+type DirStat struct {
+	Dir        string
+	Commits    int
+	Churn      int64
+	Files      int
+	UniqueDevs int
+	BusFactor  int
+}
+
+func DirectoryStats(ds *Dataset, n int) []DirStat {
+	type dirAcc struct {
+		commits int
+		churn   int64
+		files   int
+		devs    map[string]int64
+	}
+
+	dirs := make(map[string]*dirAcc)
+	for path, fe := range ds.files {
+		dir := path
+		if idx := strings.LastIndex(path, "/"); idx >= 0 {
+			dir = path[:idx]
+		}
+		d, ok := dirs[dir]
+		if !ok {
+			d = &dirAcc{devs: make(map[string]int64)}
+			dirs[dir] = d
+		}
+		d.files++
+		d.commits += fe.commits
+		d.churn += fe.additions + fe.deletions
+		for email, lines := range fe.devLines {
+			d.devs[email] += lines
+		}
+	}
+
+	var result []DirStat
+	for dir, d := range dirs {
+		// Bus factor: devs covering 80% of lines
+		type dl struct {
+			lines int64
+		}
+		var totalLines int64
+		devSlice := make([]dl, 0, len(d.devs))
+		for _, lines := range d.devs {
+			devSlice = append(devSlice, dl{lines})
+			totalLines += lines
+		}
+		sort.Slice(devSlice, func(i, j int) bool { return devSlice[i].lines > devSlice[j].lines })
+		bf := 0
+		var cum int64
+		threshold := float64(totalLines) * 0.8
+		for _, dv := range devSlice {
+			cum += dv.lines
+			bf++
+			if float64(cum) >= threshold {
+				break
+			}
+		}
+		if bf == 0 {
+			bf = len(d.devs)
+		}
+
+		result = append(result, DirStat{
+			Dir:        dir,
+			Commits:    d.commits,
+			Churn:      d.churn,
+			Files:      d.files,
+			UniqueDevs: len(d.devs),
+			BusFactor:  bf,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool { return result[i].Commits > result[j].Commits })
+	if n > 0 && n < len(result) {
+		result = result[:n]
+	}
+	return result
+}
+
 func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 	buckets := make(map[string]*ActivityBucket)
 	var order []string
