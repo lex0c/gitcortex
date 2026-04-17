@@ -116,6 +116,11 @@ gitcortex stats --input data.jsonl --format json > report.json
 
 # Activity by week
 gitcortex stats --input data.jsonl --stat activity --granularity week
+
+# Filter to recent period
+gitcortex stats --since 7d                    # last 7 days
+gitcortex stats --since 3m --stat contributors # last 3 months
+gitcortex report --since 30d --output monthly.html
 ```
 
 Available stats:

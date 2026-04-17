@@ -156,6 +156,18 @@ Section headers go to stderr, data to stdout. To capture only data:
 ./gitcortex stats --input data.jsonl --stat top-commits --top 20
 ```
 
+### Time filtering
+
+```bash
+./gitcortex stats --since 7d                          # last 7 days
+./gitcortex stats --since 4w --stat contributors      # last 4 weeks
+./gitcortex stats --since 3m --stat hotspots          # last 3 months
+./gitcortex stats --since 1y --stat activity           # last year
+./gitcortex report --since 30d --output monthly.html   # monthly report
+```
+
+Supported units: `d` (days), `w` (weeks), `m` (months), `y` (years).
+
 ### Output formats
 
 ```bash
