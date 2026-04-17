@@ -68,6 +68,7 @@ func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error)
 	// Write hashes in a goroutine to avoid deadlock: if we write all hashes
 	// before reading, the OS pipe buffer (64KB) can fill up. cat-file blocks
 	// trying to write responses, and we block trying to write more hashes.
+	// The channel has buffer 1 so the goroutine always completes (no leak).
 	writeErr := make(chan error, 1)
 	go func() {
 		for h := range needed {

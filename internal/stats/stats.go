@@ -371,9 +371,13 @@ func TopCommits(ds *Dataset, n int) []BigCommit {
 		if len(msg) > 80 {
 			msg = msg[:77] + "..."
 		}
+		authorName := cm.email
+		if cs, ok := ds.contributors[cm.email]; ok {
+			authorName = cs.Name
+		}
 		result = append(result, BigCommit{
 			SHA:          sha,
-			AuthorName:   ds.contributors[cm.email].Name,
+			AuthorName:   authorName,
 			AuthorEmail:  cm.email,
 			Date:         cm.date.Format("2006-01-02"),
 			Message:      msg,

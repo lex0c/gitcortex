@@ -84,13 +84,30 @@ func extractCmd() *cobra.Command {
 
 // --- Stats ---
 
-var validFormats = map[string]bool{"table": true, "csv": true, "json": true}
-var validGranularities = map[string]bool{"day": true, "week": true, "month": true, "year": true}
-var validStats = map[string]bool{
-	"summary": true, "contributors": true, "hotspots": true,
-	"activity": true, "busfactor": true, "coupling": true,
-	"churn-risk": true, "working-patterns": true, "dev-network": true,
-	"profile": true, "top-commits": true,
+func isValidFormat(s string) bool {
+	switch s {
+	case "table", "csv", "json":
+		return true
+	}
+	return false
+}
+
+func isValidGranularity(s string) bool {
+	switch s {
+	case "day", "week", "month", "year":
+		return true
+	}
+	return false
+}
+
+func isValidStat(s string) bool {
+	switch s {
+	case "summary", "contributors", "hotspots", "activity", "busfactor",
+		"coupling", "churn-risk", "working-patterns", "dev-network",
+		"profile", "top-commits":
+		return true
+	}
+	return false
 }
 
 type statsFlags struct {
@@ -120,13 +137,13 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 }
 
 func validateStatsFlags(sf *statsFlags) error {
-	if !validFormats[sf.format] {
+	if !isValidFormat(sf.format) {
 		return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", sf.format)
 	}
-	if !validGranularities[sf.granularity] {
+	if !isValidGranularity(sf.granularity) {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
-	if sf.stat != "" && !validStats[sf.stat] {
+	if sf.stat != "" && !isValidStat(sf.stat) {
 		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits", sf.stat)
 	}
 	return nil
@@ -305,7 +322,7 @@ func diffCmd() *cobra.Command {
 			if from == "" || to == "" {
 				return fmt.Errorf("--from and --to are required (format: YYYY-MM-DD)")
 			}
-			if !validFormats[format] {
+			if !isValidFormat(format) {
 				return fmt.Errorf("invalid --format %q; must be one of: table, csv, json", format)
 			}
 
@@ -411,7 +428,13 @@ func renderDiff(a, b *stats.Dataset, labelA, labelB, format string, topN int) er
 
 // --- CI ---
 
-var validCIFormats = map[string]bool{"text": true, "github-actions": true, "gitlab": true, "json": true}
+func isValidCIFormat(s string) bool {
+	switch s {
+	case "text", "github-actions", "gitlab", "json":
+		return true
+	}
+	return false
+}
 
 func ciCmd() *cobra.Command {
 	var (
@@ -426,7 +449,7 @@ func ciCmd() *cobra.Command {
 		Use:   "ci",
 		Short: "Run quality gates for CI pipelines",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !validCIFormats[format] {
+			if !isValidCIFormat(format) {
 				return fmt.Errorf("invalid --format %q; must be one of: text, github-actions, gitlab, json", format)
 			}
 

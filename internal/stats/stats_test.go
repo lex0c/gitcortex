@@ -532,3 +532,160 @@ func TestLoadMultiJSONLSingleFile(t *testing.T) {
 		t.Error("single file should NOT have prefix, found data:main.go")
 	}
 }
+
+func TestTopCommits(t *testing.T) {
+	ds := makeDataset()
+	result := TopCommits(ds, 2)
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+	// Sorted by lines changed descending
+	if result[0].LinesChanged < result[1].LinesChanged {
+		t.Error("not sorted descending by lines changed")
+	}
+	// AuthorName should not be empty
+	if result[0].AuthorName == "" {
+		t.Error("AuthorName is empty")
+	}
+}
+
+func TestTopCommitsWithMissingContributor(t *testing.T) {
+	// Commit with email not in contributors — should not panic
+	ds := &Dataset{
+		commits: map[string]*commitEntry{
+			"sha1": {email: "unknown@x.com", add: 100, del: 50, files: 3},
+		},
+		contributors: map[string]*ContributorStat{},
+	}
+	result := TopCommits(ds, 10)
+	if len(result) != 1 {
+		t.Fatalf("len = %d", len(result))
+	}
+	if result[0].AuthorName != "unknown@x.com" {
+		t.Errorf("AuthorName = %q, want email fallback", result[0].AuthorName)
+	}
+}
+
+func TestDevProfiles(t *testing.T) {
+	ds := makeDataset()
+	profiles := DevProfiles(ds, "")
+	if len(profiles) != 2 {
+		t.Fatalf("len = %d, want 2", len(profiles))
+	}
+	// Sorted by commits descending
+	if profiles[0].Commits < profiles[1].Commits {
+		t.Error("not sorted by commits descending")
+	}
+	// Alice should have scope
+	alice := profiles[0]
+	if alice.Email != "alice@test.com" {
+		t.Fatalf("first profile = %q, want alice", alice.Email)
+	}
+	if len(alice.Scope) == 0 {
+		t.Error("alice scope is empty")
+	}
+	if alice.Pace <= 0 {
+		t.Errorf("alice pace = %.1f, want > 0", alice.Pace)
+	}
+	if alice.ContribType == "" {
+		t.Error("alice contrib type is empty")
+	}
+}
+
+func TestDevProfilesFilterByEmail(t *testing.T) {
+	ds := makeDataset()
+	profiles := DevProfiles(ds, "bob@test.com")
+	if len(profiles) != 1 {
+		t.Fatalf("len = %d, want 1", len(profiles))
+	}
+	if profiles[0].Email != "bob@test.com" {
+		t.Errorf("email = %q", profiles[0].Email)
+	}
+}
+
+func TestDevProfilesContribType(t *testing.T) {
+	tests := []struct {
+		add  int64
+		del  int64
+		want string
+	}{
+		{100, 10, "growth"},   // ratio 0.1
+		{100, 50, "balanced"}, // ratio 0.5
+		{100, 90, "refactor"}, // ratio 0.9
+		{0, 0, "growth"},     // zero additions
+	}
+	for _, tt := range tests {
+		ds := &Dataset{
+			commits: map[string]*commitEntry{
+				"s1": {email: "a@x", add: tt.add, del: tt.del, files: 1},
+			},
+			contributors: map[string]*ContributorStat{
+				"a@x": {Name: "A", Email: "a@x", Commits: 1, Additions: tt.add, Deletions: tt.del, ActiveDays: 1},
+			},
+			files: map[string]*fileEntry{},
+		}
+		profiles := DevProfiles(ds, "")
+		if len(profiles) == 0 {
+			t.Fatal("no profiles")
+		}
+		if profiles[0].ContribType != tt.want {
+			t.Errorf("add=%d del=%d: type=%q, want %q", tt.add, tt.del, profiles[0].ContribType, tt.want)
+		}
+	}
+}
+
+func TestStreamLoadFullPipeline(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"c1","tree":"t","parents":["p1","p2"],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-03-15T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-03-15T10:00:00Z","message":"merge feature","additions":50,"deletions":10,"files_changed":3}
+{"type":"commit_parent","sha":"c1","parent_sha":"p1"}
+{"type":"commit_parent","sha":"c1","parent_sha":"p2"}
+{"type":"commit_file","commit":"c1","path_current":"src/main.go","path_previous":"src/main.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":30,"deletions":5}
+{"type":"commit_file","commit":"c1","path_current":"src/util.go","path_previous":"src/util.go","status":"M","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":15,"deletions":3}
+{"type":"commit_file","commit":"c1","path_current":"README.md","path_previous":"README.md","status":"M","old_hash":"0","new_hash":"3","old_size":0,"new_size":0,"additions":5,"deletions":2}
+{"type":"commit","sha":"c2","tree":"t","parents":["c1"],"author_name":"Bob","author_email":"bob@x.com","author_date":"2024-03-16T14:00:00Z","committer_name":"Bob","committer_email":"bob@x.com","committer_date":"2024-03-16T14:00:00Z","message":"fix bug","additions":8,"deletions":2,"files_changed":1}
+{"type":"commit_parent","sha":"c2","parent_sha":"c1"}
+{"type":"commit_file","commit":"c2","path_current":"src/main.go","path_previous":"src/main.go","status":"M","old_hash":"0","new_hash":"4","old_size":0,"new_size":0,"additions":8,"deletions":2}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// Summary
+	s := ComputeSummary(ds)
+	if s.TotalCommits != 2 {
+		t.Errorf("commits = %d", s.TotalCommits)
+	}
+	if s.MergeCommits != 1 {
+		t.Errorf("merges = %d, want 1 (c1 has 2 parents)", s.MergeCommits)
+	}
+	if s.TotalDevs != 2 {
+		t.Errorf("devs = %d", s.TotalDevs)
+	}
+
+	// Top commits
+	tc := TopCommits(ds, 1)
+	if tc[0].SHA != "c1" {
+		t.Errorf("top commit = %q, want c1 (60 lines vs 10)", tc[0].SHA)
+	}
+	if tc[0].Message != "merge feature" {
+		t.Errorf("message = %q", tc[0].Message)
+	}
+
+	// Coupling: src/main.go + src/util.go co-change in c1
+	coupling := FileCoupling(ds, 10, 1)
+	if len(coupling) == 0 {
+		t.Error("expected coupling between src/main.go and src/util.go")
+	}
+
+	// Dev profiles
+	profiles := DevProfiles(ds, "alice@x.com")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	if profiles[0].Commits != 1 {
+		t.Errorf("alice commits = %d", profiles[0].Commits)
+	}
+	if len(profiles[0].Scope) == 0 {
+		t.Error("alice scope empty")
+	}
+}
