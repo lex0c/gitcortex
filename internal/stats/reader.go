@@ -143,7 +143,8 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 	}
 	hasFilter := !fromTime.IsZero() || !toTime.IsZero()
 
-	now := time.Now()
+	// Use ds.Latest (set during commit processing) instead of time.Now()
+	// for reproducible churn scores from the same dataset.
 	halfLife := opt.HalfLifeDays
 	if halfLife <= 0 {
 		halfLife = 90
@@ -304,7 +305,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				ds.contribFiles[cm.email][path] = struct{}{}
 
 				if !cm.date.IsZero() {
-					days := now.Sub(cm.date).Hours() / 24
+					days := ds.Latest.Sub(cm.date).Hours() / 24
 					weight := math.Exp(-lambda * days)
 					fe.recentChurn += float64(cf.Additions+cf.Deletions) * weight
 					if cm.date.After(fe.lastChange) {
