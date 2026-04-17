@@ -385,6 +385,47 @@ func TestStreamLoadCoupling(t *testing.T) {
 	}
 }
 
+func TestStreamLoadCouplingSingleFileCommits(t *testing.T) {
+	// x.go and y.go co-change in c1, but x.go also changes alone in c2.
+	// Coupling denominator for x.go should be 2 (both commits), not 1 (only multi-file).
+	jsonl := `{"type":"commit","sha":"c1","tree":"t","parents":[],"author_name":"A","author_email":"a@x","author_date":"2024-01-01T00:00:00Z","committer_name":"A","committer_email":"a@x","committer_date":"2024-01-01T00:00:00Z","message":"","additions":10,"deletions":0,"files_changed":2}
+{"type":"commit_file","commit":"c1","path_current":"x.go","path_previous":"x.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":5,"deletions":0}
+{"type":"commit_file","commit":"c1","path_current":"y.go","path_previous":"y.go","status":"M","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":5,"deletions":0}
+{"type":"commit","sha":"c2","tree":"t","parents":[],"author_name":"A","author_email":"a@x","author_date":"2024-01-02T00:00:00Z","committer_name":"A","committer_email":"a@x","committer_date":"2024-01-02T00:00:00Z","message":"","additions":3,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"x.go","path_previous":"x.go","status":"M","old_hash":"0","new_hash":"3","old_size":0,"new_size":0,"additions":3,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// x.go changed in 2 commits (c1 multi-file + c2 single-file)
+	if ds.couplingFileChanges["x.go"] != 2 {
+		t.Errorf("x.go changes = %d, want 2 (includes single-file commit)", ds.couplingFileChanges["x.go"])
+	}
+	// y.go changed in 1 commit
+	if ds.couplingFileChanges["y.go"] != 1 {
+		t.Errorf("y.go changes = %d, want 1", ds.couplingFileChanges["y.go"])
+	}
+	// co-changes = 1 (only c1)
+	pair := filePair{a: "x.go", b: "y.go"}
+	if ds.couplingPairs[pair] != 1 {
+		t.Errorf("pair count = %d, want 1", ds.couplingPairs[pair])
+	}
+	// coupling % = 1 / min(2, 1) = 1/1 = 100%
+	results := FileCoupling(ds, 10, 1)
+	if len(results) != 1 {
+		t.Fatalf("coupling results = %d", len(results))
+	}
+	if results[0].CouplingPct != 100 {
+		t.Errorf("coupling %% = %.0f, want 100 (1/min(2,1))", results[0].CouplingPct)
+	}
+	// changes_A should be 2, not 1
+	if results[0].ChangesA != 2 && results[0].ChangesB != 2 {
+		t.Errorf("changes should include single-file commit: A=%d B=%d", results[0].ChangesA, results[0].ChangesB)
+	}
+}
+
 func TestParseDate(t *testing.T) {
 	tests := []struct {
 		in   string
