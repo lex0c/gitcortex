@@ -358,10 +358,8 @@ func finalizeDataset(ds *Dataset) {
 }
 
 func flushCoupling(ds *Dataset, files []string, maxFiles int) {
-	if len(files) < 2 || len(files) > maxFiles {
-		return
-	}
-
+	// Always count file changes (denominator for coupling %)
+	// so single-file commits are included in the base rate.
 	seen := make(map[string]bool, len(files))
 	unique := make([]string, 0, len(files))
 	for _, f := range files {
@@ -370,6 +368,11 @@ func flushCoupling(ds *Dataset, files []string, maxFiles int) {
 			unique = append(unique, f)
 			ds.couplingFileChanges[f]++
 		}
+	}
+
+	// Only count pairs for multi-file commits within size limit
+	if len(unique) < 2 || len(unique) > maxFiles {
+		return
 	}
 
 	for i := 0; i < len(unique); i++ {
