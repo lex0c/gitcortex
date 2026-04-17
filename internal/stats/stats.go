@@ -380,7 +380,26 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 	var results []ChurnRiskResult
 
 	for path, fe := range ds.files {
-		bf := len(fe.devLines)
+		// Compute real bus factor (80% threshold), same as BusFactor stat
+		type dl struct{ lines int64 }
+		devs := make([]dl, 0, len(fe.devLines))
+		var totalLines int64
+		for _, lines := range fe.devLines {
+			devs = append(devs, dl{lines})
+			totalLines += lines
+		}
+		sort.Slice(devs, func(i, j int) bool { return devs[i].lines > devs[j].lines })
+
+		bf := 0
+		var cum int64
+		threshold := float64(totalLines) * 0.8
+		for _, d := range devs {
+			cum += d.lines
+			bf++
+			if float64(cum) >= threshold {
+				break
+			}
+		}
 		if bf < 1 {
 			bf = 1
 		}
@@ -395,7 +414,7 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 		results = append(results, ChurnRiskResult{
 			Path:           path,
 			RecentChurn:    math.Round(fe.recentChurn*10) / 10,
-			BusFactor:      len(fe.devLines),
+			BusFactor:      bf,
 			RiskScore:      math.Round(risk*10) / 10,
 			TotalChanges:   fe.commits,
 			LastChangeDate: lastDate,
