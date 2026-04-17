@@ -40,8 +40,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </head>
 <body>
 
-<h1>{{.Profile.Name}}</h1>
-<p class="subtitle">{{.Profile.Email}} · {{.RepoName}} · {{.Profile.FirstDate}} to {{.Profile.LastDate}}</p>
+<h1>{{.Profile.Name}} <span style="font-size:16px; font-weight:normal; color:#656d76;">· {{.RepoName}}</span></h1>
+<p class="subtitle">{{.Profile.Email}} · {{.Profile.FirstDate}} to {{.Profile.LastDate}}</p>
 
 <div class="cards">
   <div class="card"><div class="label">Commits</div><div class="value">{{.Profile.Commits}}</div></div>
