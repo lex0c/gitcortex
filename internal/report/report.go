@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/lex0c/gitcortex/internal/stats"
 )
@@ -27,6 +28,7 @@ type ReportData struct {
 	TopCommits   []stats.BigCommit
 	DevNetwork   []stats.DevEdge
 	Profiles     []stats.DevProfile
+	GeneratedAt    string
 	Pareto         ParetoData
 	PatternGrid    [7][24]int
 	MaxPattern     int
@@ -191,7 +193,10 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 	actRaw := stats.ActivityOverTime(ds, "month")
 	actYears, actGrid, maxActCommits := buildActivityGrid(actRaw)
 
+	now := time.Now().Format("2006-01-02 15:04")
+
 	data := ReportData{
+		GeneratedAt:        now,
 		RepoName:           repoName,
 		Summary:            stats.ComputeSummary(ds),
 		Contributors:       stats.TopContributors(ds, topN),
@@ -303,6 +308,7 @@ var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(reportHTML)
 var profileTmpl = template.Must(template.New("profile").Funcs(funcMap).Parse(profileHTML))
 
 type ProfileReportData struct {
+	GeneratedAt     string
 	RepoName        string
 	Profile         stats.DevProfile
 	ActivityYears   []string
@@ -333,6 +339,7 @@ func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) err
 	}
 
 	data := ProfileReportData{
+		GeneratedAt:        time.Now().Format("2006-01-02 15:04"),
 		RepoName:           repoName,
 		Profile:            p,
 		ActivityYears:      actYears,
