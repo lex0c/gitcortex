@@ -236,6 +236,23 @@ git cat-file --batch-check ─── sizes  ─↗
 
 ## Behavior and caveats
 
+### Reproducibility
+
+Every ranking function has an explicit tiebreaker so the same input produces the same output across runs and between the CLI (`stats --format json`) and the HTML report. Without this, ties on integer keys (ubiquitous — e.g. many files with `bus_factor = 1`) would let Go's randomized map iteration produce a different top-N each time.
+
+| Stat | Primary key (desc unless noted) | Tiebreaker |
+|------|---------------------------------|------------|
+| `summary` | — | N/A (scalar) |
+| `contributors` | commits | email asc |
+| `hotspots` | commits | path asc |
+| `directories` | file_touches | dir asc |
+| `busfactor` | bus_factor (asc) | path asc |
+| `coupling` | co_changes | coupling_pct |
+| `churn-risk` | recent_churn | bus_factor asc |
+| `top-commits` | lines_changed | sha asc |
+| `dev-network` | shared_lines | shared_files |
+| `profile` | commits | email asc |
+
 ### `--mailmap` off by default
 
 `extract` does not apply `.mailmap` unless you pass `--mailmap`. Without it, the same person with two emails (e.g. `alice@work.com` and `alice@personal.com`) splits into two contributors. Affected metrics: `contributors`, `bus factor`, `dev network`, `profiles`, churn-risk label (via bus factor).
