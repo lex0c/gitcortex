@@ -52,6 +52,26 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Merges</div><div class="value">{{.Summary.MergeCommits}}</div></div>
 </div>
 
+<h2>Concentration (Pareto)</h2>
+<p class="hint">How concentrated is the work? Lower % = more concentrated = higher risk if key people/files change.</p>
+<div class="cards">
+  <div class="card">
+    <div class="label">Files → 80% churn</div>
+    <div class="value">{{printf "%.0f" .Pareto.FilesPct80Churn}}%</div>
+    <div class="detail">{{.Pareto.TopChurnFiles}} of {{.Pareto.TotalFiles}} files</div>
+  </div>
+  <div class="card">
+    <div class="label">Devs → 80% commits</div>
+    <div class="value">{{printf "%.0f" .Pareto.DevsPct80Commits}}%</div>
+    <div class="detail">{{.Pareto.TopCommitDevs}} of {{.Pareto.TotalDevs}} devs</div>
+  </div>
+  <div class="card">
+    <div class="label">Dirs → 80% churn</div>
+    <div class="value">{{printf "%.0f" .Pareto.DirsPct80Churn}}%</div>
+    <div class="detail">{{.Pareto.TopChurnDirs}} of {{.Pareto.TotalDirs}} dirs</div>
+  </div>
+</div>
+
 {{if .ActivityYears}}
 <h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
 <p class="hint">Monthly commit heatmap. Darker = more commits. Hover for details. Toggle to table for exact numbers.</p>

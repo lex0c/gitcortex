@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"math"
 	"sort"
 
 	"github.com/lex0c/gitcortex/internal/stats"
@@ -26,8 +27,91 @@ type ReportData struct {
 	TopCommits   []stats.BigCommit
 	DevNetwork   []stats.DevEdge
 	Profiles     []stats.DevProfile
+	Pareto         ParetoData
 	PatternGrid    [7][24]int
 	MaxPattern     int
+}
+
+type ParetoData struct {
+	FilesPct80Churn   float64 // % of files that account for 80% of churn
+	DevsPct80Commits  float64 // % of devs that account for 80% of commits
+	DirsPct80Churn    float64 // % of dirs that account for 80% of churn
+	TopChurnFiles     int
+	TotalFiles        int
+	TopCommitDevs     int
+	TotalDevs         int
+	TopChurnDirs      int
+	TotalDirs         int
+}
+
+func computePareto(ds *stats.Dataset) ParetoData {
+	p := ParetoData{}
+
+	// Files: % of files for 80% of churn
+	type fc struct{ churn int64 }
+	var files []fc
+	var totalChurn int64
+	for _, fe := range ds.FileEntries() {
+		c := fe.Additions + fe.Deletions
+		files = append(files, fc{c})
+		totalChurn += c
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].churn > files[j].churn })
+	p.TotalFiles = len(files)
+	threshold := float64(totalChurn) * 0.8
+	var cum int64
+	for _, f := range files {
+		cum += f.churn
+		p.TopChurnFiles++
+		if float64(cum) >= threshold {
+			break
+		}
+	}
+	if p.TotalFiles > 0 {
+		p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
+	}
+
+	// Devs: % of devs for 80% of commits
+	contribs := stats.TopContributors(ds, 0)
+	var totalCommits int
+	for _, c := range contribs {
+		totalCommits += c.Commits
+	}
+	p.TotalDevs = len(contribs)
+	commitThreshold := float64(totalCommits) * 0.8
+	var cumCommits int
+	for _, c := range contribs {
+		cumCommits += c.Commits
+		p.TopCommitDevs++
+		if float64(cumCommits) >= commitThreshold {
+			break
+		}
+	}
+	if p.TotalDevs > 0 {
+		p.DevsPct80Commits = math.Round(float64(p.TopCommitDevs) / float64(p.TotalDevs) * 1000) / 10
+	}
+
+	// Dirs: % of dirs for 80% of churn
+	dirs := stats.DirectoryStats(ds, 0)
+	var totalDirChurn int64
+	for _, d := range dirs {
+		totalDirChurn += d.Churn
+	}
+	p.TotalDirs = len(dirs)
+	dirThreshold := float64(totalDirChurn) * 0.8
+	var cumDirChurn int64
+	for _, d := range dirs {
+		cumDirChurn += d.Churn
+		p.TopChurnDirs++
+		if float64(cumDirChurn) >= dirThreshold {
+			break
+		}
+	}
+	if p.TotalDirs > 0 {
+		p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
+	}
+
+	return p
 }
 
 type ActivityCell struct {
@@ -127,6 +211,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		TopCommits:         stats.TopCommits(ds, topN),
 		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
 		Profiles:           stats.DevProfiles(ds, ""),
+		Pareto:             computePareto(ds),
 		PatternGrid:        grid,
 		MaxPattern:         maxP,
 	}
