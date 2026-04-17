@@ -7,7 +7,7 @@ const profileHTML = `<!DOCTYPE html>
 <title>{{.Profile.Name}} — {{.RepoName}}</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 900px; margin: 0 auto; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
 h1 { font-size: 22px; margin-bottom: 4px; }
 h2 { font-size: 16px; margin: 28px 0 8px; padding-bottom: 6px; border-bottom: 1px solid #d0d7de; }
 .subtitle { color: #656d76; font-size: 13px; margin-bottom: 20px; }
