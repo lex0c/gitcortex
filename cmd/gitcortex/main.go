@@ -130,7 +130,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
