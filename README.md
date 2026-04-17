@@ -34,6 +34,15 @@ Check version: `gitcortex --version`
 
 Requires Git 2.31+ and Go 1.21+. CI runs automatically on push/PR via GitHub Actions.
 
+### Release
+
+```bash
+git tag v0.1.0
+git push origin main --tags
+```
+
+The version is injected at build time from `git describe --tags`. After tagging, `make build && gitcortex --version` shows `v0.1.0`.
+
 ## Usage
 
 ### Extract
