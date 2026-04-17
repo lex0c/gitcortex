@@ -155,14 +155,6 @@ func heatColor(val, max int) string {
 	return fmt.Sprintf("#%02x%02x%02x", 50, g, 80)
 }
 
-func shortPath(path string, maxLen int) string {
-	if len(path) <= maxLen {
-		return path
-	}
-	return "..." + path[len(path)-maxLen+3:]
-}
-
-
 func seq(start, end int) []int {
 	s := make([]int, end-start+1)
 	for i := range s {
@@ -177,10 +169,6 @@ func list(items ...string) []string {
 
 func toInt64(v float64) int64 {
 	return int64(v)
-}
-
-func plus(a, b int64) int64 {
-	return a + b
 }
 
 func plusInt(a, b int) int {
@@ -218,12 +206,10 @@ var funcMap = template.FuncMap{
 	"pct":       pct,
 	"pctInt":    pctInt,
 	"heatColor": heatColor,
-	"shortPath": shortPath,
 	"joinDevs":  stats.JoinDevs,
 	"seq":       seq,
 	"list":      list,
 	"int64":      toInt64,
-	"plus":       plus,
 	"actColor":   actColor,
 	"pctRatio":   pctRatio,
 	"plusInt":    plusInt,
