@@ -99,6 +99,10 @@ Based on Adam Tornhill's ["Your Code as a Crime Scene"](https://pragprog.com/tit
 > **Caveat — co-change is not causation.** Two files changing in the same commit proves they were touched by the same unit of work, not that one depends on the other. The refactor filter catches the most blatant false positives (global renames, format passes) but not all — a genuinely large feature touching many related files can still leak pair counts. Treat high coupling % as a hypothesis worth investigating, not a proof of architectural dependency.
 >
 > **Caveat — the refactor filter uses mean churn.** A commit mixing many mechanical renames (low churn each) with a few substantive edits (high churn each) can have mean > 5 and escape the filter. Example: 12 renames of 1 line + 3 real edits of 100 lines → mean ≈ 21, filter does not fire, and the 12 rename-participating files generate ~66 spurious pairs. Per-file weighting would fix this but requires restructuring pair generation; it is an acknowledged limitation rather than a planned change.
+>
+> **Caveat — rename commits below `refactorMinFiles` leak.** A commit renaming 8 files (say, a small module rename) has zero churn per file but only 8 files, so the filter does not fire. Pairs are generated between old paths and then re-keyed onto the canonical (new) paths by the rename tracker. Each such pair has `CoChanges = 1`, so any sensible `--coupling-min-changes` threshold (≥ 2) filters them out of display. Readers inspecting raw data may still see the residual pairs.
+>
+> **Caveat — `--coupling-max-files` below the refactor threshold disables the filter.** The refactor filter only runs for commits with `≥ refactorMinFiles` (10) files, but the existing `--coupling-max-files` gate runs first. Setting `--coupling-max-files` below 10 discards those commits outright (no pairs at all), so the refactor filter becomes dead code. This is correct layering but worth knowing if you tune the flag aggressively.
 
 ## Churn Risk
 

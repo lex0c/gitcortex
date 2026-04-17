@@ -29,7 +29,10 @@ const (
 	// commits are excluded to reduce false coupling. Denominators
 	// (couplingFileChanges) are still counted so ChangesA/ChangesB
 	// remain honest totals.
-	refactorMinFiles        = 10
+	refactorMinFiles = 10
+	// Unit is line-churn = additions + deletions per file, not just
+	// additions. Strict < threshold: a commit with mean exactly 5.0 is
+	// NOT filtered.
 	refactorMaxChurnPerFile = 5.0
 )
 

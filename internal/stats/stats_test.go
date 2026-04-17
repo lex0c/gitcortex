@@ -753,6 +753,44 @@ func TestCouplingRefactorFilterBoundaries(t *testing.T) {
 	}
 }
 
+func TestCouplingRenameBelowFilterThreshold(t *testing.T) {
+	// Pins down current behavior at the intersection of two subsystems:
+	// rename tracking and the refactor filter. A commit renaming 8 files
+	// (below refactorMinFiles = 10) has zero churn per file, so mean < 5,
+	// BUT the fileCount threshold isn't met — the filter does not fire.
+	// Pairs between the old paths are generated during streaming, then
+	// re-keyed to the canonical (new) paths in applyRenames.
+	//
+	// Each pair has CoChanges = 1, so a sensible --coupling-min-changes
+	// threshold filters them out of user-facing output. But for callers
+	// who inspect the raw ds.couplingPairs map, the pairs are present.
+	// This test exists so any future tightening (lower refactorMinFiles,
+	// or explicit skip-when-all-renames) is a conscious decision backed
+	// by a failing test, not a silent behavior drift.
+	var lines []string
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":0,"deletions":0,"files_changed":8}`)
+	for i := 0; i < 8; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"new%d.go","path_previous":"old%d.go","status":"R100","additions":0,"deletions":0}`, i, i))
+	}
+	ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+		LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// 8 files, filter does not fire → C(8,2) = 28 pairs exist.
+	if got := len(ds.couplingPairs); got != 28 {
+		t.Errorf("pairs = %d, want 28 (current behavior — rename commits below refactorMinFiles leak)", got)
+	}
+	// Pairs must be keyed to the NEW paths (post-rename canonical), not old.
+	for pair := range ds.couplingPairs {
+		if !strings.HasPrefix(pair.a, "new") || !strings.HasPrefix(pair.b, "new") {
+			t.Errorf("pair %v contains old-path key; applyRenames should have re-keyed", pair)
+		}
+	}
+}
+
 func TestCouplingKeepsNormalMultiFileCommits(t *testing.T) {
 	// Counter-test: a commit touching 10 files with substantial churn per
 	// file (40+ lines avg) must still contribute pairs — it's not a rename.

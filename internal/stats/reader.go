@@ -520,6 +520,17 @@ func mergeFileEntry(dst, src *fileEntry) {
 	}
 }
 
+// isMechanicalRefactor returns true when a commit's shape matches a likely
+// rename / format / lint pass: many files with very low mean churn per file.
+// Such commits generate spurious coupling pairs and are filtered in
+// flushCoupling. Thresholds are package constants (refactor*).
+func isMechanicalRefactor(fileCount int, commitChurn int64) bool {
+	if fileCount < refactorMinFiles {
+		return false
+	}
+	return float64(commitChurn)/float64(fileCount) < refactorMaxChurnPerFile
+}
+
 func flushCoupling(ds *Dataset, files []string, commitChurn int64, maxFiles int) {
 	// Always count file changes (denominator for coupling %)
 	// so single-file commits are included in the base rate.
@@ -538,15 +549,11 @@ func flushCoupling(ds *Dataset, files []string, commitChurn int64, maxFiles int)
 		return
 	}
 
-	// Mechanical-refactor heuristic: many files, very low mean churn per
-	// file. Global renames and format-only commits match this pattern and
-	// would otherwise generate spurious coupling pairs. Skip pair counting
-	// but keep the denominator already incremented above.
-	if len(unique) >= refactorMinFiles {
-		meanChurn := float64(commitChurn) / float64(len(unique))
-		if meanChurn < refactorMaxChurnPerFile {
-			return
-		}
+	// Global renames, format/lint passes, and similar mechanical commits
+	// would otherwise generate spurious coupling pairs. Denominator above
+	// is still incremented so ChangesA/ChangesB stay honest.
+	if isMechanicalRefactor(len(unique), commitChurn) {
+		return
 	}
 
 	for i := 0; i < len(unique); i++ {
