@@ -128,6 +128,24 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
+{{if .Directories}}
+<h2>Directories</h2>
+<p class="hint">Module-level health. Commits and churn aggregated by directory. Low bus factor = knowledge concentrated in few people.</p>
+<table>
+<tr><th>Directory</th><th>Commits</th><th>Churn</th><th>Files</th><th>Devs</th><th>Bus Factor</th></tr>
+{{range .Directories}}
+<tr>
+  <td class="mono">{{.Dir}}</td>
+  <td>{{.Commits}}</td>
+  <td>{{.Churn}}</td>
+  <td>{{.Files}}</td>
+  <td>{{.UniqueDevs}}</td>
+  <td>{{.BusFactor}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
 <p class="hint">Files ranked by recent churn weighted by bus factor. High risk = lots of recent changes owned by few people. Prioritize knowledge transfer here.</p>
