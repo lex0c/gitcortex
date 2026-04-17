@@ -144,7 +144,11 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 	hasFilter := !fromTime.IsZero() || !toTime.IsZero()
 
 	now := time.Now()
-	lambda := math.Ln2 / float64(opt.HalfLifeDays)
+	halfLife := opt.HalfLifeDays
+	if halfLife <= 0 {
+		halfLife = 90
+	}
+	lambda := math.Ln2 / float64(halfLife)
 
 	// Coupling streaming state
 	var coupCurrentSHA string
