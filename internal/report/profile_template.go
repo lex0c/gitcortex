@@ -49,16 +49,38 @@ footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Weekend</div><div class="value">{{printf "%.1f" .Profile.WeekendPct}}%</div></div>
 </div>
 
-<div class="grid-info">
-  <span class="lbl">Scope</span>
-  <span>{{range $i, $s := .Profile.Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
-
-  <span class="lbl">Contribution</span>
-  <span>{{if eq .Profile.ContribType "growth"}}<span style="color:#2da44e;">growth</span>{{else if eq .Profile.ContribType "refactor"}}<span style="color:#cf222e;">refactor</span>{{else}}<span style="color:#bf8700;">balanced</span>{{end}} <span style="color:#656d76;">(ratio {{printf "%.2f" .Profile.ContribRatio}} · +{{.Profile.Additions}} −{{.Profile.Deletions}})</span></span>
-
-  <span class="lbl">Collaboration</span>
-  <span>{{if .Profile.Collaborators}}{{range $i, $c := .Profile.Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}}){{end}}{{else}}solo contributor{{end}}</span>
+<div style="margin-bottom:16px;">
+  <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Scope</div>
+  {{range .Profile.Scope}}
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:3px; font-size:12px;">
+    <span class="mono" style="min-width:200px;">{{.Dir}}</span>
+    <div style="flex:1; height:14px; background:#ebedf0; border-radius:3px; overflow:hidden;"><div style="height:100%; width:{{printf "%.0f" .Pct}}%; background:#0969da; border-radius:3px;"></div></div>
+    <span style="min-width:35px; text-align:right; color:#656d76;">{{printf "%.0f" .Pct}}%</span>
+  </div>
+  {{end}}
 </div>
+
+<div style="display:flex; gap:24px; margin-bottom:16px; font-size:13px;">
+  <div>
+    <span style="color:#656d76;">Contribution:</span>
+    {{if eq .Profile.ContribType "growth"}}<span style="color:#2da44e; font-weight:600;">growth</span>{{else if eq .Profile.ContribType "refactor"}}<span style="color:#cf222e; font-weight:600;">refactor</span>{{else}}<span style="color:#bf8700; font-weight:600;">balanced</span>{{end}}
+    <span style="color:#656d76;">({{printf "%.2f" .Profile.ContribRatio}} �� +{{.Profile.Additions}} −{{.Profile.Deletions}})</span>
+  </div>
+</div>
+
+{{if .Profile.Collaborators}}
+<div style="margin-bottom:16px;">
+  <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Collaboration</div>
+  <div style="display:flex; flex-wrap:wrap; gap:6px;">
+    {{range .Profile.Collaborators}}
+    <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; background:#fff; border:1px solid #d0d7de; border-radius:16px; font-size:11px;">
+      <span class="mono">{{.Email}}</span>
+      <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;">{{.SharedFiles}}</span>
+    </span>
+    {{end}}
+  </div>
+</div>
+{{end}}
 
 {{if .Profile.TopFiles}}
 <h2>Top Files</h2>
