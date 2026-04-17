@@ -702,6 +702,57 @@ func TestCouplingExcludesMechanicalRefactor(t *testing.T) {
 	}
 }
 
+func TestCouplingRefactorFilterBoundaries(t *testing.T) {
+	// Exercise the threshold boundaries directly. The refactor filter uses
+	// `len(unique) >= refactorMinFiles` (10) AND `meanChurn < refactorMax-
+	// ChurnPerFile` (5.0, strict). These cases cover both dimensions plus
+	// the pure-rename (zero churn) case that motivated the filter.
+	cases := []struct {
+		name         string
+		files        int
+		churnPerFile int64
+		wantPairs    int // 0 = filtered; non-zero = pairs produced
+	}{
+		{"below minFiles: 9 files zero churn", 9, 0, 9 * 8 / 2},
+		{"pure rename: 10 files zero churn", 10, 0, 0},
+		{"below threshold: 10 files × 4 lines (mean 4.0)", 10, 4, 0},
+		{"at threshold: 10 files × 5 lines (mean 5.0, strict <)", 10, 5, 10 * 9 / 2},
+		{"above threshold: 10 files × 6 lines (mean 6.0)", 10, 6, 10 * 9 / 2},
+		{"large substantive: 20 files × 50 lines", 20, 50, 20 * 19 / 2},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			total := int64(c.files) * c.churnPerFile
+			var lines []string
+			lines = append(lines,
+				fmt.Sprintf(`{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":%d,"deletions":0,"files_changed":%d}`,
+					total, c.files))
+			for i := 0; i < c.files; i++ {
+				lines = append(lines,
+					fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"f%d.go","status":"M","additions":%d,"deletions":0}`,
+						i, c.churnPerFile))
+			}
+			ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+				LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+			if err != nil {
+				t.Fatalf("streamLoad: %v", err)
+			}
+			if got := len(ds.couplingPairs); got != c.wantPairs {
+				t.Errorf("pairs = %d, want %d", got, c.wantPairs)
+			}
+			// Regardless of whether pairs were counted, each file's change
+			// denominator must equal 1 (all participated in the single commit).
+			for i := 0; i < c.files; i++ {
+				path := fmt.Sprintf("f%d.go", i)
+				if got := ds.couplingFileChanges[path]; got != 1 {
+					t.Errorf("%s file changes = %d, want 1 (denominator always counted)", path, got)
+				}
+			}
+		})
+	}
+}
+
 func TestCouplingKeepsNormalMultiFileCommits(t *testing.T) {
 	// Counter-test: a commit touching 10 files with substantial churn per
 	// file (40+ lines avg) must still contribute pairs — it's not a rename.
