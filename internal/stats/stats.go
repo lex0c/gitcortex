@@ -91,19 +91,6 @@ type StatsFlags struct {
 	NetworkMinFiles    int
 }
 
-type FileEntryView struct {
-	Additions int64
-	Deletions int64
-}
-
-func (ds *Dataset) FileEntries() []FileEntryView {
-	result := make([]FileEntryView, 0, len(ds.files))
-	for _, fe := range ds.files {
-		result = append(result, FileEntryView{Additions: fe.additions, Deletions: fe.deletions})
-	}
-	return result
-}
-
 // --- Stats from pre-aggregated Dataset ---
 
 func ComputeSummary(ds *Dataset) Summary {

@@ -47,21 +47,18 @@ type ParetoData struct {
 func computePareto(ds *stats.Dataset) ParetoData {
 	p := ParetoData{}
 
-	// Files: % of files for 80% of churn
-	type fc struct{ churn int64 }
-	var files []fc
+	// Files: % of files for 80% of churn (FileHotspots returns sorted by commits, re-sort by churn)
+	hotspots := stats.FileHotspots(ds, 0)
+	sort.Slice(hotspots, func(i, j int) bool { return hotspots[i].Churn > hotspots[j].Churn })
 	var totalChurn int64
-	for _, fe := range ds.FileEntries() {
-		c := fe.Additions + fe.Deletions
-		files = append(files, fc{c})
-		totalChurn += c
+	for _, h := range hotspots {
+		totalChurn += h.Churn
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].churn > files[j].churn })
-	p.TotalFiles = len(files)
+	p.TotalFiles = len(hotspots)
 	threshold := float64(totalChurn) * 0.8
 	var cum int64
-	for _, f := range files {
-		cum += f.churn
+	for _, h := range hotspots {
+		cum += h.Churn
 		p.TopChurnFiles++
 		if float64(cum) >= threshold {
 			break
