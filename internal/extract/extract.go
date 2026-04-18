@@ -244,7 +244,7 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 		if path == "" {
 			path = entry.PathOld
 		}
-		if shouldIgnore(path, ignorePatterns) {
+		if ShouldIgnore(path, ignorePatterns) {
 			continue
 		}
 		filteredRaw = append(filteredRaw, entry)
@@ -389,7 +389,12 @@ func loadDevEmails(path string) (map[string]struct{}, error) {
 	return cache, scanner.Err()
 }
 
-func shouldIgnore(path string, patterns []string) bool {
+// ShouldIgnore reports whether path matches any of the ignore patterns.
+// Exported so downstream packages (e.g. the stats suspect-warning)
+// can verify that the globs they emit actually match the paths they
+// describe — without a shared predicate the two surfaces can drift
+// and users end up with --ignore suggestions that don't do anything.
+func ShouldIgnore(path string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
 	}

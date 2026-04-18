@@ -2,6 +2,8 @@ package stats
 
 import (
 	"testing"
+
+	"github.com/lex0c/gitcortex/internal/extract"
 )
 
 func TestDetectSuspectFilesPaths(t *testing.T) {
@@ -161,6 +163,61 @@ func keys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestSuspectSuggestionsMatchExtractShouldIgnore is the end-to-end
+// invariant: every --ignore glob the warning emits must cause
+// extract.ShouldIgnore to return true for the paths that caused that
+// glob to be emitted. Without this test the two surfaces (detector
+// and ignore matcher) can drift silently — e.g. a future refactor of
+// ShouldIgnore that tightens prefix semantics would break the
+// suspect warning's entire value proposition without any stats test
+// firing.
+func TestSuspectSuggestionsMatchExtractShouldIgnore(t *testing.T) {
+	// Mix root-level and nested occurrences of every pattern class:
+	// directory segments (vendor, dist), suffix (*.min.js), basename
+	// (package-lock.json), generated extensions (*.pb.go).
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"vendor/a.go":                    {additions: 100, deletions: 50},
+			"pkg/vendor/deep/b.go":           {additions: 100, deletions: 50},
+			"services/auth/vendor/c.go":      {additions: 100, deletions: 50},
+			"dist/bundle.js":                 {additions: 200, deletions: 200},
+			"wp-includes/js/dist/editor.js":  {additions: 200, deletions: 200},
+			"wp-admin/dist/app/chunk.js":     {additions: 200, deletions: 200},
+			"node_modules/foo.js":            {additions: 80, deletions: 40},
+			"sub/proj/node_modules/bar.js":   {additions: 80, deletions: 40},
+			"app.min.js":                     {additions: 60, deletions: 30},
+			"static/vendor.min.js":           {additions: 60, deletions: 30}, // also matches vendor, first match wins
+			"deep/nested/path/thing.min.js":  {additions: 60, deletions: 30},
+			"package-lock.json":              {additions: 500, deletions: 400},
+			"projects/x/package-lock.json":   {additions: 500, deletions: 400},
+			"proto/foo.pb.go":                {additions: 300, deletions: 200},
+		},
+	}
+	buckets, _ := DetectSuspectFiles(ds)
+	if len(buckets) == 0 {
+		t.Fatal("no buckets produced; test inputs should trigger at least vendor/dist/min.js buckets")
+	}
+
+	// For each bucket, feed its Suggestions into ShouldIgnore and
+	// assert every Path in that bucket is matched by at least one
+	// suggestion. A false here means the warning's suggested fix
+	// would leave the file untouched — exactly the regression we're
+	// guarding against.
+	for _, b := range buckets {
+		if len(b.Suggestions) == 0 {
+			t.Errorf("bucket %q has paths %v but no suggestions", b.Pattern.Glob, b.Paths)
+			continue
+		}
+		for _, p := range b.Paths {
+			if !extract.ShouldIgnore(p, b.Suggestions) {
+				t.Errorf("bucket %q: path %q is not matched by any of its suggestions %v — "+
+					"user would copy-paste a fix that doesn't drop this file",
+					b.Pattern.Glob, p, b.Suggestions)
+			}
+		}
+	}
 }
 
 func TestDetectSuspectFilesOrdering(t *testing.T) {

@@ -127,9 +127,9 @@ func TestShouldIgnore(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := shouldIgnore(tt.path, tt.patterns)
+		got := ShouldIgnore(tt.path, tt.patterns)
 		if got != tt.want {
-			t.Errorf("shouldIgnore(%q, %v) = %v, want %v", tt.path, tt.patterns, got, tt.want)
+			t.Errorf("ShouldIgnore(%q, %v) = %v, want %v", tt.path, tt.patterns, got, tt.want)
 		}
 	}
 }
