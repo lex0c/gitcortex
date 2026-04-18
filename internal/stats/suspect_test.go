@@ -220,6 +220,60 @@ func keys(m map[string]bool) []string {
 // ShouldIgnore that tightens prefix semantics would break the
 // suspect warning's entire value proposition without any stats test
 // firing.
+func TestCollectAllSuggestionsCoversUnshownBuckets(t *testing.T) {
+	// Construct a dataset that triggers every directory-segment and
+	// common lockfile/suffix bucket, more than the CLI's display limit
+	// of 6 buckets. The aggregated suggestion list must include every
+	// bucket's glob so that a user copy-pasting the --ignore command
+	// covers the whole suspect set — not just the top-6 displayed.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"vendor/a.go":         {additions: 500, deletions: 500},
+			"node_modules/b.js":   {additions: 500, deletions: 500},
+			"dist/c.js":           {additions: 500, deletions: 500},
+			"build/d.out":         {additions: 500, deletions: 500},
+			"third_party/e.go":    {additions: 500, deletions: 500},
+			"foo.min.js":          {additions: 500, deletions: 500},
+			"bar.min.css":         {additions: 500, deletions: 500},
+			"package-lock.json":   {additions: 500, deletions: 500},
+			"yarn.lock":           {additions: 500, deletions: 500},
+			"go.sum":              {additions: 500, deletions: 500},
+			"proto/thing.pb.go":   {additions: 500, deletions: 500},
+		},
+	}
+	buckets, worth := DetectSuspectFiles(ds)
+	if !worth {
+		t.Fatal("expected warning-worthy dataset")
+	}
+	if len(buckets) <= 6 {
+		t.Fatalf("this test needs > 6 buckets to exercise the unshown-bucket path; got %d", len(buckets))
+	}
+
+	suggestions := CollectAllSuggestions(buckets)
+	seen := map[string]bool{}
+	for _, s := range suggestions {
+		seen[s] = true
+	}
+	// Every bucket's Suggestions must appear in the aggregated list.
+	for _, b := range buckets {
+		for _, want := range b.Suggestions {
+			if !seen[want] {
+				t.Errorf("bucket %q suggestion %q missing from aggregated list — "+
+					"user copy-paste would leave this bucket's paths in place",
+					b.Pattern.Glob, want)
+			}
+		}
+	}
+	// Dedup sanity: no duplicates in the output.
+	counts := map[string]int{}
+	for _, s := range suggestions {
+		counts[s]++
+		if counts[s] > 1 {
+			t.Errorf("suggestion %q appears %d times; expected dedup", s, counts[s])
+		}
+	}
+}
+
 func TestSuspectSuggestionsMatchExtractShouldIgnore(t *testing.T) {
 	// Mix root-level and nested occurrences of every pattern class:
 	// directory segments (vendor, dist), suffix (*.min.js), basename

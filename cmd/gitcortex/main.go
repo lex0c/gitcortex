@@ -219,20 +219,15 @@ func printSuspectWarning(w io.Writer, buckets []stats.SuspectBucket) {
 		fmt.Fprintf(w, "     %-22s %4d files, %8d churn   (%s)\n",
 			b.Pattern.Glob, len(b.Paths), b.Churn, b.Pattern.Reason)
 	}
-	// Deduplicate suggestions across buckets — suggestDirGlob may yield
-	// the same prefix from different seeds in pathological setups, and
-	// constantSuggest is idempotent across repeated matches.
-	seen := map[string]struct{}{}
-	var suggestions []string
-	for _, b := range shown {
-		for _, s := range b.Suggestions {
-			if _, ok := seen[s]; ok {
-				continue
-			}
-			seen[s] = struct{}{}
-			suggestions = append(suggestions, s)
-		}
+	if len(buckets) > len(shown) {
+		fmt.Fprintf(w, "     ... and %d more bucket(s) — see suggestion below for full set\n",
+			len(buckets)-len(shown))
 	}
+	// Suggestions cover ALL buckets, not just the shown subset — the
+	// warning threshold is computed over every bucket, so a remediation
+	// that skips unshown ones would leave the warning firing after the
+	// suggested fix.
+	suggestions := stats.CollectAllSuggestions(buckets)
 	fmt.Fprint(w, "   Rerun extract with --ignore to drop them, e.g.:\n     gitcortex extract --repo .")
 	for _, s := range suggestions {
 		fmt.Fprintf(w, " --ignore '%s'", s)

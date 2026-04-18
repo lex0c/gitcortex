@@ -191,3 +191,26 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 	worth := float64(suspectChurn)/float64(totalChurn) >= suspectWarningMinChurnRatio
 	return out, worth
 }
+
+// CollectAllSuggestions returns deduplicated --ignore globs across
+// every bucket, preserving bucket order followed by in-bucket order.
+// Callers surface a subset of buckets in their UI (e.g. top-N display)
+// but must emit remediation suggestions over the full set — the
+// warning's noise-floor check is computed against every bucket, so
+// trimming suggestions to just the displayed subset would leave
+// unshown suspects untouched and cause the warning to persist after
+// the suggested fix.
+func CollectAllSuggestions(buckets []SuspectBucket) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, b := range buckets {
+		for _, s := range b.Suggestions {
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
