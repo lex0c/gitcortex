@@ -274,6 +274,9 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `specBroadGeneralistMax` | `0.15` | Specialization Herfindahl `< 0.15` → `broad generalist` label in dev profile. |
 | `specBalancedMax` | `0.35` | `0.15 ≤ H < 0.35` → `balanced`. |
 | `specFocusedMax` | `0.7` | `0.35 ≤ H < 0.7` → `focused specialist`; `H ≥ 0.7` → `narrow specialist`. |
+| `Pct80Threshold` | `0.8` | Classic 80/20 cutoff. Shared by bus factor (fewest devs covering 80% of lines) and Pareto (subset producing 80% of churn/commits). |
+| `paretoExtremelyConcentratedMax` | `10.0` | Pareto cards with `≤10%` of items holding 80% of activity are labelled *extremely concentrated* (🔴). Defined in `internal/report/report.go`. |
+| `paretoModeratelyConcentratedMax` | `25.0` | `≤25%` → *moderately concentrated* (🟡); above → *well distributed* (🟢). Labels/markers are precomputed in `ComputePareto` so the HTML template and CLI both consume the same strings. |
 
 ### Reproducibility
 
@@ -293,6 +296,8 @@ Every ranking function has an explicit tiebreaker so the same input produces the
 | `profile` | commits | email asc |
 
 A third-level tiebreaker on path/sha/email asc is applied where primary and secondary can both tie (`churn-risk`, `coupling`, `dev-network`) so ordering is stable even with exact equality on the first two keys. Inside each profile, the `TopFiles`, `Scope`, and `Collaborators` sub-lists are also sorted with explicit tiebreakers (path / dir / email asc) so their internal ordering is deterministic too.
+
+Inside `busfactor`, the per-file `TopDevs` list is sorted by lines desc with an email asc tiebreaker. Without it, binary assets and small files where two devs contribute equal lines (e.g. `.gif`, `.png`, one-line configs) produced a different `TopDevs` email order on every run.
 
 ### `--mailmap` off by default
 
