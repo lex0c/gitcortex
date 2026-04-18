@@ -1896,3 +1896,82 @@ func TestStreamLoadFullPipeline(t *testing.T) {
 		t.Error("alice scope empty")
 	}
 }
+
+// buildSyntheticLargeDataset creates a deterministic dataset shaped like a
+// mid-size repo: thousands of devs, tens of thousands of files, with each
+// file touched by a few devs. Used by BenchmarkDevProfiles* to exercise the
+// allCollabs pre-compute path at a scale where the old O(D × F × D_avg)
+// implementation was measurable.
+func buildSyntheticLargeDataset(numDevs, numFiles, avgDevsPerFile, numCommits int) *Dataset {
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		CommitCount:  numCommits,
+		Earliest:     t1,
+		Latest:       t1.AddDate(0, 6, 0),
+		commits:      make(map[string]*commitEntry, numCommits),
+		contributors: make(map[string]*ContributorStat, numDevs),
+		files:        make(map[string]*fileEntry, numFiles),
+	}
+	for i := 0; i < numDevs; i++ {
+		email := fmt.Sprintf("dev-%04d@x", i)
+		ds.contributors[email] = &ContributorStat{
+			Email: email, Name: email,
+			Commits: numCommits / numDevs, ActiveDays: 1, FilesTouched: avgDevsPerFile,
+			Additions: 100, Deletions: 10,
+		}
+	}
+	for i := 0; i < numCommits; i++ {
+		email := fmt.Sprintf("dev-%04d@x", i%numDevs)
+		sha := fmt.Sprintf("c%06d", i)
+		ds.commits[sha] = &commitEntry{
+			email: email, date: t1.Add(time.Duration(i) * time.Hour),
+			add: 10, del: 1, files: 1,
+		}
+	}
+	// Deterministic dev assignment per file: stride through dev list.
+	for i := 0; i < numFiles; i++ {
+		path := fmt.Sprintf("src/pkg%03d/file%04d.go", i/100, i)
+		fe := &fileEntry{
+			commits:    avgDevsPerFile,
+			additions:  100 * int64(avgDevsPerFile),
+			deletions:  10 * int64(avgDevsPerFile),
+			devLines:   make(map[string]int64, avgDevsPerFile),
+			devCommits: make(map[string]int, avgDevsPerFile),
+			monthChurn: map[string]int64{"2024-01": 100 * int64(avgDevsPerFile)},
+			firstChange: t1, lastChange: t1,
+		}
+		for d := 0; d < avgDevsPerFile; d++ {
+			email := fmt.Sprintf("dev-%04d@x", (i*7+d*11)%numDevs) // stride + prime for spread
+			fe.devLines[email] = 100
+			fe.devCommits[email] = 1
+		}
+		ds.files[path] = fe
+	}
+	return ds
+}
+
+// BenchmarkDevProfilesAll measures the full-dataset path (generate profiles
+// for every dev). Before the allCollabs pre-compute, this was the hot path
+// in `report` on large repos — kubernetes-scale took >80s even though stats
+// on the same data took <12s. The pre-compute makes this roughly linear in
+// F × D_per_file² instead of D × F × D_per_file.
+func BenchmarkDevProfilesAll(b *testing.B) {
+	ds := buildSyntheticLargeDataset(1000, 10000, 5, 30000)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = DevProfiles(ds, "")
+	}
+}
+
+// BenchmarkDevProfilesFilterEmail measures the single-dev query path.
+// The pre-compute does more work than strictly necessary for a single dev,
+// but the absolute cost is bounded by F × D_per_file² and remains fast.
+func BenchmarkDevProfilesFilterEmail(b *testing.B) {
+	ds := buildSyntheticLargeDataset(1000, 10000, 5, 30000)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = DevProfiles(ds, "dev-0042@x")
+	}
+}
