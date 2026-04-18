@@ -1473,6 +1473,40 @@ func TestRenameSkipsReusedOldPath(t *testing.T) {
 	}
 }
 
+func TestRenameBackThenRenameAgain(t *testing.T) {
+	// Same-lineage chain with a rename-back: A → B → A → C. The repeated
+	// "A" is NOT path reuse — the intermediate edge B → A recreates A
+	// from B, so both A-segments belong to the same lineage and both
+	// should collapse into C. Without the hasIncomingRename check this
+	// would be mistaken for reuse and skipped, leaving stale B files
+	// and an un-migrated A with merged-but-untouched history.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "C"}, // newest rename
+		{oldPath: "B", newPath: "A"}, // middle: rename back
+		{oldPath: "A", newPath: "B"}, // oldest rename
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 2, monthChurn: map[string]int64{}}, // pre-first + post-back, merged
+		"B": {commits: 1, monthChurn: map[string]int64{}}, // mid-chain activity
+		"C": {commits: 1, monthChurn: map[string]int64{}}, // post-final activity
+	}
+	applyRenames(ds)
+
+	for _, orphan := range []string{"A", "B"} {
+		if _, ok := ds.files[orphan]; ok {
+			t.Errorf("%s should have been merged into C (rename-back chain, same lineage)", orphan)
+		}
+	}
+	c, ok := ds.files["C"]
+	if !ok {
+		t.Fatal("C missing — chain should have collapsed into it")
+	}
+	if c.commits != 4 {
+		t.Errorf("C.commits = %d, want 4 (A=2 + B=1 + C=1 merged)", c.commits)
+	}
+}
+
 func TestRenameChainNotMistakenForReuse(t *testing.T) {
 	// Guard against the fix being too aggressive: a genuine chain
 	// A→B→C has DIFFERENT oldPaths (A once, B once) and must still

@@ -329,7 +329,11 @@ Limits:
 - Git's rename detection defaults to ~50% similarity. A rename with heavy edits may not be detected, resulting in separate delete + add entries.
 - Copies (`C*` status) are **not** merged — copied files legitimately live as two entries.
 - If the rename commit falls outside a `--since` filter, the edge isn't captured and the old/new paths stay separate within the filtered window.
-- **Path reuse:** when the same path appears as the source of **multiple** rename events (e.g. `A` renamed to `B` in old history, then the name `A` was reused for an unrelated file that was later renamed to `D`), the two lineages are already conflated in `ds.files["A"]` at ingest time, and we cannot disambiguate them without per-commit temporal tracking. Rather than misattributing one lineage to the other target, gitcortex **refuses to migrate** any edge whose oldPath appears more than once. Concretely: `ds.files["A"]` stays put (with both lineages merged, same as without the rename tracker), `B` keeps only its post-rename history, and `D` keeps only its post-rename history. This is underattribution, not misattribution — neither target receives data that belongs to the other lineage.
+- **Path reuse vs rename-back:** duplicate `oldPath` edges can arise in two different ways. gitcortex distinguishes them:
+  - **Path reuse (different lineages):** `A → B` then an unrelated file is created at `A` and later renamed to `D`. The repeated `A` has no intermediate edge pointing at it. The two lineages are already conflated in `ds.files["A"]` at ingest time and cannot be disambiguated without per-commit temporal tracking. gitcortex **refuses to migrate** — `ds.files["A"]` stays put with merged lineages, and neither `B` nor `D` inherits data that could belong to the other lineage. This is underattribution but safer than misattribution.
+  - **Rename-back chain (same lineage):** `A → B → A → C` — the repeated `A` is recreated by an explicit edge `B → A`, so the whole chain belongs to one lineage and collapses into `C`. Detected by the presence of any edge whose `newPath` equals the duplicated `oldPath`.
+
+  The heuristic is exact for these two common cases and imperfect on exotic mixed cases (e.g. `A → B` in one lineage, then `C → A` starting a second lineage, then `A → D`). Those are treated as chain and will misattribute one lineage — a known limitation that a full fix would require per-commit temporal segmentation to solve.
 
 ### `--since` filter + ChurnRisk age
 

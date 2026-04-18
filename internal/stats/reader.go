@@ -410,27 +410,42 @@ func applyRenames(ds *Dataset) {
 		return
 	}
 
-	// Path reuse detection. When the same oldPath appears in multiple
-	// rename events (e.g. a file was renamed away, then the name was
-	// reused for an unrelated file, which was then renamed again), we
-	// cannot tell which pre-rename commits belonged to which lineage
-	// without per-commit temporal tracking — ds.files[oldPath] has the
-	// two lineages already merged at ingest time. Migrating either edge
-	// would spread one lineage into a target that belongs to the other.
-	// Skip migration for such paths: underattribution (both targets miss
-	// their pre-rename history) is safer than misattribution (the wrong
-	// target inherits the other lineage's data).
+	// Distinguish two scenarios that both produce duplicate oldPaths:
+	//
+	//   Path reuse (different lineages):
+	//     t1: A → B      t2: (unrelated file created at A)      t3: A → D
+	//   The repeated A has no intermediate edge pointing at it — it
+	//   simply reappears. ds.files["A"] contains two lineages merged at
+	//   ingest time and we cannot disambiguate without per-commit
+	//   temporal tracking. Skip migration.
+	//
+	//   Rename-back chain (same lineage):
+	//     t1: A → B      t2: B → A (rename back)      t3: A → C
+	//   The repeated A is recreated by an explicit rename edge (B → A).
+	//   Both segments of the chain belong to the same lineage and both
+	//   should end up at C. Migrate normally.
+	//
+	// Heuristic: treat oldPath as reuse iff count > 1 AND no edge has
+	// it as newPath. Imperfect on exotic mixed cases (A→B, C→A, A→D)
+	// but correctly handles pure reuse and the common rename-back flow.
 	oldPathCounts := make(map[string]int)
+	hasIncomingRename := make(map[string]bool)
 	for _, e := range ds.renameEdges {
 		oldPathCounts[e.oldPath]++
+		hasIncomingRename[e.newPath] = true
 	}
 
 	direct := make(map[string]string, len(ds.renameEdges))
 	for _, e := range ds.renameEdges {
-		if oldPathCounts[e.oldPath] > 1 {
+		if oldPathCounts[e.oldPath] > 1 && !hasIncomingRename[e.oldPath] {
 			continue // path reused — refuse to migrate
 		}
-		direct[e.oldPath] = e.newPath
+		// JSONL is newest-first; keep the first edge seen for each
+		// oldPath, which corresponds to the most recent rename — the
+		// direction the lineage continues in.
+		if _, ok := direct[e.oldPath]; !ok {
+			direct[e.oldPath] = e.newPath
+		}
 	}
 
 	canonical := func(p string) string {
