@@ -452,9 +452,21 @@ func applyRenames(ds *Dataset) {
 
 	oldPathCounts := make(map[string]int)
 	isRenameTarget := make(map[string]bool)
+	// maxEdgeDate[path] holds the most recent commitDate of any edge
+	// involving `path` — as source OR target. The single-edge reuse
+	// check below compares ds.files[path].lastChange against this, so
+	// legitimate rename-back activity (which is bounded by a later
+	// rename's commitDate) never looks like reuse.
+	maxEdgeDate := make(map[string]time.Time)
 	for _, e := range ds.renameEdges {
 		oldPathCounts[e.oldPath]++
 		isRenameTarget[e.newPath] = true
+		if e.commitDate.After(maxEdgeDate[e.oldPath]) {
+			maxEdgeDate[e.oldPath] = e.commitDate
+		}
+		if e.commitDate.After(maxEdgeDate[e.newPath]) {
+			maxEdgeDate[e.newPath] = e.commitDate
+		}
 	}
 
 	direct := make(map[string]string, len(ds.renameEdges))
@@ -464,26 +476,22 @@ func applyRenames(ds *Dataset) {
 		if isDuplicate && !wasRecreated {
 			continue // path reused — refuse to migrate (multi-edge pattern)
 		}
-		// Single-edge reuse pattern: oldPath appears in exactly one rename,
-		// but a new unrelated file was created at oldPath after that
-		// rename. The multi-edge heuristic can't see this — detect it by
-		// comparing the oldPath's lastChange to the rename's commitDate.
-		// If lastChange is after the rename, the activity belongs to a
-		// second lineage that must not leak into newPath.
+		// Single-edge reuse: oldPath has activity AFTER every rename it
+		// participates in. Common case: A → B, then an unrelated file
+		// is created at A and never renamed. Catches both simple reuse
+		// (A→B + new-A) and the chain+reuse case (D→A, A→B, then new-A)
+		// where the wasRecreated signal alone can't tell them apart.
 		//
-		// Guard with `!wasRecreated`: when the oldPath is also the target
-		// of some other rename (rename-back chain or cycle A↔B), the
-		// later rename commit updates ds.files[oldPath].lastChange to
-		// its own date, so lastChange.After(commitDate) would trigger
-		// spuriously. wasRecreated signals that the activity after the
-		// original rename is itself coming from a rename edge, not from
-		// a brand-new unrelated file.
+		// Rename-back chains (A→B→A→C) and cycles (A↔B) naturally pass
+		// this check because maxEdgeDate includes later edges that
+		// recreate the path, bounding lastChange from above.
 		//
-		// Requires both dates to be known; the check is defensive and
-		// only fires when we have enough signal to be certain.
-		if fe, ok := ds.files[e.oldPath]; ok && !wasRecreated &&
-			!e.commitDate.IsZero() && !fe.lastChange.IsZero() &&
-			fe.lastChange.After(e.commitDate) {
+		// Both dates must be non-zero — defensive when fileEntry is
+		// hand-built in tests without dates. In real ingest both are
+		// populated from the JSONL stream.
+		if fe, ok := ds.files[e.oldPath]; ok &&
+			!maxEdgeDate[e.oldPath].IsZero() && !fe.lastChange.IsZero() &&
+			fe.lastChange.After(maxEdgeDate[e.oldPath]) {
 			continue
 		}
 		// First edge wins per oldPath; edges are pre-sorted so this is

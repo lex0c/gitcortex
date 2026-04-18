@@ -1579,6 +1579,96 @@ func TestRenameSkipsSingleEdgeReusedOldPath(t *testing.T) {
 	}
 }
 
+func TestRenameSingleEdgeReuseViaStream(t *testing.T) {
+	// End-to-end equivalent of TestRenameSkipsSingleEdgeReusedOldPath,
+	// exercising the full ingest path so fileEntry.lastChange and the
+	// renameEdge.commitDate are populated naturally from commit_file
+	// records. Covers the wiring between streamLoadInto and applyRenames.
+	//
+	// Timeline (encoded newest-first as git log emits):
+	//   c6 2024-06-01: modify new A (lineage 2)
+	//   c5 2024-05-01: new file created at A (lineage 2 starts)
+	//   c4 2024-04-01: modify B
+	//   c3 2024-03-15: rename A → B (ends lineage 1)
+	//   c2 2024-02-10: modify A (lineage 1)
+	//   c1 2024-01-05: create A (lineage 1 starts)
+	jsonl := `{"type":"commit","sha":"c6","author_name":"X","author_email":"x@x","author_date":"2024-06-01T10:00:00Z","additions":30,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c6","path_current":"A.go","path_previous":"A.go","status":"M","additions":30,"deletions":0}
+{"type":"commit","sha":"c5","author_name":"X","author_email":"x@x","author_date":"2024-05-01T10:00:00Z","additions":20,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c5","path_current":"A.go","path_previous":"A.go","status":"A","additions":20,"deletions":0}
+{"type":"commit","sha":"c4","author_name":"Y","author_email":"y@x","author_date":"2024-04-01T10:00:00Z","additions":10,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"c4","path_current":"B.go","path_previous":"B.go","status":"M","additions":10,"deletions":2}
+{"type":"commit","sha":"c3","author_name":"Y","author_email":"y@x","author_date":"2024-03-15T10:00:00Z","additions":0,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"B.go","path_previous":"A.go","status":"R100","additions":0,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"Y","author_email":"y@x","author_date":"2024-02-10T10:00:00Z","additions":15,"deletions":3,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"A.go","path_previous":"A.go","status":"M","additions":15,"deletions":3}
+{"type":"commit","sha":"c1","author_name":"Y","author_email":"y@x","author_date":"2024-01-05T10:00:00Z","additions":40,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":40,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	a, ok := ds.files["A.go"]
+	if !ok {
+		t.Fatal("A.go missing — reuse detection should have skipped migration")
+	}
+	// A.go should contain c1 + c2 (lineage 1 pre-rename) + c5 + c6 (lineage
+	// 2 post-reuse) = 4 commits. They are conflated at the path key level
+	// (known limitation of non-temporal-segmented ingest), but at least
+	// don't leak into B.
+	if a.commits != 4 {
+		t.Errorf("A.go commits = %d, want 4 (c1+c2+c5+c6 conflated at the reused path)", a.commits)
+	}
+	b, ok := ds.files["B.go"]
+	if !ok {
+		t.Fatal("B.go missing")
+	}
+	// B.go should have c3 (rename commit) + c4 (modify) = 2 commits.
+	if b.commits != 2 {
+		t.Errorf("B.go commits = %d, want 2 (c3+c4, no leak from A)", b.commits)
+	}
+}
+
+func TestRenameChainPlusReuse(t *testing.T) {
+	// Refinement catches a case that the pure wasRecreated guard missed:
+	// D → A → B chain followed by a NEW unrelated file created at A.
+	// A is both a rename target (via D→A) and a rename source (via
+	// A→B), so wasRecreated[A] = true. Under the old single-edge
+	// check the reuse detection was disabled here, letting the new A
+	// lineage leak into B. Using maxEdgeDate (the latest edge touching
+	// A), we see that lastChange(A) is AFTER the last A-involving
+	// rename and correctly skip.
+	tD_to_A := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	tA_to_B := time.Date(2024, 3, 10, 0, 0, 0, 0, time.UTC)
+	tReuse := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tA_to_B},
+		{oldPath: "D", newPath: "A", commitDate: tD_to_A},
+	}
+	ds.files = map[string]*fileEntry{
+		"D": {commits: 1, lastChange: tD_to_A, monthChurn: map[string]int64{}},
+		"A": {commits: 3, lastChange: tReuse, monthChurn: map[string]int64{}}, // post-reuse
+		"B": {commits: 1, lastChange: tA_to_B, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	// A must stay — reuse detected.
+	if _, ok := ds.files["A"]; !ok {
+		t.Fatal("A should remain — reuse detected by lastChange > maxEdgeDate")
+	}
+	// D still migrates through its own rename edge (D has no post-
+	// rename activity). D → A because direct[A] was not set.
+	if _, ok := ds.files["D"]; ok {
+		t.Error("D should have been migrated (clean rename with no reuse on D)")
+	}
+	// B stays — A did not leak in.
+	if b := ds.files["B"]; b.commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (A's reuse lineage must not leak into B)", b.commits)
+	}
+}
+
 func TestRenameCleanRenameStillMigrates(t *testing.T) {
 	// Counter-test: the single-edge reuse check must not fire for a
 	// clean rename where all activity on oldPath predates the rename.
@@ -1703,6 +1793,14 @@ func TestRenameMixedLineageKnownLimitation(t *testing.T) {
 	// Pinning the current behavior here so that a future refactor cannot
 	// silently change the outcome — any future fix (proper temporal
 	// segmentation) should update or remove this test consciously.
+	//
+	// NOTE: fileEntry.lastChange is intentionally left zero. The single-
+	// edge reuse check (`lastChange.After(maxEdgeDate)`) requires non-
+	// zero timestamps to fire; leaving them unset exercises the mixed-
+	// lineage "chain-like" path that the heuristic currently cannot
+	// disambiguate. If a test update accidentally sets lastChange, this
+	// fixture becomes a different scenario (chain+reuse) which IS
+	// detected by the refined check and produces a different result.
 	ds := newDataset()
 	tNew := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	tMid := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -1713,7 +1811,7 @@ func TestRenameMixedLineageKnownLimitation(t *testing.T) {
 		{oldPath: "A", newPath: "B", commitDate: tOld}, // t1
 	}
 	ds.files = map[string]*fileEntry{
-		"A": {commits: 2, monthChurn: map[string]int64{}}, // merged lineages
+		"A": {commits: 2, monthChurn: map[string]int64{}}, // merged lineages (no lastChange on purpose)
 		"B": {commits: 1, monthChurn: map[string]int64{}},
 		"C": {commits: 1, monthChurn: map[string]int64{}},
 		"D": {commits: 1, monthChurn: map[string]int64{}},
