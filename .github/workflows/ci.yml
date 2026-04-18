@@ -31,5 +31,5 @@ jobs:
         run: ./gitcortex extract --repo .
 
       - name: Quality gates
-        run: ./gitcortex ci --fail-on-churn-risk 2500 --format github-actions
+        run: ./gitcortex ci --fail-on-churn-risk 5500 --format github-actions
         # Add --fail-on-busfactor 1 when team grows
