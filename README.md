@@ -221,7 +221,7 @@ gitcortex stats --input data.jsonl --stat profile --format json
 
 Each profile includes:
 - **Scope**: top directories where the dev works (by unique files, %)
-- **Specialization**: Herfindahl concentration over the dev's full directory distribution; 1 = all files in one dir (narrow specialist), approaches 0 for broad generalists. Labelled `broad generalist` / `balanced` / `focused specialist` / `narrow specialist`
+- **Specialization**: Herfindahl concentration over the dev's full directory distribution; 1 = all files in one dir (narrow specialist), approaches 0 for broad generalists. Labelled `broad generalist` / `balanced` / `focused specialist` / `narrow specialist`. *Measures file distribution on disk, not domain expertise — a security engineer who refactored auth across four dirs looks like a generalist even though they are a domain specialist. See METRICS.md for the caveat in full.*
 - **Contribution**: growth (add >> del), balanced, or refactor (del >> add)
 - **Pace**: commits per active day
 - **Collaboration**: top devs sharing the same files (ranked by `shared_lines` = Σ min(linesA, linesB))
