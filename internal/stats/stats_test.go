@@ -747,6 +747,67 @@ func TestChurnRiskPercentilesPopulatedOnLargeDataset(t *testing.T) {
 	}
 }
 
+func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
+	// Degenerate trend case: every file's history fits entirely inside the
+	// trend window (earlier bucket is empty), so churnTrend returns the
+	// sentinel 1.0 for all of them. The adaptive P25 then collapses onto
+	// 1.0 and the "declining" check (`trend < 1.0`) matches nobody — no
+	// file can reach legacy-hotspot via the trend predicate. Old +
+	// concentrated files fall through to silo.
+	//
+	// This test pins that behavior so future refactors don't silently
+	// flip it. The degenerate shape is a known limitation documented in
+	// METRICS.md; the code is not a bug, but the outcome is surprising
+	// enough that a regression test is worth the 30 lines.
+	latest := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: latest.AddDate(0, -2, 0), // 2-month span — fits entirely in the 3-month trend window
+		Latest:   latest,
+		files:    map[string]*fileEntry{},
+	}
+	for i := 0; i < 12; i++ {
+		path := fmt.Sprintf("old/file_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 500, // well above cold threshold for all
+			// Old enough (> 1 year) that they'd trip classifyOldAgeDays if we
+			// were on the absolute path, AND above the adaptive P75 for this
+			// dataset regardless of how ages are distributed.
+			firstChange: latest.AddDate(-2, 0, -(i * 30)),
+			lastChange:  latest,
+			devLines:    map[string]int64{"solo@x": 300}, // bf=1 for everyone
+			// Entire history fits inside the trend window → churnTrend
+			// returns 1.0 for every file (its flat-signal sentinel).
+			monthChurn: map[string]int64{"2024-05": 300},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 12 {
+		t.Fatalf("got %d results, want 12", len(results))
+	}
+	legacyCount, siloCount := 0, 0
+	for _, r := range results {
+		switch r.Label {
+		case "legacy-hotspot":
+			legacyCount++
+		case "silo":
+			siloCount++
+		}
+		// Trend of 1.0 means P25 of a constant-1 distribution is also 1,
+		// so `trend < 1.0` never fires and no file is declining.
+		if r.Label == "legacy-hotspot" {
+			t.Errorf("%s: unexpected legacy-hotspot — trend distribution is degenerate (all 1.0), "+
+				"no file should be classified as declining", r.Path)
+		}
+	}
+	if siloCount == 0 {
+		t.Errorf("expected at least one silo (old + concentrated + not declining), got legacy=%d silo=%d",
+			legacyCount, siloCount)
+	}
+}
+
 func TestChurnRiskPercentilesNotSetOnSmallDataset(t *testing.T) {
 	// 3 files → below classifyMinSample. Percentile pointers should be nil
 	// so JSON consumers see omitted fields, not a `-1` sentinel.
