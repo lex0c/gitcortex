@@ -639,10 +639,131 @@ func TestClassifyFile(t *testing.T) {
 		{"legacy-hotspot: old + concentrated + declining", 200, 50, 1, 365, 0.3, "legacy-hotspot"},
 		{"cold wins over everything when churn low", 10, 50, 1, 365, 0.1, "cold"},
 	}
+	// Use defaultBands so the old absolute constants (180d age, 0.5 trend)
+	// still drive classification — this test covers the fallback path.
+	bands := defaultBands()
 	for _, c := range cases {
-		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend)
+		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend, bands)
 		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestComputeBandsFallsBackBelowMinSample(t *testing.T) {
+	// Fewer than classifyMinSample files → percentiles are unreliable,
+	// so bands must fall back to the absolute constants and report
+	// HasPercentiles() == false.
+	ages := []int{10, 200, 400}
+	trends := []float64{0.2, 1.0, 2.0}
+	b := computeBands(ages, trends)
+	if b.OldAgeDays != classifyOldAgeDays {
+		t.Errorf("fallback OldAgeDays = %d, want %d", b.OldAgeDays, classifyOldAgeDays)
+	}
+	if b.DecliningTrend != classifyDecliningTrend {
+		t.Errorf("fallback DecliningTrend = %.2f, want %.2f", b.DecliningTrend, classifyDecliningTrend)
+	}
+	if b.HasPercentiles() {
+		t.Errorf("HasPercentiles should be false when sample < classifyMinSample")
+	}
+}
+
+func TestComputeBandsAdaptive(t *testing.T) {
+	// With 10 files spanning a wide range, P75 of ages and P25 of trends
+	// should replace the absolute constants.
+	ages := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 1000}
+	// nearest-rank P75 over 10 items: idx = 75*9/100 = 6 → sorted[6] = 70
+	trends := []float64{0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0}
+	// P25 over 10 items: idx = 25*9/100 = 2 → sorted[2] = 0.5
+	b := computeBands(ages, trends)
+	if !b.HasPercentiles() {
+		t.Fatal("HasPercentiles should be true for 10-item sample")
+	}
+	if b.OldAgeDays != 70 {
+		t.Errorf("adaptive OldAgeDays = %d, want 70 (P75 of 10 values)", b.OldAgeDays)
+	}
+	if b.DecliningTrend != 0.5 {
+		t.Errorf("adaptive DecliningTrend = %.2f, want 0.5 (P25)", b.DecliningTrend)
+	}
+}
+
+func TestRankInt(t *testing.T) {
+	sorted := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+	cases := []struct {
+		v    int
+		want int // percentile rank (% of values strictly below v)
+	}{
+		{5, 0},    // below min → 0/10 = 0%
+		{10, 0},   // equal to min → 0 below
+		{50, 40},  // 4 below → 40%
+		{55, 50},  // 5 below → 50%
+		{100, 90}, // 9 below → 90%
+		{999, 100},
+	}
+	for _, c := range cases {
+		if got := rankInt(sorted, c.v); got != c.want {
+			t.Errorf("rankInt(%d) = %d, want %d", c.v, got, c.want)
+		}
+	}
+}
+
+func TestChurnRiskPercentilesPopulatedOnLargeDataset(t *testing.T) {
+	// 10 files with varied ages and monthly churn histories so the
+	// adaptive path fires and percentiles are populated in results.
+	ds := &Dataset{
+		Earliest: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		Latest:   time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		files:    map[string]*fileEntry{},
+	}
+	for i := 0; i < 10; i++ {
+		path := fmt.Sprintf("f%02d.go", i)
+		firstChange := ds.Latest.AddDate(0, 0, -(30 + i*30))
+		ds.files[path] = &fileEntry{
+			commits:     5,
+			additions:   int64(10 * (i + 1)),
+			deletions:   int64(5 * (i + 1)),
+			recentChurn: float64(10 * (i + 1)),
+			firstChange: firstChange,
+			lastChange:  ds.Latest,
+			devLines:    map[string]int64{"a@x": int64(15 * (i + 1))},
+			monthChurn:  map[string]int64{"2024-05": int64(10 * (i + 1))},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 10 {
+		t.Fatalf("got %d results, want 10", len(results))
+	}
+	for _, r := range results {
+		if r.AgePercentile < 0 || r.AgePercentile > 100 {
+			t.Errorf("%s: AgePercentile out of range: %d", r.Path, r.AgePercentile)
+		}
+		if r.TrendPercentile < 0 || r.TrendPercentile > 100 {
+			t.Errorf("%s: TrendPercentile out of range: %d", r.Path, r.TrendPercentile)
+		}
+	}
+}
+
+func TestChurnRiskPercentilesNotSetOnSmallDataset(t *testing.T) {
+	// 3 files → below classifyMinSample. Percentile fields should be -1.
+	ds := &Dataset{
+		Earliest: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		Latest:   time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		files:    map[string]*fileEntry{},
+	}
+	for i, p := range []string{"a.go", "b.go", "c.go"} {
+		ds.files[p] = &fileEntry{
+			commits: 1, recentChurn: float64(10 * (i + 1)),
+			firstChange: ds.Latest.AddDate(0, 0, -100),
+			lastChange:  ds.Latest,
+			devLines:    map[string]int64{"a@x": 10},
+			monthChurn:  map[string]int64{"2024-05": 10},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	for _, r := range results {
+		if r.AgePercentile != -1 || r.TrendPercentile != -1 {
+			t.Errorf("%s: percentiles should be -1 for small dataset, got age=%d trend=%d",
+				r.Path, r.AgePercentile, r.TrendPercentile)
 		}
 	}
 }

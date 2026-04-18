@@ -15,9 +15,10 @@ const (
 	// Churn Risk classification
 	classifyColdChurnRatio    = 0.5  // recent_churn ≤ 0.5 × median → cold
 	classifyActiveBusFactor   = 3    // bf ≥ 3 → active (shared)
-	classifyOldAgeDays        = 180  // age ≥ 180d is "old"
-	classifyDecliningTrend    = 0.5  // trend < 0.5 = declining
+	classifyOldAgeDays        = 180  // fallback "old" threshold when dataset < classifyMinSample files; adaptive mode uses the P75 of file ages in the dataset
+	classifyDecliningTrend    = 0.5  // fallback "declining" threshold under the same condition; adaptive mode uses the P25 of file trends
 	classifyTrendWindowMonths = 3    // recent vs earlier split
+	classifyMinSample         = 8    // below this, percentile estimates are noisy and we fall back to the absolute constants above
 
 	// Developer profile contribution type (del/add ratio)
 	contribRefactorRatio = 0.8 // ratio ≥ 0.8 → refactor
@@ -120,6 +121,13 @@ type ChurnRiskResult struct {
 	AgeDays         int
 	Trend           float64 // recent 3mo churn / earlier churn; 1 = flat, <0.5 declining, >1.5 growing
 	Label           string  // "cold" | "active" | "active-core" | "silo" | "legacy-hotspot"
+	// AgePercentile and TrendPercentile report where this file lands in the
+	// per-dataset distribution (0-100). -1 means "not computed" (dataset
+	// too small for adaptive thresholds). Surfacing these alongside the
+	// label makes the distance from the classification boundary visible:
+	// `legacy-hotspot (age P92, trend P08)` vs a file that barely crossed.
+	AgePercentile   int
+	TrendPercentile int
 }
 
 type WorkingPattern struct {
@@ -556,9 +564,120 @@ func churnTrend(monthChurn map[string]int64, earliest, latest time.Time) float64
 	return float64(recent) / float64(earlier)
 }
 
+// classifyBands holds the per-dataset calibrated thresholds used by
+// classifyFile. When the dataset has fewer than classifyMinSample files,
+// percentile estimates would be noisy, so defaultBands() returns the
+// absolute fallback constants and nil sorted slices (callers that want
+// to surface a percentile rank should check via HasPercentiles()).
+type classifyBands struct {
+	OldAgeDays     int
+	DecliningTrend float64
+	sortedAges     []int     // ascending; nil in fallback mode
+	sortedTrends   []float64 // ascending; nil in fallback mode
+}
+
+func defaultBands() classifyBands {
+	return classifyBands{
+		OldAgeDays:     classifyOldAgeDays,
+		DecliningTrend: classifyDecliningTrend,
+	}
+}
+
+// HasPercentiles reports whether the bands carry the population data
+// needed to answer agePercentile/trendPercentile queries.
+func (b classifyBands) HasPercentiles() bool {
+	return b.sortedAges != nil && b.sortedTrends != nil
+}
+
+// computeBands gathers ages and trends across the dataset and returns
+// the P75 age / P25 trend as calibrated thresholds. Falls back to the
+// absolute constants when the sample is too small.
+func computeBands(ages []int, trends []float64) classifyBands {
+	if len(ages) < classifyMinSample || len(trends) < classifyMinSample {
+		return defaultBands()
+	}
+	sortedAges := make([]int, len(ages))
+	copy(sortedAges, ages)
+	sort.Ints(sortedAges)
+	sortedTrends := make([]float64, len(trends))
+	copy(sortedTrends, trends)
+	sort.Float64s(sortedTrends)
+
+	return classifyBands{
+		OldAgeDays:     percentileInt(sortedAges, 75),
+		DecliningTrend: percentileFloat(sortedTrends, 25),
+		sortedAges:     sortedAges,
+		sortedTrends:   sortedTrends,
+	}
+}
+
+// percentileInt returns the p-th percentile of a sorted int slice using
+// the nearest-rank method. Assumes len(sorted) >= 1 (callers guard via
+// classifyMinSample).
+func percentileInt(sorted []int, p int) int {
+	if len(sorted) == 0 {
+		return 0
+	}
+	idx := (p * (len(sorted) - 1)) / 100
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+func percentileFloat(sorted []float64, p int) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	idx := (p * (len(sorted) - 1)) / 100
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+// rankInt returns the percentile rank (0-100) of v within a sorted
+// slice — i.e. the percentage of entries strictly below v. Ties count
+// as "at" rather than "below", so the rank of the minimum is 0 and the
+// rank of a value present in the slice reports how many are strictly
+// less.
+func rankInt(sorted []int, v int) int {
+	// binary search for first index i where sorted[i] >= v
+	lo, hi := 0, len(sorted)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if sorted[mid] < v {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo * 100 / len(sorted)
+}
+
+func rankFloat(sorted []float64, v float64) int {
+	lo, hi := 0, len(sorted)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if sorted[mid] < v {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo * 100 / len(sorted)
+}
+
 // classifyFile assigns an actionable label based on churn, ownership, age,
-// and trend. Thresholds are package constants (classify*).
-func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64) string {
+// and trend. Thresholds come from bands, which are either dataset-derived
+// percentiles or the fallback absolute constants.
+func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64, bands classifyBands) string {
 	if recentChurn <= lowChurn {
 		return "cold"
 	}
@@ -566,10 +685,10 @@ func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64)
 		return "active" // shared, healthy
 	}
 	// Concentrated ownership (bf 1-2) with meaningful churn.
-	if ageDays < classifyOldAgeDays {
+	if ageDays < bands.OldAgeDays {
 		return "active-core" // new code, single author is expected
 	}
-	if trend < classifyDecliningTrend {
+	if trend < bands.DecliningTrend {
 		return "legacy-hotspot" // old + concentrated + declining → urgent
 	}
 	return "silo" // old + concentrated + stable/growing → knowledge bottleneck
@@ -590,9 +709,34 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 		lowChurn = median * classifyColdChurnRatio
 	}
 
+	// Pass 1: gather per-file age and trend so bands can be calibrated
+	// from the whole-dataset distribution before classification.
+	type perFile struct {
+		path    string
+		fe      *fileEntry
+		ageDays int
+		trend   float64
+	}
+	items := make([]perFile, 0, len(ds.files))
+	var ages []int
+	var trends []float64
+	for path, fe := range ds.files {
+		ageDays := 0
+		if !fe.firstChange.IsZero() && !ds.Latest.IsZero() {
+			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
+		}
+		trend := churnTrend(fe.monthChurn, ds.Earliest, ds.Latest)
+		items = append(items, perFile{path: path, fe: fe, ageDays: ageDays, trend: trend})
+		ages = append(ages, ageDays)
+		trends = append(trends, trend)
+	}
+
+	bands := computeBands(ages, trends)
+
 	var results []ChurnRiskResult
 
-	for path, fe := range ds.files {
+	for _, it := range items {
+		path, fe := it.path, it.fe
 		// Compute bus factor (80% threshold), same as BusFactor stat.
 		type dl struct{ lines int64 }
 		devs := make([]dl, 0, len(fe.devLines))
@@ -627,13 +771,13 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 			firstDate = fe.firstChange.UTC().Format("2006-01-02")
 		}
 
-		ageDays := 0
-		if !fe.firstChange.IsZero() && !ds.Latest.IsZero() {
-			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
-		}
+		label := classifyFile(fe.recentChurn, lowChurn, bf, it.ageDays, it.trend, bands)
 
-		trend := churnTrend(fe.monthChurn, ds.Earliest, ds.Latest)
-		label := classifyFile(fe.recentChurn, lowChurn, bf, ageDays, trend)
+		agePct, trendPct := -1, -1
+		if bands.HasPercentiles() {
+			agePct = rankInt(bands.sortedAges, it.ageDays)
+			trendPct = rankFloat(bands.sortedTrends, it.trend)
+		}
 
 		results = append(results, ChurnRiskResult{
 			Path:            path,
@@ -643,9 +787,11 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 			TotalChanges:    fe.commits,
 			LastChangeDate:  lastDate,
 			FirstChangeDate: firstDate,
-			AgeDays:         ageDays,
-			Trend:           math.Round(trend*100) / 100,
+			AgeDays:         it.ageDays,
+			Trend:           math.Round(it.trend*100) / 100,
 			Label:           label,
+			AgePercentile:   agePct,
+			TrendPercentile: trendPct,
 		})
 	}
 
