@@ -262,6 +262,45 @@ func TestComputeParetoZeroChurn(t *testing.T) {
 	}
 }
 
+func TestComputeParetoFilesAndDirsZeroChurn(t *testing.T) {
+	// Files and dirs exist but every commit_file record has zero churn
+	// (e.g. a sequence of pure renames with no content change). Previously
+	// the Files and Dirs loops would trip the zero-threshold on the first
+	// iteration and leave TopChurnFiles = TopChurnDirs = 1 — producing a
+	// false "extremely concentrated" label. Guards added to ComputePareto
+	// now skip the loops entirely when the aggregate is zero.
+	jsonl := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":0,"deletions":0,"files_changed":2}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"src/foo.go","path_previous":"src/foo.go","status":"M","additions":0,"deletions":0}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"src/bar.go","path_previous":"src/bar.go","status":"M","additions":0,"deletions":0}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zero_file_churn.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := stats.LoadJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := ComputePareto(ds)
+
+	if p.TotalFiles != 2 {
+		t.Errorf("TotalFiles = %d, want 2 (files exist in dataset)", p.TotalFiles)
+	}
+	if p.TopChurnFiles != 0 {
+		t.Errorf("TopChurnFiles = %d, want 0 (no churn signal)", p.TopChurnFiles)
+	}
+	if p.FilesPct80Churn != 0 {
+		t.Errorf("FilesPct80Churn = %.1f, want 0", p.FilesPct80Churn)
+	}
+	if p.TopChurnDirs != 0 {
+		t.Errorf("TopChurnDirs = %d, want 0 (no churn signal)", p.TopChurnDirs)
+	}
+	if p.DirsPct80Churn != 0 {
+		t.Errorf("DirsPct80Churn = %.1f, want 0", p.DirsPct80Churn)
+	}
+}
+
 func TestComputePareto(t *testing.T) {
 	ds := loadFixture(t)
 	p := ComputePareto(ds)

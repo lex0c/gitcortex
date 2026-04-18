@@ -59,17 +59,22 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 		totalChurn += h.Churn
 	}
 	p.TotalFiles = len(hotspots)
-	threshold := float64(totalChurn) * 0.8
-	var cum int64
-	for _, h := range hotspots {
-		cum += h.Churn
-		p.TopChurnFiles++
-		if float64(cum) >= threshold {
-			break
+	// Guard: when totalChurn is zero (merges-only dataset, or all empty
+	// commits), skip the loop entirely. Without this, the first iteration
+	// trips on `cum >= 0` and leaves TopChurnFiles = 1 for empty signal.
+	if totalChurn > 0 {
+		threshold := float64(totalChurn) * 0.8
+		var cum int64
+		for _, h := range hotspots {
+			cum += h.Churn
+			p.TopChurnFiles++
+			if float64(cum) >= threshold {
+				break
+			}
 		}
-	}
-	if p.TotalFiles > 0 {
-		p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
+		if p.TotalFiles > 0 {
+			p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
+		}
 	}
 
 	// Devs: two complementary lenses.
@@ -141,17 +146,20 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 		totalDirChurn += d.Churn
 	}
 	p.TotalDirs = len(dirs)
-	dirThreshold := float64(totalDirChurn) * 0.8
-	var cumDirChurn int64
-	for _, d := range dirs {
-		cumDirChurn += d.Churn
-		p.TopChurnDirs++
-		if float64(cumDirChurn) >= dirThreshold {
-			break
+	// Same zero-churn guard as files.
+	if totalDirChurn > 0 {
+		dirThreshold := float64(totalDirChurn) * 0.8
+		var cumDirChurn int64
+		for _, d := range dirs {
+			cumDirChurn += d.Churn
+			p.TopChurnDirs++
+			if float64(cumDirChurn) >= dirThreshold {
+				break
+			}
 		}
-	}
-	if p.TotalDirs > 0 {
-		p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
+		if p.TotalDirs > 0 {
+			p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
+		}
 	}
 
 	return p

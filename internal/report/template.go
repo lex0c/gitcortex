@@ -56,17 +56,17 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <p class="hint">Pareto distribution across files, developers, and directories. Few items carrying 80% of activity means high concentration. Red and yellow markers deserve a closer look — concentration may signal a critical core module or a knowledge bottleneck, depending on context.</p>
 <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:24px;">
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalFiles 0}}⚪{{else if le .Pareto.FilesPct80Churn 10.0}}🔴{{else if le .Pareto.FilesPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnFiles 0}}⚪{{else if le .Pareto.FilesPct80Churn 10.0}}🔴{{else if le .Pareto.FilesPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnFiles}} files concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{if eq .Pareto.TotalFiles 0}}no data{{else if le .Pareto.FilesPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.FilesPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{if eq .Pareto.TopChurnFiles 0}}no data{{else if le .Pareto.FilesPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.FilesPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalDevs 0}}⚪{{else if le .Pareto.DevsPct80Commits 10.0}}🔴{{else if le .Pareto.DevsPct80Commits 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopCommitDevs 0}}⚪{{else if le .Pareto.DevsPct80Commits 10.0}}🔴{{else if le .Pareto.DevsPct80Commits 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopCommitDevs}} devs produce 80% of all commits</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TotalDevs 0}}no data{{else if le .Pareto.DevsPct80Commits 10.0}}extremely concentrated, key-person dependence{{else if le .Pareto.DevsPct80Commits 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TopCommitDevs 0}}no data{{else if le .Pareto.DevsPct80Commits 10.0}}extremely concentrated, key-person dependence{{else if le .Pareto.DevsPct80Commits 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
@@ -77,10 +77,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalDirs 0}}⚪{{else if le .Pareto.DirsPct80Churn 10.0}}🔴{{else if le .Pareto.DirsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnDirs 0}}⚪{{else if le .Pareto.DirsPct80Churn 10.0}}🔴{{else if le .Pareto.DirsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDirs}} directories concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{if eq .Pareto.TotalDirs 0}}no data{{else if le .Pareto.DirsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DirsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{if eq .Pareto.TopChurnDirs 0}}no data{{else if le .Pareto.DirsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DirsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
 </div>
