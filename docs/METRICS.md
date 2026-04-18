@@ -202,7 +202,7 @@ Per-developer report combining multiple metrics.
 | Weekend % | commits on Saturday+Sunday / total commits × 100 |
 | Scope | Top 5 directories by unique file count, as % of total files touched |
 | Contribution type | Based on del/add ratio: growth (<0.4), balanced (0.4-0.8), refactor (>0.8) |
-| Collaborators | Top 5 devs sharing the most files with this dev |
+| Collaborators | Top 5 devs sharing code with this dev. Ranked by `shared_lines` (Σ min(linesA, linesB) across shared files), tiebreak `shared_files`, then email. Same `shared_lines` semantics as the Developer Network metric — discounts trivial one-line touches so "collaborator" reflects real overlap. |
 
 ## Top Commits
 
@@ -285,6 +285,8 @@ Every ranking function has an explicit tiebreaker so the same input produces the
 | `top-commits` | lines_changed | sha asc |
 | `dev-network` | shared_lines | shared_files |
 | `profile` | commits | email asc |
+
+A third-level tiebreaker on path/sha/email asc is applied where primary and secondary can both tie (`churn-risk`, `coupling`, `dev-network`) so ordering is stable even with exact equality on the first two keys. Inside each profile, the `TopFiles`, `Scope`, and `Collaborators` sub-lists are also sorted with explicit tiebreakers (path / dir / email asc) so their internal ordering is deterministic too.
 
 ### `--mailmap` off by default
 
