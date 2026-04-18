@@ -639,8 +639,348 @@ func TestClassifyFile(t *testing.T) {
 		{"legacy-hotspot: old + concentrated + declining", 200, 50, 1, 365, 0.3, "legacy-hotspot"},
 		{"cold wins over everything when churn low", 10, 50, 1, 365, 0.1, "cold"},
 	}
+	// Use defaultBands so the old absolute constants (180d age, 0.5 trend)
+	// still drive classification — this test covers the fallback path.
+	bands := defaultBands()
 	for _, c := range cases {
-		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend)
+		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend, bands)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestComputeBandsFallsBackBelowMinSample(t *testing.T) {
+	// Fewer than classifyMinSample files → percentiles are unreliable,
+	// so bands must fall back to the absolute constants and report
+	// HasPercentiles() == false.
+	ages := []int{10, 200, 400}
+	trends := []float64{0.2, 1.0, 2.0}
+	b := computeBands(ages, trends)
+	if b.OldAgeDays != classifyOldAgeDays {
+		t.Errorf("fallback OldAgeDays = %d, want %d", b.OldAgeDays, classifyOldAgeDays)
+	}
+	if b.DecliningTrend != classifyDecliningTrend {
+		t.Errorf("fallback DecliningTrend = %.2f, want %.2f", b.DecliningTrend, classifyDecliningTrend)
+	}
+	if b.HasPercentiles() {
+		t.Errorf("HasPercentiles should be false when sample < classifyMinSample")
+	}
+}
+
+func TestComputeBandsAdaptive(t *testing.T) {
+	// With 10 files spanning a wide range, P75 of ages and P25 of trends
+	// should replace the absolute constants. Nearest-rank indexing:
+	//   idx(p, n) = ceil(p*n/100) - 1
+	ages := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 1000}
+	// P75 over 10 items: ceil(750/100)-1 = 7 → sorted[7] = 80
+	trends := []float64{0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0}
+	// P25 over 10 items: ceil(250/100)-1 = 2 → sorted[2] = 0.5
+	b := computeBands(ages, trends)
+	if !b.HasPercentiles() {
+		t.Fatal("HasPercentiles should be true for 10-item sample")
+	}
+	if b.OldAgeDays != 80 {
+		t.Errorf("adaptive OldAgeDays = %d, want 80 (P75 of 10 values, nearest-rank)", b.OldAgeDays)
+	}
+	if b.DecliningTrend != 0.5 {
+		t.Errorf("adaptive DecliningTrend = %.2f, want 0.5 (P25 nearest-rank)", b.DecliningTrend)
+	}
+}
+
+func TestNearestRankIndex(t *testing.T) {
+	cases := []struct {
+		p, n, want int
+	}{
+		// Exact percentile positions (no ceiling kicks in).
+		{25, 4, 0},   // ceil(1.0)-1 = 0
+		{50, 4, 1},   // ceil(2.0)-1 = 1
+		{75, 4, 2},   // ceil(3.0)-1 = 2
+		{100, 4, 3},  // ceil(4.0)-1 = 3
+
+		// Ceiling-driven cases — the classic pitfall the previous
+		// implementation missed.
+		{75, 10, 7},  // ceil(7.5)-1 = 7 (old impl returned 6)
+		{25, 10, 2},  // ceil(2.5)-1 = 2
+		{25, 7, 1},   // ceil(1.75)-1 = 1
+		{75, 11, 8},  // ceil(8.25)-1 = 8
+
+		// Edges: p=0 clamps to 0, p=100 to n-1, n=1 collapses both.
+		{0, 10, 0},
+		{100, 10, 9},
+		{50, 1, 0},
+		{99, 1, 0},
+	}
+	for _, c := range cases {
+		if got := nearestRankIndex(c.p, c.n); got != c.want {
+			t.Errorf("nearestRankIndex(p=%d, n=%d) = %d, want %d", c.p, c.n, got, c.want)
+		}
+	}
+}
+
+func TestRankInt(t *testing.T) {
+	sorted := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
+	cases := []struct {
+		v    int
+		want int // percentile rank (% of values strictly below v)
+	}{
+		{5, 0},    // below min → 0/10 = 0%
+		{10, 0},   // equal to min → 0 below
+		{50, 40},  // 4 below → 40%
+		{55, 50},  // 5 below → 50%
+		{100, 90}, // 9 below → 90%
+		{999, 100},
+	}
+	for _, c := range cases {
+		if got := rankInt(sorted, c.v); got != c.want {
+			t.Errorf("rankInt(%d) = %d, want %d", c.v, got, c.want)
+		}
+	}
+}
+
+func TestChurnRiskPercentilesPopulatedOnLargeDataset(t *testing.T) {
+	// 10 files with varied ages and monthly churn histories so the
+	// adaptive path fires and percentiles are populated in results.
+	ds := &Dataset{
+		Earliest: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		Latest:   time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		files:    map[string]*fileEntry{},
+	}
+	for i := 0; i < 10; i++ {
+		path := fmt.Sprintf("f%02d.go", i)
+		firstChange := ds.Latest.AddDate(0, 0, -(30 + i*30))
+		ds.files[path] = &fileEntry{
+			commits:     5,
+			additions:   int64(10 * (i + 1)),
+			deletions:   int64(5 * (i + 1)),
+			recentChurn: float64(10 * (i + 1)),
+			firstChange: firstChange,
+			lastChange:  ds.Latest,
+			devLines:    map[string]int64{"a@x": int64(15 * (i + 1))},
+			monthChurn:  map[string]int64{"2024-05": int64(10 * (i + 1))},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 10 {
+		t.Fatalf("got %d results, want 10", len(results))
+	}
+	for _, r := range results {
+		if r.AgePercentile == nil || r.TrendPercentile == nil {
+			t.Errorf("%s: percentiles should be populated on large dataset", r.Path)
+			continue
+		}
+		if *r.AgePercentile < 0 || *r.AgePercentile > 100 {
+			t.Errorf("%s: AgePercentile out of range: %d", r.Path, *r.AgePercentile)
+		}
+		if *r.TrendPercentile < 0 || *r.TrendPercentile > 100 {
+			t.Errorf("%s: TrendPercentile out of range: %d", r.Path, *r.TrendPercentile)
+		}
+	}
+}
+
+func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
+	// Mature-repo shape: half the files are dormant (trend=0 via the
+	// earlier-only path), half are active. Without the declining-trend
+	// floor, P25 collapses to 0 and `trend < 0` never fires — dormant
+	// concentrated files would silently be misclassified as silo
+	// instead of legacy-hotspot, hiding the strongest alarm.
+	//
+	// The floor guarantees the threshold is strictly positive so the
+	// signal survives the adaptive-mode switch.
+	latest := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		// Wide span so "earlier" window exists for the active files.
+		Earliest: latest.AddDate(-3, 0, 0),
+		Latest:   latest,
+		files:    map[string]*fileEntry{},
+	}
+
+	// 6 dormant files — single activity 2 years ago, nothing since.
+	// churnTrend returns 0 for these (earlier-only bucket).
+	for i := 0; i < 6; i++ {
+		path := fmt.Sprintf("dormant/old_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 200, // above cold threshold
+			firstChange: latest.AddDate(-2, 0, 0),
+			lastChange:  latest.AddDate(-2, 0, 0),
+			devLines:    map[string]int64{"solo@x": 300}, // bf=1
+			monthChurn:  map[string]int64{"2022-06": 300},
+		}
+	}
+	// 6 active files — current activity, fresh history.
+	for i := 0; i < 6; i++ {
+		path := fmt.Sprintf("active/new_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 200,
+			firstChange: latest.AddDate(-2, 0, 0),
+			lastChange:  latest,
+			devLines:    map[string]int64{"a@x": 100, "b@x": 100, "c@x": 100}, // bf=3
+			monthChurn:  map[string]int64{"2024-05": 300},
+		}
+	}
+
+	results := ChurnRisk(ds, 0)
+	var legacyCount int
+	var dormantLabels []string
+	for _, r := range results {
+		if r.Label == "legacy-hotspot" {
+			legacyCount++
+		}
+		if strings.HasPrefix(r.Path, "dormant/") {
+			dormantLabels = append(dormantLabels, r.Label)
+		}
+	}
+	if legacyCount == 0 {
+		t.Errorf("expected dormant+concentrated files to be flagged legacy-hotspot; got 0 "+
+			"(dormant labels: %v). P25 likely collapsed to 0 without the floor.", dormantLabels)
+	}
+	// Sanity: every dormant file (bf=1, old, trend=0) should be legacy-hotspot.
+	for _, lbl := range dormantLabels {
+		if lbl != "legacy-hotspot" {
+			t.Errorf("dormant file got label %q, want legacy-hotspot", lbl)
+		}
+	}
+}
+
+func TestClassifyFileFloorBoundary(t *testing.T) {
+	// Strict-less-than check with the adaptive floor means files whose
+	// trend is exactly at the floor are NOT declining; files strictly
+	// below it are. This pins the comparison semantics so a future
+	// refactor doesn't silently flip < to <=.
+	bands := classifyBands{
+		OldAgeDays:     100,
+		DecliningTrend: adaptiveDecliningTrendFloor, // 0.01
+	}
+	// All cases share old age + concentrated ownership + non-cold churn
+	// so the trend predicate drives the label.
+	cases := []struct {
+		name  string
+		trend float64
+		want  string
+	}{
+		{"trend 0 (dormant, earlier-only) → declining", 0.0, "legacy-hotspot"},
+		{"trend 0.001 below floor → declining", 0.001, "legacy-hotspot"},
+		{"trend exactly at floor 0.01 → NOT declining", 0.01, "silo"},
+		{"trend 0.011 above floor → NOT declining", 0.011, "silo"},
+		{"trend 1.0 flat → NOT declining", 1.0, "silo"},
+	}
+	for _, c := range cases {
+		got := classifyFile(100, 50, 1, 200, c.trend, bands)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
+	// Degenerate trend case: every file's history fits entirely inside the
+	// trend window (earlier bucket is empty), so churnTrend returns the
+	// sentinel 1.0 for all of them. The adaptive P25 then collapses onto
+	// 1.0 and the "declining" check (`trend < 1.0`) matches nobody — no
+	// file can reach legacy-hotspot via the trend predicate. Old +
+	// concentrated files fall through to silo.
+	//
+	// This test pins that behavior so future refactors don't silently
+	// flip it. The degenerate shape is a known limitation documented in
+	// METRICS.md; the code is not a bug, but the outcome is surprising
+	// enough that a regression test is worth the 30 lines.
+	latest := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: latest.AddDate(0, -2, 0), // 2-month span — fits entirely in the 3-month trend window
+		Latest:   latest,
+		files:    map[string]*fileEntry{},
+	}
+	for i := 0; i < 12; i++ {
+		path := fmt.Sprintf("old/file_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 500, // well above cold threshold for all
+			// Old enough (> 1 year) that they'd trip classifyOldAgeDays if we
+			// were on the absolute path, AND above the adaptive P75 for this
+			// dataset regardless of how ages are distributed.
+			firstChange: latest.AddDate(-2, 0, -(i * 30)),
+			lastChange:  latest,
+			devLines:    map[string]int64{"solo@x": 300}, // bf=1 for everyone
+			// Entire history fits inside the trend window → churnTrend
+			// returns 1.0 for every file (its flat-signal sentinel).
+			monthChurn: map[string]int64{"2024-05": 300},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 12 {
+		t.Fatalf("got %d results, want 12", len(results))
+	}
+	legacyCount, siloCount := 0, 0
+	for _, r := range results {
+		switch r.Label {
+		case "legacy-hotspot":
+			legacyCount++
+		case "silo":
+			siloCount++
+		}
+		// Trend of 1.0 means P25 of a constant-1 distribution is also 1,
+		// so `trend < 1.0` never fires and no file is declining.
+		if r.Label == "legacy-hotspot" {
+			t.Errorf("%s: unexpected legacy-hotspot — trend distribution is degenerate (all 1.0), "+
+				"no file should be classified as declining", r.Path)
+		}
+	}
+	if siloCount == 0 {
+		t.Errorf("expected at least one silo (old + concentrated + not declining), got legacy=%d silo=%d",
+			legacyCount, siloCount)
+	}
+}
+
+func TestChurnRiskPercentilesNotSetOnSmallDataset(t *testing.T) {
+	// 3 files → below classifyMinSample. Percentile pointers should be nil
+	// so JSON consumers see omitted fields, not a `-1` sentinel.
+	ds := &Dataset{
+		Earliest: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+		Latest:   time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		files:    map[string]*fileEntry{},
+	}
+	for i, p := range []string{"a.go", "b.go", "c.go"} {
+		ds.files[p] = &fileEntry{
+			commits: 1, recentChurn: float64(10 * (i + 1)),
+			firstChange: ds.Latest.AddDate(0, 0, -100),
+			lastChange:  ds.Latest,
+			devLines:    map[string]int64{"a@x": 10},
+			monthChurn:  map[string]int64{"2024-05": 10},
+		}
+	}
+	results := ChurnRisk(ds, 0)
+	for _, r := range results {
+		if r.AgePercentile != nil || r.TrendPercentile != nil {
+			t.Errorf("%s: percentiles should be nil for small dataset, got age=%v trend=%v",
+				r.Path, r.AgePercentile, r.TrendPercentile)
+		}
+	}
+}
+
+func TestLabelWithPercentile(t *testing.T) {
+	p := func(v int) *int { return &v }
+	cases := []struct {
+		name, label         string
+		age, trend          *int
+		want                string
+	}{
+		{"both nil → bare label", "legacy-hotspot", nil, nil, "legacy-hotspot"},
+		{"age nil → bare label", "silo", nil, p(10), "silo"},
+		{"trend nil → bare label", "active", p(75), nil, "active"},
+		{"both set → suffix", "legacy-hotspot", p(92), p(8), "legacy-hotspot (age P92, trend P8)"},
+		{"zero values render", "active-core", p(0), p(0), "active-core (age P0, trend P0)"},
+		{"three-digit value renders unpadded", "active", p(100), p(100), "active (age P100, trend P100)"},
+	}
+	for _, c := range cases {
+		got := LabelWithPercentile(c.label, c.age, c.trend)
 		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}

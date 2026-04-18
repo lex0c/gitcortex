@@ -181,14 +181,14 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
-<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.</p>
+<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see METRICS.md).{{end}}</p>
 <table>
 <tr><th>Path</th><th>Label</th><th>Recent Churn</th><th></th><th>BF</th><th>Age</th><th>Trend</th><th>Last Change</th></tr>
 {{$maxChurn := 0.0}}{{range .ChurnRisk}}{{if gt .RecentChurn $maxChurn}}{{$maxChurn = .RecentChurn}}{{end}}{{end}}
 {{range .ChurnRisk}}
 <tr>
   <td class="mono truncate">{{.Path}}</td>
-  <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}</td>
+  <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}{{if .AgePercentile}}<div style="font-size:10px; color:#656d76; margin-top:2px;">age P{{derefInt .AgePercentile}} · trend P{{derefInt .TrendPercentile}}</div>{{end}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
   <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{printf "%.0f" (pct (int64 .RecentChurn) (int64 $maxChurn))}}%"></div></div></td>
   <td>{{.BusFactor}}</td>

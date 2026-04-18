@@ -134,13 +134,25 @@ rows implicitly assume the earlier rows didn't match.
 |---|-------|------|--------|
 | 1 | **cold** | `recent_churn ≤ 0.5 × median(recent_churn)` | Ignore. |
 | 2 | **active** | `bus_factor ≥ 3` | Healthy, shared. |
-| 3 | **active-core** | `bus_factor ≤ 2` and `age < 180 days` | New code, single author is expected. |
-| 4 | **legacy-hotspot** | `bus_factor ≤ 2`, `age ≥ 180 days`, and `trend < 0.5` | **Urgent.** Old + concentrated + declining. |
+| 3 | **active-core** | `bus_factor ≤ 2` and `age < oldAgeThreshold` | New code, single author is expected. |
+| 4 | **legacy-hotspot** | `bus_factor ≤ 2`, `age ≥ oldAgeThreshold`, and `trend < decliningTrendThreshold` | **Urgent.** Old + concentrated + declining. |
 | 5 | **silo** | default (everything the rules above didn't catch) | Knowledge bottleneck — plan transfer. |
 
 Where:
 - `age = days between firstChange and latest commit in dataset`
 - `trend = churn_last_3_months / churn_earlier`. Edge cases: empty history returns 1 (no signal); recent-only history returns 2 (grew from nothing); earlier-only history returns 0 (declined to nothing — the strongest `legacy-hotspot` signal); short-span datasets whose entire window fits inside the trend window return 1 to avoid false "growing" reports
+
+### Adaptive thresholds (per-dataset calibration)
+
+`oldAgeThreshold` and `decliningTrendThreshold` are not fixed constants: they are derived from the dataset's own distribution each run. With at least `classifyMinSample` (8) files present:
+- `oldAgeThreshold` = **P75** of file ages in this dataset
+- `decliningTrendThreshold` = **P25** of file trends in this dataset, clamped to at least `adaptiveDecliningTrendFloor` (0.01). The floor matters on mature repos where ≥25% of files are dormant (trend=0 via the earlier-only path): P25 would otherwise collapse to 0 and the strict `trend < threshold` check would never fire, silently misclassifying every dormant concentrated file as `silo` instead of `legacy-hotspot`. The floor keeps the threshold strictly positive so the trend=0 signal — the strongest legacy-hotspot alarm — still reaches the rule.
+
+This makes "old" mean "older than 75% of tracked files in this repo" instead of an absolute 180 days. A 4-year-old file in a 12-year-old codebase was previously tagged `legacy-hotspot` even though it was newer than most of the repo — now the same file lands in `active-core`. Below the sample threshold, the absolute fallbacks `classifyOldAgeDays` and `classifyDecliningTrend` apply so tiny repos still produce labels.
+
+Each `ChurnRiskResult` also exposes `AgePercentile` and `TrendPercentile` (0-100) showing where the file sits in the distribution. The fields are nil (omitted from JSON, empty in CSV) when the fallback path ran. The CLI and HTML surface these alongside the label — `legacy-hotspot (age P92, trend P08)` tells you the file is both old and sharply declining relative to peers; `legacy-hotspot (age P76, trend P24)` barely qualifies. Distance from the classification boundary is now readable, not hidden.
+
+> **Degenerate trend distribution.** When every file's entire history fits inside the trend window (e.g. a repo with <3 months of commits), `churnTrend` returns the flat-signal sentinel `1.0` for all of them. The adaptive P25 then lands on `1.0` too, and the `trend < P25` predicate matches nobody — no file reaches `legacy-hotspot` through the trend check. Old + concentrated files fall through to `silo` instead. This is mathematically correct (there's no variation to classify on) but can surprise readers of short-lived repos. Pinned by `TestChurnRiskAdaptiveDegenerateTrendDistribution` so future refactors don't silently flip it.
 
 > **Sensitivity note.** Files touched a single time long ago and never again correctly route to `legacy-hotspot` via the earlier-only trend=0 path. On large mature repos this pattern is the common case, not the exception — e.g. validation on a kubernetes snapshot classified ~29k files this way. If the label distribution looks heavy on `legacy-hotspot` for a long-lived codebase, that is usually diagnosing real dormant code, not a bug.
 
@@ -264,8 +276,11 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 |----------|---------|----------|
 | `classifyColdChurnRatio` | `0.5` | A file is `cold` when `recent_churn ≤ ratio × median(recent_churn)`. |
 | `classifyActiveBusFactor` | `3` | A file is `active` (shared, healthy) when `bus_factor ≥ this`. |
-| `classifyOldAgeDays` | `180` | Age cutoff for `active-core` vs `silo`/`legacy-hotspot`. |
-| `classifyDecliningTrend` | `0.5` | Trend ratio below this marks `legacy-hotspot` (old + declining). |
+| `classifyOldAgeDays` | `180` | **Fallback only** (dataset < `classifyMinSample` files). Adaptive path uses P75 of the dataset's own age distribution. |
+| `classifyDecliningTrend` | `0.5` | **Fallback only**. Adaptive path uses P25 of the dataset's own trend distribution. |
+| `classifyMinSample` | `8` | Below this many files, percentile estimates are too noisy to trust and the two thresholds above revert to absolutes. |
+| `adaptiveDecliningTrendFloor` | `0.01` | Minimum value for the adaptive `decliningTrendThreshold`. Prevents P25 from collapsing to 0 on mature repos where dormant files dominate, which would hide every legacy-hotspot. |
+| `suspectWarningMinChurnRatio` | `0.10` | Vendor/generated path warning fires only when matched paths together exceed this fraction of total repo churn — prevents a single incidental `.lock` file from triggering noise. |
 | `classifyTrendWindowMonths` | `3` | Window (months, relative to latest commit) for the recent vs earlier split in `trend`. |
 | `contribRefactorRatio` | `0.8` | `del/add ≥ this` → dev profile `contribType = refactor`. |
 | `contribBalancedRatio` | `0.4` | `0.4 ≤ del/add < 0.8` → `balanced`; below 0.4 → `growth`. |
@@ -298,6 +313,18 @@ Every ranking function has an explicit tiebreaker so the same input produces the
 A third-level tiebreaker on path/sha/email asc is applied where primary and secondary can both tie (`churn-risk`, `coupling`, `dev-network`) so ordering is stable even with exact equality on the first two keys. Inside each profile, the `TopFiles`, `Scope`, and `Collaborators` sub-lists are also sorted with explicit tiebreakers (path / dir / email asc) so their internal ordering is deterministic too.
 
 Inside `busfactor`, the per-file `TopDevs` list is sorted by lines desc with an email asc tiebreaker. Without it, binary assets and small files where two devs contribute equal lines (e.g. `.gif`, `.png`, one-line configs) produced a different `TopDevs` email order on every run.
+
+### Vendor/generated path warning
+
+When `stats` loads a dataset in table format, it scans for paths matching a conservative list of vendor/generated heuristics: `vendor/`, `node_modules/`, `dist/`, `build/`, `third_party/`, `*.min.js`, `*.min.css`, `*.lock`, language-specific lockfiles (`package-lock.json`, `go.sum`, `Cargo.lock`, `poetry.lock`, `yarn.lock`, `pnpm-lock.yaml`), and common generated extensions (`*.pb.go`, `*_pb2.py`, `*.generated.*`).
+
+If the matched paths together account for at least `suspectWarningMinChurnRatio` (10%) of total repo churn, a warning is emitted to stderr listing the top-6 buckets with a copy-pasteable `extract --ignore` invocation. Below the floor, no warning — a single incidental `.lock` file in an otherwise clean repo stays silent.
+
+Directory-segment heuristics (`vendor`, `node_modules`, `dist`, `build`, `third_party`) match the segment wherever it appears in the path, but `extract --ignore` treats a bare `dist/*` glob as a repo-root prefix. To avoid suggesting a fix that wouldn't actually remove the matched files, each bucket carries a `Suggestions` list of the specific parent prefixes it matched (e.g. `wp-includes/js/dist/*`, `services/auth/vendor/*`), and the warning emits every unique prefix so the copy-pasteable command covers every source of distortion. Suffix and basename patterns (`*.min.js`, `package-lock.json`, etc.) collapse to a single glob because extract's basename match already handles them at any depth.
+
+The warning is advisory. Nothing is auto-filtered; the user decides whether to re-extract. Matches do not affect computed stats in that run. JSON/CSV output paths skip the warning since they're typically piped.
+
+Statistical heuristics (very high churn-per-commit, single-author bulk updates) are deliberately out of scope — their false-positive rate on hand-authored code is higher than the path-based list and we'd rather stay quiet than cry wolf.
 
 ### `--mailmap` off by default
 

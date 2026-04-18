@@ -237,6 +237,26 @@ func (f *Formatter) PrintCoupling(results []CouplingResult) error {
 	}
 }
 
+// LabelWithPercentile decorates a churn-risk label with the age and trend
+// percentile ranks when they are available, so readers can tell a barely
+// classified file from a strongly classified one. Returns the bare label
+// when either percentile is nil (dataset below classifyMinSample).
+func LabelWithPercentile(label string, agePercentile, trendPercentile *int) string {
+	if agePercentile == nil || trendPercentile == nil {
+		return label
+	}
+	return fmt.Sprintf("%s (age P%d, trend P%d)", label, *agePercentile, *trendPercentile)
+}
+
+// formatPercentile renders a percentile pointer for CSV: empty string
+// when nil so the column stays machine-parseable without a magic sentinel.
+func formatPercentile(p *int) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *p)
+}
+
 func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
 	switch f.format {
 	case "json":
@@ -250,19 +270,24 @@ func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
 				fmt.Sprintf("%.1f", r.RecentChurn),
 				fmt.Sprintf("%d", r.BusFactor),
 				fmt.Sprintf("%d", r.AgeDays),
+				formatPercentile(r.AgePercentile),
 				fmt.Sprintf("%.2f", r.Trend),
+				formatPercentile(r.TrendPercentile),
 				fmt.Sprintf("%d", r.TotalChanges),
 				r.FirstChangeDate,
 				r.LastChangeDate,
 			}
 		}
-		return f.writeCSV([]string{"path", "label", "recent_churn", "bus_factor", "age_days", "trend", "total_changes", "first_change", "last_change"}, rows)
+		return f.writeCSV([]string{"path", "label", "recent_churn", "bus_factor", "age_days", "age_percentile", "trend", "trend_percentile", "total_changes", "first_change", "last_change"}, rows)
 	default:
 		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
 		fmt.Fprintf(tw, "PATH\tLABEL\tRECENT CHURN\tBF\tAGE\tTREND\tLAST CHANGE\n")
 		fmt.Fprintf(tw, "----\t-----\t------------\t--\t---\t-----\t-----------\n")
 		for _, r := range results {
-			fmt.Fprintf(tw, "%s\t%s\t%.1f\t%d\t%dd\t%.2f\t%s\n", r.Path, r.Label, r.RecentChurn, r.BusFactor, r.AgeDays, r.Trend, r.LastChangeDate)
+			fmt.Fprintf(tw, "%s\t%s\t%.1f\t%d\t%dd\t%.2f\t%s\n",
+				r.Path,
+				LabelWithPercentile(r.Label, r.AgePercentile, r.TrendPercentile),
+				r.RecentChurn, r.BusFactor, r.AgeDays, r.Trend, r.LastChangeDate)
 		}
 		return tw.Flush()
 	}
