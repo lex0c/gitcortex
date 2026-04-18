@@ -292,6 +292,86 @@ func TestAllSortsDeterministicUnderTies(t *testing.T) {
 	}
 }
 
+func TestDevProfilesInnerSortsDeterministic(t *testing.T) {
+	// Profile-internal slices (topFiles, scope, collaborators) are assembled
+	// via map iteration. Before the tiebreaker fix they could land in any
+	// order on ties, producing different top-N per run. This test forces
+	// multiple internal ties and asserts stability across 20 invocations.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		CommitCount: 4,
+		Earliest:    t1,
+		Latest:      t1,
+		commits: map[string]*commitEntry{
+			"sha1": {email: "alice@x", date: t1, add: 10, del: 5, files: 4},
+			"sha2": {email: "bob@x", date: t1, add: 10, del: 5, files: 1},
+			"sha3": {email: "carol@x", date: t1, add: 10, del: 5, files: 1},
+			"sha4": {email: "dan@x", date: t1, add: 10, del: 5, files: 1},
+		},
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Name: "A", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 4},
+			"bob@x":   {Email: "bob@x", Name: "B", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+			"carol@x": {Email: "carol@x", Name: "C", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+			"dan@x":   {Email: "dan@x", Name: "D", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+		},
+		// Alice touches 4 files across 3 dirs; each of bob/carol/dan overlaps
+		// with Alice on exactly one file (equal collaborator strength).
+		files: map[string]*fileEntry{
+			"a/one.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "bob@x": 15}, devCommits: map[string]int{"alice@x": 1, "bob@x": 1}},
+			"a/two.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "carol@x": 15}, devCommits: map[string]int{"alice@x": 1, "carol@x": 1}},
+			"b/one.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "dan@x": 15}, devCommits: map[string]int{"alice@x": 1, "dan@x": 1}},
+			"c/one.go": {commits: 1, devLines: map[string]int64{"alice@x": 15}, devCommits: map[string]int{"alice@x": 1}},
+		},
+	}
+
+	// Run DevProfiles(ds, "alice@x") 20 times; all three inner slices must
+	// be identical across iterations.
+	first := DevProfiles(ds, "alice@x")
+	if len(first) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(first))
+	}
+	for i := 0; i < 20; i++ {
+		next := DevProfiles(ds, "alice@x")[0]
+		for k, f := range next.TopFiles {
+			if f.Path != first[0].TopFiles[k].Path {
+				t.Fatalf("TopFiles iter %d: [%d] got %q, first %q", i, k, f.Path, first[0].TopFiles[k].Path)
+			}
+		}
+		for k, s := range next.Scope {
+			if s.Dir != first[0].Scope[k].Dir {
+				t.Fatalf("Scope iter %d: [%d] got %q, first %q", i, k, s.Dir, first[0].Scope[k].Dir)
+			}
+		}
+		for k, c := range next.Collaborators {
+			if c.Email != first[0].Collaborators[k].Email {
+				t.Fatalf("Collaborators iter %d: [%d] got %q, first %q", i, k, c.Email, first[0].Collaborators[k].Email)
+			}
+		}
+	}
+
+	// Verify the tiebreakers produced the expected asc order.
+	// TopFiles all tied at churn=15; path asc expected.
+	wantFiles := []string{"a/one.go", "a/two.go", "b/one.go", "c/one.go"}
+	for i, want := range wantFiles {
+		if first[0].TopFiles[i].Path != want {
+			t.Errorf("TopFiles[%d] = %q, want %q (path-asc tiebreak)", i, first[0].TopFiles[i].Path, want)
+		}
+	}
+	// Scope: dirs "a" (2 files), "b" (1), "c" (1) — dirs "b" and "c" tie at
+	// 1 file and must appear in dir-asc order.
+	if first[0].Scope[1].Dir != "b" || first[0].Scope[2].Dir != "c" {
+		t.Errorf("Scope dir-asc tiebreak failed: got %+v", first[0].Scope)
+	}
+	// Collaborators: bob, carol, dan all share exactly 1 file with alice;
+	// email-asc order.
+	wantCollab := []string{"bob@x", "carol@x", "dan@x"}
+	for i, want := range wantCollab {
+		if first[0].Collaborators[i].Email != want {
+			t.Errorf("Collaborators[%d] = %q, want %q", i, first[0].Collaborators[i].Email, want)
+		}
+	}
+}
+
 func TestBusFactorOrderDeterministicUnderTies(t *testing.T) {
 	// 6 files, all with bus factor = 1. Without a deterministic tiebreaker
 	// the top-N varies between invocations because Go map iteration is
@@ -434,15 +514,18 @@ func TestActivityBucketUsesUTC(t *testing.T) {
 
 func TestChurnTrend(t *testing.T) {
 	latest := time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)
+	// "earliest" far before the trend window so the short-span guard does
+	// not fire for these cases.
+	earliestWide := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	// No data → neutral.
-	if got := churnTrend(map[string]int64{}, latest); got != 1 {
+	if got := churnTrend(map[string]int64{}, earliestWide, latest); got != 1 {
 		t.Errorf("empty → %.2f, want 1", got)
 	}
 
 	// Only recent activity (nothing earlier) → growing signal (2).
 	recentOnly := map[string]int64{"2024-05": 100, "2024-06": 100}
-	if got := churnTrend(recentOnly, latest); got != 2 {
+	if got := churnTrend(recentOnly, earliestWide, latest); got != 2 {
 		t.Errorf("recent-only → %.2f, want 2", got)
 	}
 
@@ -451,18 +534,26 @@ func TestChurnTrend(t *testing.T) {
 		"2024-01": 1000, "2024-02": 1000, // earlier
 		"2024-05": 50, "2024-06": 50, // recent
 	}
-	if got := churnTrend(declining, latest); got >= 0.5 {
+	if got := churnTrend(declining, earliestWide, latest); got >= 0.5 {
 		t.Errorf("declining trend = %.2f, want < 0.5", got)
 	}
 
-	// Stability across day-of-month: trend must not flip based on whether
-	// `latest` falls early or late in a month. The boundary month "2024-03"
-	// should classify the same way in both cases.
+	// Stability across day-of-month.
 	data := map[string]int64{"2024-02": 100, "2024-03": 100, "2024-06": 100}
-	early := churnTrend(data, time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
-	late := churnTrend(data, time.Date(2024, 6, 30, 23, 0, 0, 0, time.UTC))
+	early := churnTrend(data, earliestWide, time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
+	late := churnTrend(data, earliestWide, time.Date(2024, 6, 30, 23, 0, 0, 0, time.UTC))
 	if early != late {
 		t.Errorf("trend depends on day-of-month: early=%.2f late=%.2f", early, late)
+	}
+
+	// Short-span guard: dataset whose entire span is inside the trend window.
+	// earliest=2024-05, latest=2024-06, window=3 months → cutoff=2024-03.
+	// earliestKey="2024-05" >= cutoffKey="2024-03" → no "earlier" bucket.
+	// Previously returned 2 (falsely "growing from nothing") for every file;
+	// now must return 1 (no signal).
+	shortSpan := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	if got := churnTrend(recentOnly, shortSpan, latest); got != 1 {
+		t.Errorf("short-span → %.2f, want 1 (no signal when window < trend window)", got)
 	}
 }
 

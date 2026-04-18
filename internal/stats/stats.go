@@ -424,11 +424,18 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 		})
 	}
 
+	// Co-changes desc, coupling % desc, then path-asc final tiebreak.
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].CoChanges != results[j].CoChanges {
 			return results[i].CoChanges > results[j].CoChanges
 		}
-		return results[i].CouplingPct > results[j].CouplingPct
+		if results[i].CouplingPct != results[j].CouplingPct {
+			return results[i].CouplingPct > results[j].CouplingPct
+		}
+		if results[i].FileA != results[j].FileA {
+			return results[i].FileA < results[j].FileA
+		}
+		return results[i].FileB < results[j].FileB
 	})
 
 	if n > 0 && n < len(results) {
@@ -442,11 +449,23 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 //
 // Uses string comparison on "YYYY-MM" keys so the classification is stable
 // regardless of the day-of-month of the dataset's latest commit.
-func churnTrend(monthChurn map[string]int64, latest time.Time) float64 {
+//
+// When the dataset span is shorter than the trend window (e.g. under a tight
+// --since filter), returns 1 — without this, every file appears in the
+// "recent" bucket only, which would falsely return 2 (growing from nothing)
+// for the entire dataset.
+func churnTrend(monthChurn map[string]int64, earliest, latest time.Time) float64 {
 	if len(monthChurn) < 2 || latest.IsZero() {
 		return 1
 	}
 	cutoffKey := latest.UTC().AddDate(0, -classifyTrendWindowMonths, 0).Format("2006-01")
+
+	// Dataset too narrow: the trend window extends before the earliest commit,
+	// so nothing can fall into the "earlier" bucket. No meaningful signal.
+	if !earliest.IsZero() && earliest.UTC().Format("2006-01") >= cutoffKey {
+		return 1
+	}
+
 	var recent, earlier int64
 	for month, v := range monthChurn {
 		if month < cutoffKey {
@@ -459,7 +478,8 @@ func churnTrend(monthChurn map[string]int64, latest time.Time) float64 {
 		if recent == 0 {
 			return 1
 		}
-		return 2 // growing from nothing
+		return 2 // genuine growing signal — dataset spans the window but this
+		// file only has recent activity
 	}
 	return float64(recent) / float64(earlier)
 }
@@ -540,7 +560,7 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
 		}
 
-		trend := churnTrend(fe.monthChurn, ds.Latest)
+		trend := churnTrend(fe.monthChurn, ds.Earliest, ds.Latest)
 		label := classifyFile(fe.recentChurn, lowChurn, bf, ageDays, trend)
 
 		results = append(results, ChurnRiskResult{
@@ -559,11 +579,15 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 
 	// Primary sort: recent churn descending (attention = where the activity is).
 	// Tiebreak: lower bus factor first (more concentrated = more exposed).
+	// Final tiebreak on path asc for determinism when integer bus_factor ties.
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].RecentChurn != results[j].RecentChurn {
 			return results[i].RecentChurn > results[j].RecentChurn
 		}
-		return results[i].BusFactor < results[j].BusFactor
+		if results[i].BusFactor != results[j].BusFactor {
+			return results[i].BusFactor < results[j].BusFactor
+		}
+		return results[i].Path < results[j].Path
 	})
 
 	if n > 0 && n < len(results) {
@@ -750,8 +774,14 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			for path, fa := range files {
 				topFiles = append(topFiles, DevFileContrib{Path: path, Commits: fa.commits, Churn: fa.churn})
 			}
+			// Deterministic: churn desc, then path asc. Without the path
+			// tiebreaker, devs with several files tied on churn would get
+			// different top-N across runs.
 			sort.Slice(topFiles, func(i, j int) bool {
-				return topFiles[i].Churn > topFiles[j].Churn
+				if topFiles[i].Churn != topFiles[j].Churn {
+					return topFiles[i].Churn > topFiles[j].Churn
+				}
+				return topFiles[i].Path < topFiles[j].Path
 			})
 			if len(topFiles) > 10 {
 				topFiles = topFiles[:10]
@@ -807,7 +837,13 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			}
 			scope = append(scope, DirScope{Dir: dir, Files: count, Pct: pct})
 		}
-		sort.Slice(scope, func(i, j int) bool { return scope[i].Files > scope[j].Files })
+		// Deterministic: file count desc, then dir asc.
+		sort.Slice(scope, func(i, j int) bool {
+			if scope[i].Files != scope[j].Files {
+				return scope[i].Files > scope[j].Files
+			}
+			return scope[i].Dir < scope[j].Dir
+		})
 		if len(scope) > 5 {
 			scope = scope[:5]
 		}
@@ -846,7 +882,13 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		for e, count := range collabMap {
 			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: count})
 		}
-		sort.Slice(collabs, func(i, j int) bool { return collabs[i].SharedFiles > collabs[j].SharedFiles })
+		// Deterministic: shared-files desc, then email asc.
+		sort.Slice(collabs, func(i, j int) bool {
+			if collabs[i].SharedFiles != collabs[j].SharedFiles {
+				return collabs[i].SharedFiles > collabs[j].SharedFiles
+			}
+			return collabs[i].Email < collabs[j].Email
+		})
 		if len(collabs) > 5 {
 			collabs = collabs[:5]
 		}
@@ -938,11 +980,18 @@ func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 		})
 	}
 
+	// Shared-lines desc, shared-files desc, then dev-pair-asc final tiebreak.
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].SharedLines != results[j].SharedLines {
 			return results[i].SharedLines > results[j].SharedLines
 		}
-		return results[i].SharedFiles > results[j].SharedFiles
+		if results[i].SharedFiles != results[j].SharedFiles {
+			return results[i].SharedFiles > results[j].SharedFiles
+		}
+		if results[i].DevA != results[j].DevA {
+			return results[i].DevA < results[j].DevA
+		}
+		return results[i].DevB < results[j].DevB
 	})
 
 	if n > 0 && n < len(results) {
