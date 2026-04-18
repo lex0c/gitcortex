@@ -280,13 +280,19 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			}
 			return "well distributed"
 		}
-		devsLabel := judge(p.DevsPct80Commits, p.TotalDevs)
-		if p.TotalDevs > 0 && p.DevsPct80Commits <= 10 {
+		devsLabel := judge(p.DevsPct80Commits, p.TopCommitDevs)
+		if p.TopCommitDevs > 0 && p.DevsPct80Commits <= 10 {
 			devsLabel += ", key-person dependence"
 		}
-		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn, p.TotalFiles))
-		fmt.Fprintf(os.Stdout, "Devs:   %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
-		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn, p.TotalDirs))
+		// Gate each line on the corresponding TopChurn/TopCommit count.
+		// judge() only uses its second arg as a zero-guard, so passing the
+		// Top* count (which is 0 when the signal is absent, e.g. zero-churn
+		// dataset or empty contributors) maps directly to "no data" without
+		// falsely hitting the "extremely concentrated" branch.
+		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn, p.TopChurnFiles))
+		fmt.Fprintf(os.Stdout, "Devs (commits): %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
+		fmt.Fprintf(os.Stdout, "Devs (churn):   %d of %d devs produce 80%% of line churn — %s\n", p.TopChurnDevs, p.TotalDevs, judge(p.DevsPct80Churn, p.TopChurnDevs))
+		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn, p.TopChurnDirs))
 	}
 	if showAll || sf.stat == "top-commits" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Commits ===\n", sf.topN)

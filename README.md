@@ -4,15 +4,49 @@ Extracts commit metadata, file changes, blob sizes, and developer info into JSON
 
 ## Performance
 
-Benchmarked on open-source repositories (bare clones):
+Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built binary on a single machine (not a controlled lab benchmark; directional, not absolute).
 
-| Repository | Commits | Devs | Extract time | Throughput | JSONL size |
-|------------|---------|------|-------------|------------|------------|
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 286 | 0.9s | 7,800/s | 23K lines |
-| [Praat](https://github.com/praat/praat) | 10,221 | 24 | 26s | 393/s | 95K lines |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 1,140/s | 298K lines |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | 13m 12s | 1,816/s | 6M lines |
+| Repository | Commits | Devs | Extract | Stats (JSON) | Report (HTML) | JSONL size |
+|------------|---------|------|---------|-------------|--------------|------------|
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 1.5s | 0.18s | 0.24s | 23K lines / 6.5 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 25s | 0.96s | 0.95s | 95K lines / 30 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 47s | 2.9s | 2.8s | 298K lines / 96 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 2m 4s | 11.7s | 14s | 943K lines / 314 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 12m 57s | 1m 15s | 1m 53s | 6M lines / 1.9 GB |
+
+`extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
+
+## Vendor and generated code
+
+**This is the biggest practical distortion in every stat.** Line-count metrics treat a 50k-line `generated.pb.go` the same as a 50k-line hand-written module. Lock files like `package-lock.json` regenerate with every dependency bump. Vendored dependencies inflate churn whenever they're updated. OpenAPI specs, minified JS, `bindata.go`-style embeds — all common, all inflate churn and bus factor without reflecting real human contribution.
+
+Run gitcortex on kubernetes without filtering and the top legacy-hotspots are `vendor/golang.org/x/tools/…/manifest.go`, `api/openapi-spec/v3/…v1alpha3_openapi.json`, and `staging/…/generated.pb.go` — technically correct per the data, practically useless for decision-making.
+
+Mitigate with `--ignore` glob patterns at extract time. Files matched are dropped from the JSONL entirely, so **every downstream stat** (hotspots, churn-risk, bus factor, coupling, dev-network, profiles) reflects only hand-authored code:
+
+```bash
+# Typical starter set
+gitcortex extract --repo . \
+  --ignore "vendor/*" \
+  --ignore "node_modules/*" \
+  --ignore "dist/*" \
+  --ignore "build/*" \
+  --ignore "*.min.js" \
+  --ignore "*.min.css" \
+  --ignore "package-lock.json" \
+  --ignore "yarn.lock" \
+  --ignore "Cargo.lock" \
+  --ignore "go.sum" \
+  --ignore "poetry.lock" \
+  --ignore "*.pb.go" \
+  --ignore "*_generated.go"
+```
+
+Patterns match against the file path as emitted by `git log --raw` (forward-slash, repo-relative). Directory patterns like `vendor/*` exclude anything under that prefix. File-name patterns like `*.pb.go` match at any depth.
+
+Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
+
+> Both commit-level (`Summary.TotalAdditions/Deletions`) and file-level aggregations recompute from the filtered set, so all totals stay consistent after `--ignore` — the extract step recalculates commit additions/deletions as the sum of non-ignored file records before writing them to JSONL.
 
 ## Privacy and reliability
 
@@ -159,13 +193,16 @@ Available stats:
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
 | `coupling` | Files that frequently change together, revealing hidden architectural dependencies |
-| `churn-risk` | Files ranked by recency-weighted churn combined with bus factor |
+| `churn-risk` | Files ranked by recent churn, classified into `cold` / `active` / `active-core` / `silo` / `legacy-hotspot` |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
 | `profile` | Per-developer report: scope, contribution type, pace, collaboration, top files |
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
+| `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
+
+See [`docs/METRICS.md`](docs/METRICS.md) for how each metric is calculated, including timezone handling (UTC for aggregation buckets, author-local for working patterns) and rename tracking (history merged across git-detected renames).
 
 ### Developer profile
 
@@ -211,18 +248,33 @@ IWorkspaceRepository.cs             WorkspaceRepository.cs               19     
 
 ### Churn risk
 
-Ranks files by a risk score combining recency-weighted churn with bus factor. Recent changes weigh more (exponential decay), and files with fewer owners score higher.
+Ranks files by recency-weighted churn and classifies each into an actionable label, so you can tell a healthy core module apart from a legacy bottleneck without eyeballing five columns.
 
 ```bash
 gitcortex stats --input data.jsonl --stat churn-risk --top 15
 gitcortex stats --input data.jsonl --stat churn-risk --churn-half-life 60   # faster decay
 ```
 
+Real output from the Pi-hole repository (one sample per label):
+
 ```
-PATH                           RISK    RECENT CHURN  BUS FACTOR  TOTAL CHANGES  LAST CHANGE
-src/Api/Controllers/Auth.cs    142.5   285.0         2           47             2024-03-28
-src/Domain/Entities/User.cs    98.3    98.3          1           12             2024-03-25
+PATH                                        LABEL           CHURN   BF  AGE    TREND
+automated install/basic-install.sh          active          115.3   15  4121d  0.00
+.github/workflows/codeql-analysis.yml       legacy-hotspot  66.2    2   1640d  0.26
+advanced/bash-completion/pihole-ftl.bash    silo            16.5    1   240d   1.00
+test/_alpine_3_23.Dockerfile                active-core     7.1     1   120d   1.00
+advanced/Templates/gravity.db.schema        cold            0.0     1   2616d  1.00
 ```
+
+| Label | Meaning |
+|-------|---------|
+| `cold` | Low recent churn — ignore. |
+| `active` | Shared ownership (bus factor ≥ 3). Healthy. |
+| `active-core` | New code (< 180d), single author. Usually fine. |
+| `silo` | Old + concentrated + stable/growing. Knowledge bottleneck — plan transfer. |
+| `legacy-hotspot` | **Urgent.** Old + concentrated + declining. Deprecated paths still being touched. |
+
+Sort key is `recent_churn`; the label answers "is this activity a problem?". The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
 
@@ -330,7 +382,7 @@ Run automated checks and fail the build when thresholds are exceeded.
 # Fail if any file has bus factor of 1
 gitcortex ci --input data.jsonl --fail-on-busfactor 1
 
-# Fail if any file has churn risk >= 500
+# Fail if any file has churn risk >= 500 (legacy composite: recent_churn / bus_factor)
 gitcortex ci --input data.jsonl --fail-on-churn-risk 500
 
 # Both rules, GitHub Actions format
@@ -343,6 +395,8 @@ gitcortex ci --input data.jsonl \
 Output formats: `text` (default), `github-actions` (annotations), `gitlab` (Code Quality JSON), `json`.
 
 Exit code 1 when violations are found, 0 when clean.
+
+> `--fail-on-churn-risk` evaluates the legacy `risk_score = recent_churn / bus_factor` field, not the new label classification surfaced by `stats --stat churn-risk`. The two can disagree — a file might have `risk_score` below the threshold yet still classify as `legacy-hotspot`. Use the stat command for triage; use the CI gate as a coarse threshold alarm.
 
 ## Architecture
 

@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -169,6 +170,363 @@ func TestBusFactor(t *testing.T) {
 	}
 }
 
+// makeTiesDataset builds a dataset where every primary sort key ties, so
+// only tiebreakers determine ordering. Used to guard against non-determinism
+// regressions across every sort function in the package.
+func makeTiesDataset() *Dataset {
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	ds := &Dataset{
+		CommitCount: 6,
+		Earliest:    t1,
+		Latest:      t1,
+		commits: map[string]*commitEntry{
+			"sha1": {email: "dev-a@x", date: t1, add: 10, del: 5, files: 1},
+			"sha2": {email: "dev-b@x", date: t1, add: 10, del: 5, files: 1},
+			"sha3": {email: "dev-c@x", date: t1, add: 10, del: 5, files: 1},
+			"sha4": {email: "dev-d@x", date: t1, add: 10, del: 5, files: 1},
+			"sha5": {email: "dev-e@x", date: t1, add: 10, del: 5, files: 1},
+			"sha6": {email: "dev-f@x", date: t1, add: 10, del: 5, files: 1},
+		},
+		contributors: map[string]*ContributorStat{
+			"dev-a@x": {Email: "dev-a@x", Name: "A", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-b@x": {Email: "dev-b@x", Name: "B", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-c@x": {Email: "dev-c@x", Name: "C", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-d@x": {Email: "dev-d@x", Name: "D", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-e@x": {Email: "dev-e@x", Name: "E", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+			"dev-f@x": {Email: "dev-f@x", Name: "F", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5},
+		},
+		files: map[string]*fileEntry{
+			"a/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-a@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"a/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-b@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"b/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-c@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"b/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-d@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"c/one.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-e@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+			"c/two.go": {commits: 1, additions: 10, deletions: 5, devLines: map[string]int64{"dev-f@x": 15}, monthChurn: map[string]int64{"2024-01": 15}, firstChange: t1, lastChange: t1},
+		},
+		couplingPairs:       map[filePair]int{},
+		couplingFileChanges: map[string]int{},
+	}
+	return ds
+}
+
+// TestAllSortsDeterministicUnderTies ensures every sort function in the
+// package produces identical ordering across runs when the primary sort key
+// ties. Without tiebreakers, Go map iteration order + unstable sort.Slice
+// cause the CLI and the HTML report to show different top-N entries. This
+// test guards every function that ranks results.
+func TestAllSortsDeterministicUnderTies(t *testing.T) {
+	ds := makeTiesDataset()
+
+	identify := func(v interface{}) []string {
+		switch r := v.(type) {
+		case []BusFactorResult:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Path
+			}
+			return out
+		case []FileStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Path
+			}
+			return out
+		case []ContributorStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Email
+			}
+			return out
+		case []DirStat:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Dir
+			}
+			return out
+		case []BigCommit:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.SHA
+			}
+			return out
+		case []DevProfile:
+			out := make([]string, len(r))
+			for i, e := range r {
+				out[i] = e.Email
+			}
+			return out
+		}
+		t.Fatalf("unknown type: %T", v)
+		return nil
+	}
+
+	cases := []struct {
+		name string
+		run  func() []string
+	}{
+		{"BusFactor", func() []string { return identify(BusFactor(ds, 0)) }},
+		{"FileHotspots", func() []string { return identify(FileHotspots(ds, 0)) }},
+		{"TopContributors", func() []string { return identify(TopContributors(ds, 0)) }},
+		{"DirectoryStats", func() []string { return identify(DirectoryStats(ds, 0)) }},
+		{"TopCommits", func() []string { return identify(TopCommits(ds, 0)) }},
+		{"DevProfiles", func() []string { return identify(DevProfiles(ds, "")) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			first := c.run()
+			if len(first) < 2 {
+				t.Fatalf("fixture produced too few entries (%d) — need ties to exercise tiebreakers", len(first))
+			}
+			for i := 0; i < 20; i++ {
+				got := c.run()
+				for j := range got {
+					if j >= len(first) || got[j] != first[j] {
+						t.Fatalf("iteration %d: non-deterministic at index %d (got %q, first run had %q)",
+							i, j, got[j], first[j])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDevProfilesCollaboratorsSharedLines(t *testing.T) {
+	// Alice co-edits 2 files with each of Bob and Carol. Alice has 500
+	// lines in each file. Bob's overlap is trivial (1 line per file);
+	// Carol wrote substantive lines (500 per file). SharedFiles ties at
+	// 2 for both collaborators — only SharedLines can distinguish.
+	// Expected overlap: Bob = min(500,1)*2 = 2; Carol = min(500,500)*2 = 1000.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"a.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 1, "carol@x": 500}},
+			"b.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 1, "carol@x": 500}},
+		},
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Name: "A", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+			"bob@x":   {Email: "bob@x", Name: "B", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+			"carol@x": {Email: "carol@x", Name: "C", Commits: 1, ActiveDays: 1, FilesTouched: 2},
+		},
+	}
+	profiles := DevProfiles(ds, "alice@x")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	collabs := profiles[0].Collaborators
+	if len(collabs) != 2 {
+		t.Fatalf("collabs = %d, want 2", len(collabs))
+	}
+	// SharedFiles ties at 2; SharedLines distinguishes Carol (1000) from Bob (2).
+	if collabs[0].Email != "carol@x" || collabs[0].SharedLines != 1000 {
+		t.Errorf("top collaborator = {%s, lines=%d}, want {carol@x, 1000}",
+			collabs[0].Email, collabs[0].SharedLines)
+	}
+	if collabs[1].Email != "bob@x" || collabs[1].SharedLines != 2 {
+		t.Errorf("second collaborator = {%s, lines=%d}, want {bob@x, 2}",
+			collabs[1].Email, collabs[1].SharedLines)
+	}
+	// SharedFiles must still be populated for both.
+	for _, c := range collabs {
+		if c.SharedFiles != 2 {
+			t.Errorf("%s SharedFiles = %d, want 2", c.Email, c.SharedFiles)
+		}
+	}
+}
+
+func TestFileCouplingTertiaryTiebreaker(t *testing.T) {
+	// Two pairs with identical CoChanges AND identical CouplingPct must
+	// still order deterministically by file name.
+	ds := &Dataset{
+		couplingPairs: map[filePair]int{
+			{a: "m/x.go", b: "m/y.go"}: 5,
+			{a: "a/x.go", b: "a/y.go"}: 5,
+		},
+		couplingFileChanges: map[string]int{
+			"m/x.go": 10, "m/y.go": 10,
+			"a/x.go": 10, "a/y.go": 10,
+		},
+	}
+	// CouplingPct ties at 50% for both. CoChanges ties at 5.
+	first := FileCoupling(ds, 0, 1)
+	for i := 0; i < 20; i++ {
+		got := FileCoupling(ds, 0, 1)
+		if got[0].FileA != first[0].FileA {
+			t.Fatalf("iter %d non-deterministic: %q vs %q", i, got[0].FileA, first[0].FileA)
+		}
+	}
+	if first[0].FileA != "a/x.go" {
+		t.Errorf("top FileA = %q, want a/x.go (path asc)", first[0].FileA)
+	}
+}
+
+func TestDeveloperNetworkTertiaryTiebreaker(t *testing.T) {
+	// Two dev pairs with identical SharedLines AND SharedFiles must order
+	// by (DevA, DevB) asc.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"f1.go": {devLines: map[string]int64{"m@x": 10, "n@x": 10}},
+			"f2.go": {devLines: map[string]int64{"a@x": 10, "b@x": 10}},
+		},
+	}
+	// Both pairs: SharedFiles=1, SharedLines=10.
+	first := DeveloperNetwork(ds, 0, 1)
+	for i := 0; i < 20; i++ {
+		got := DeveloperNetwork(ds, 0, 1)
+		if got[0].DevA != first[0].DevA {
+			t.Fatalf("iter %d non-deterministic: %q vs %q", i, got[0].DevA, first[0].DevA)
+		}
+	}
+	if first[0].DevA != "a@x" || first[0].DevB != "b@x" {
+		t.Errorf("top pair = {%s,%s}, want {a@x,b@x} (pair asc)", first[0].DevA, first[0].DevB)
+	}
+}
+
+func TestChurnRiskTertiaryTiebreaker(t *testing.T) {
+	// Two files with identical RecentChurn AND BusFactor must order by path asc.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1,
+		Latest:   t1,
+		files: map[string]*fileEntry{
+			"z.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+			"a.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+			"m.go": {commits: 1, recentChurn: 100, devLines: map[string]int64{"a@x": 50}, monthChurn: map[string]int64{"2024-01": 100}, firstChange: t1, lastChange: t1},
+		},
+	}
+	first := ChurnRisk(ds, 0)
+	for i := 0; i < 20; i++ {
+		got := ChurnRisk(ds, 0)
+		for j := range got {
+			if got[j].Path != first[j].Path {
+				t.Fatalf("iter %d [%d]: %q vs %q", i, j, got[j].Path, first[j].Path)
+			}
+		}
+	}
+	// All three tie on RecentChurn (100) and BusFactor (1). Expect a, m, z.
+	want := []string{"a.go", "m.go", "z.go"}
+	for i, p := range want {
+		if first[i].Path != p {
+			t.Errorf("[%d] = %q, want %q (tertiary path-asc tiebreak)", i, first[i].Path, p)
+		}
+	}
+}
+
+func TestDevProfilesInnerSortsDeterministic(t *testing.T) {
+	// Profile-internal slices (topFiles, scope, collaborators) are assembled
+	// via map iteration. Before the tiebreaker fix they could land in any
+	// order on ties, producing different top-N per run. This test forces
+	// multiple internal ties and asserts stability across 20 invocations.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		CommitCount: 4,
+		Earliest:    t1,
+		Latest:      t1,
+		commits: map[string]*commitEntry{
+			"sha1": {email: "alice@x", date: t1, add: 10, del: 5, files: 4},
+			"sha2": {email: "bob@x", date: t1, add: 10, del: 5, files: 1},
+			"sha3": {email: "carol@x", date: t1, add: 10, del: 5, files: 1},
+			"sha4": {email: "dan@x", date: t1, add: 10, del: 5, files: 1},
+		},
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Name: "A", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 4},
+			"bob@x":   {Email: "bob@x", Name: "B", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+			"carol@x": {Email: "carol@x", Name: "C", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+			"dan@x":   {Email: "dan@x", Name: "D", Commits: 1, ActiveDays: 1, Additions: 10, Deletions: 5, FilesTouched: 1},
+		},
+		// Alice touches 4 files across 3 dirs; each of bob/carol/dan overlaps
+		// with Alice on exactly one file (equal collaborator strength).
+		files: map[string]*fileEntry{
+			"a/one.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "bob@x": 15}, devCommits: map[string]int{"alice@x": 1, "bob@x": 1}},
+			"a/two.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "carol@x": 15}, devCommits: map[string]int{"alice@x": 1, "carol@x": 1}},
+			"b/one.go": {commits: 2, devLines: map[string]int64{"alice@x": 15, "dan@x": 15}, devCommits: map[string]int{"alice@x": 1, "dan@x": 1}},
+			"c/one.go": {commits: 1, devLines: map[string]int64{"alice@x": 15}, devCommits: map[string]int{"alice@x": 1}},
+		},
+	}
+
+	// Run DevProfiles(ds, "alice@x") 20 times; all three inner slices must
+	// be identical across iterations.
+	first := DevProfiles(ds, "alice@x")
+	if len(first) != 1 {
+		t.Fatalf("expected 1 profile, got %d", len(first))
+	}
+	for i := 0; i < 20; i++ {
+		next := DevProfiles(ds, "alice@x")[0]
+		for k, f := range next.TopFiles {
+			if f.Path != first[0].TopFiles[k].Path {
+				t.Fatalf("TopFiles iter %d: [%d] got %q, first %q", i, k, f.Path, first[0].TopFiles[k].Path)
+			}
+		}
+		for k, s := range next.Scope {
+			if s.Dir != first[0].Scope[k].Dir {
+				t.Fatalf("Scope iter %d: [%d] got %q, first %q", i, k, s.Dir, first[0].Scope[k].Dir)
+			}
+		}
+		for k, c := range next.Collaborators {
+			if c.Email != first[0].Collaborators[k].Email {
+				t.Fatalf("Collaborators iter %d: [%d] got %q, first %q", i, k, c.Email, first[0].Collaborators[k].Email)
+			}
+		}
+	}
+
+	// Verify the tiebreakers produced the expected asc order.
+	// TopFiles all tied at churn=15; path asc expected.
+	wantFiles := []string{"a/one.go", "a/two.go", "b/one.go", "c/one.go"}
+	for i, want := range wantFiles {
+		if first[0].TopFiles[i].Path != want {
+			t.Errorf("TopFiles[%d] = %q, want %q (path-asc tiebreak)", i, first[0].TopFiles[i].Path, want)
+		}
+	}
+	// Scope: dirs "a" (2 files), "b" (1), "c" (1) — dirs "b" and "c" tie at
+	// 1 file and must appear in dir-asc order.
+	if first[0].Scope[1].Dir != "b" || first[0].Scope[2].Dir != "c" {
+		t.Errorf("Scope dir-asc tiebreak failed: got %+v", first[0].Scope)
+	}
+	// Collaborators: bob, carol, dan all share exactly 1 file with alice;
+	// email-asc order.
+	wantCollab := []string{"bob@x", "carol@x", "dan@x"}
+	for i, want := range wantCollab {
+		if first[0].Collaborators[i].Email != want {
+			t.Errorf("Collaborators[%d] = %q, want %q", i, first[0].Collaborators[i].Email, want)
+		}
+	}
+}
+
+func TestBusFactorOrderDeterministicUnderTies(t *testing.T) {
+	// 6 files, all with bus factor = 1. Without a deterministic tiebreaker
+	// the top-N varies between invocations because Go map iteration is
+	// randomized. The CLI and HTML report call BusFactor separately and
+	// must return the same ordering — this test guards against regression.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"z/last.go":  {commits: 1, devLines: map[string]int64{"a@x": 10}},
+			"a/first.go": {commits: 1, devLines: map[string]int64{"b@x": 10}},
+			"m/mid.go":   {commits: 1, devLines: map[string]int64{"c@x": 10}},
+			"a/second.go": {commits: 1, devLines: map[string]int64{"d@x": 10}},
+			"b/one.go":   {commits: 1, devLines: map[string]int64{"e@x": 10}},
+			"b/two.go":   {commits: 1, devLines: map[string]int64{"f@x": 10}},
+		},
+	}
+	first := BusFactor(ds, 3)
+	// Run 20 times; order must be identical every time.
+	for i := 0; i < 20; i++ {
+		run := BusFactor(ds, 3)
+		for j := range run {
+			if run[j].Path != first[j].Path {
+				t.Fatalf("iteration %d index %d: got %q, want %q",
+					i, j, run[j].Path, first[j].Path)
+			}
+		}
+	}
+	// Expected ordering: all bf=1, so tiebreaker is path asc.
+	want := []string{"a/first.go", "a/second.go", "b/one.go"}
+	for i, p := range want {
+		if first[i].Path != p {
+			t.Errorf("[%d] got %q, want %q", i, first[i].Path, p)
+		}
+	}
+}
+
 func TestBusFactorSingleDev(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{
@@ -212,12 +570,175 @@ func TestChurnRisk(t *testing.T) {
 	if len(result) != 3 {
 		t.Fatalf("len = %d", len(result))
 	}
-	// main.go: recentChurn=100, 2 devs → risk=50
-	// util.go: recentChurn=50, 1 dev → risk=50
-	// readme.md: recentChurn=10, 1 dev → risk=10
-	// Sorted by risk descending
-	if result[0].RiskScore <= result[len(result)-1].RiskScore {
-		t.Errorf("not sorted descending: first=%f, last=%f", result[0].RiskScore, result[len(result)-1].RiskScore)
+	// Sorted by RecentChurn descending.
+	// main.go=100, util.go=50, readme.md=10.
+	for i := 1; i < len(result); i++ {
+		if result[i-1].RecentChurn < result[i].RecentChurn {
+			t.Errorf("not sorted by RecentChurn desc at index %d: %.1f < %.1f",
+				i, result[i-1].RecentChurn, result[i].RecentChurn)
+		}
+	}
+	if result[0].Path != "main.go" {
+		t.Errorf("top file = %q, want main.go", result[0].Path)
+	}
+}
+
+func TestClassifyFile(t *testing.T) {
+	cases := []struct {
+		name         string
+		recentChurn  float64
+		lowChurn     float64
+		bf, ageDays  int
+		trend        float64
+		want         string
+	}{
+		{"cold: churn below threshold", 5, 50, 1, 365, 1.0, "cold"},
+		{"active: shared ownership", 200, 50, 3, 365, 1.0, "active"},
+		{"active-core: new code, single author", 200, 50, 1, 30, 1.0, "active-core"},
+		{"silo: old + concentrated + stable", 200, 50, 2, 365, 1.0, "silo"},
+		{"silo: old + concentrated + growing", 200, 50, 2, 365, 2.0, "silo"},
+		{"legacy-hotspot: old + concentrated + declining", 200, 50, 1, 365, 0.3, "legacy-hotspot"},
+		{"cold wins over everything when churn low", 10, 50, 1, 365, 0.1, "cold"},
+	}
+	for _, c := range cases {
+		got := classifyFile(c.recentChurn, c.lowChurn, c.bf, c.ageDays, c.trend)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestActivityBucketUsesUTC(t *testing.T) {
+	// Two commits at the same UTC instant but parsed with different TZs.
+	// Both must fall into the same month bucket — without the UTC fix they
+	// would split across months depending on the author's offset.
+	jsonl := `{"type":"commit","sha":"a","author_name":"A","author_email":"a@x","author_date":"2024-03-31T23:00:00-05:00","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"a","path_current":"x.go","additions":5,"deletions":0}
+{"type":"commit","sha":"b","author_name":"B","author_email":"b@x","author_date":"2024-04-01T06:00:00+02:00","additions":3,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"b","path_current":"x.go","additions":3,"deletions":0}
+`
+	// Same UTC instant (2024-04-01T04:00Z) expressed in -05:00 and +02:00.
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	buckets := ActivityOverTime(ds, "month")
+	if len(buckets) != 1 {
+		t.Fatalf("got %d buckets, want 1 (same UTC instant): %+v", len(buckets), buckets)
+	}
+	if buckets[0].Period != "2024-04" {
+		t.Errorf("bucket period = %q, want 2024-04", buckets[0].Period)
+	}
+}
+
+func TestChurnTrend(t *testing.T) {
+	latest := time.Date(2024, 6, 15, 0, 0, 0, 0, time.UTC)
+	// "earliest" far before the trend window so the short-span guard does
+	// not fire for these cases.
+	earliestWide := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// No data → neutral.
+	if got := churnTrend(map[string]int64{}, earliestWide, latest); got != 1 {
+		t.Errorf("empty → %.2f, want 1", got)
+	}
+
+	// Only recent activity (nothing earlier) → growing signal (2).
+	recentOnly := map[string]int64{"2024-05": 100, "2024-06": 100}
+	if got := churnTrend(recentOnly, earliestWide, latest); got != 2 {
+		t.Errorf("recent-only → %.2f, want 2", got)
+	}
+
+	// Declining: old months dominate.
+	declining := map[string]int64{
+		"2024-01": 1000, "2024-02": 1000, // earlier
+		"2024-05": 50, "2024-06": 50, // recent
+	}
+	if got := churnTrend(declining, earliestWide, latest); got >= 0.5 {
+		t.Errorf("declining trend = %.2f, want < 0.5", got)
+	}
+
+	// Stability across day-of-month.
+	data := map[string]int64{"2024-02": 100, "2024-03": 100, "2024-06": 100}
+	early := churnTrend(data, earliestWide, time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC))
+	late := churnTrend(data, earliestWide, time.Date(2024, 6, 30, 23, 0, 0, 0, time.UTC))
+	if early != late {
+		t.Errorf("trend depends on day-of-month: early=%.2f late=%.2f", early, late)
+	}
+
+	// Short-span guard: dataset whose entire span is inside the trend window.
+	// earliest=2024-05, latest=2024-06, window=3 months → cutoff=2024-03.
+	// earliestKey="2024-05" >= cutoffKey="2024-03" → no "earlier" bucket.
+	// Previously returned 2 (falsely "growing from nothing") for every file;
+	// now must return 1 (no signal).
+	shortSpan := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	if got := churnTrend(recentOnly, shortSpan, latest); got != 1 {
+		t.Errorf("short-span → %.2f, want 1 (no signal when window < trend window)", got)
+	}
+
+	// Single-month histories used to short-circuit to 1 via len(monthChurn)<2,
+	// silencing the two strongest trend signals: earlier-only (declined to
+	// nothing) and recent-only (grew from nothing). Both must now come
+	// through so old concentrated files can be classified as legacy-hotspot.
+
+	// Earlier-only: a single month well before the cutoff.
+	earlierOnly := map[string]int64{"2023-05": 500}
+	if got := churnTrend(earlierOnly, earliestWide, latest); got != 0 {
+		t.Errorf("earlier-only single-month → %.2f, want 0 (declined to nothing)", got)
+	}
+
+	// Recent-only: a single month inside the trend window.
+	recentSingle := map[string]int64{"2024-06": 100}
+	if got := churnTrend(recentSingle, earliestWide, latest); got != 2 {
+		t.Errorf("recent-only single-month → %.2f, want 2 (grew from nothing)", got)
+	}
+
+	// Zero-value entry (possible when a month only contains renames with
+	// no content change: cf.Additions + cf.Deletions = 0). Both buckets
+	// end up zero — defensive fallthrough must return 1, not 0 or 2.
+	zeroOnly := map[string]int64{"2024-05": 0}
+	if got := churnTrend(zeroOnly, earliestWide, latest); got != 1 {
+		t.Errorf("zero-value single-month → %.2f, want 1 (no signal)", got)
+	}
+}
+
+func TestChurnRiskLegacyHotspotFromSingleOldMonth(t *testing.T) {
+	// Integration: file touched only in one old month, bf=1, age > 180.
+	// Before the churnTrend fix (len<2 guard), this file returned
+	// trend=1 (stable) and landed at label=silo. After the fix,
+	// trend=0 (declined to nothing) routes it through the legacy-hotspot
+	// branch. Pins the end-to-end wiring so a future regression in
+	// churnTrend, classifyFile, or ChurnRisk can't silently send such
+	// files back to silo.
+	t1 := time.Date(2020, 1, 15, 10, 0, 0, 0, time.UTC)
+	latest := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1,
+		Latest:   latest,
+		files: map[string]*fileEntry{
+			"old.go": {
+				commits:     1,
+				recentChurn: 100, // kept high enough to clear the cold threshold
+				devLines:    map[string]int64{"alice@x": 500},
+				monthChurn:  map[string]int64{"2020-01": 500},
+				firstChange: t1,
+				lastChange:  t1,
+			},
+		},
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+	r := results[0]
+	if r.Label != "legacy-hotspot" {
+		t.Errorf("Label = %q, want legacy-hotspot (single-old-month + bf=1 + age>180)", r.Label)
+	}
+	if r.Trend != 0 {
+		t.Errorf("Trend = %.2f, want 0 (earlier-only — the fix)", r.Trend)
+	}
+	if r.BusFactor != 1 {
+		t.Errorf("BusFactor = %d, want 1", r.BusFactor)
 	}
 }
 
@@ -248,6 +769,31 @@ func TestDeveloperNetwork(t *testing.T) {
 	// alice and bob share main.go
 	if result[0].SharedFiles != 1 {
 		t.Errorf("SharedFiles = %d, want 1", result[0].SharedFiles)
+	}
+}
+
+func TestDeveloperNetworkSharedLinesWeighsRealOverlap(t *testing.T) {
+	// Two files, both touched by Alice and Bob.
+	// File 1: Alice=1 line, Bob=1000 lines → real overlap = 1 (the minimum)
+	// File 2: Alice=500, Bob=500 → real overlap = 500
+	// A raw "shared files" count shows 2 in both extremes; SharedLines
+	// correctly reports 501, not 1001 or 2000.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"f1.go": {devLines: map[string]int64{"alice@x": 1, "bob@x": 1000}},
+			"f2.go": {devLines: map[string]int64{"alice@x": 500, "bob@x": 500}},
+		},
+	}
+	edges := DeveloperNetwork(ds, 10, 1)
+	if len(edges) != 1 {
+		t.Fatalf("edges = %d, want 1", len(edges))
+	}
+	e := edges[0]
+	if e.SharedFiles != 2 {
+		t.Errorf("SharedFiles = %d, want 2", e.SharedFiles)
+	}
+	if e.SharedLines != 501 {
+		t.Errorf("SharedLines = %d, want 501 (min(1,1000)+min(500,500))", e.SharedLines)
 	}
 }
 
@@ -382,6 +928,162 @@ func TestStreamLoadCoupling(t *testing.T) {
 	pair := filePair{a: "x.go", b: "y.go"}
 	if ds.couplingPairs[pair] != 2 {
 		t.Errorf("coupling pair count = %d, want 2", ds.couplingPairs[pair])
+	}
+}
+
+func TestCouplingExcludesMechanicalRefactor(t *testing.T) {
+	// A commit touching 10 files with ~1 line each (a rename or format pass)
+	// would generate 45 coupling pairs and swamp the real signal. The heuristic
+	// skips pair accumulation for such commits.
+	var lines []string
+	// c1: mechanical refactor — 10 files, 1 line each, mean churn = 1 < 5
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":10,"deletions":0,"files_changed":10}`)
+	for i := 0; i < 10; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"f%d.go","status":"M","additions":1,"deletions":0}`, i))
+	}
+	// c2: real multi-file change — 3 files, 100 lines each
+	lines = append(lines, `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-01-02T10:00:00Z","additions":300,"deletions":0,"files_changed":3}`)
+	for i := 0; i < 3; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c2","path_current":"f%d.go","status":"M","additions":100,"deletions":0}`, i))
+	}
+	jsonl := strings.Join(lines, "\n") + "\n"
+
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// c1 must NOT contribute pairs, c2 must. For files f0..f2 the only pair
+	// counts should come from c2 (3 pairs: {f0,f1}, {f0,f2}, {f1,f2}).
+	for pair, count := range ds.couplingPairs {
+		if count > 1 {
+			t.Errorf("pair %v has count %d — mechanical refactor leaked into coupling", pair, count)
+		}
+	}
+	p01 := filePair{a: "f0.go", b: "f1.go"}
+	if ds.couplingPairs[p01] != 1 {
+		t.Errorf("pair {f0,f1} count = %d, want 1 (only c2 contributes)", ds.couplingPairs[p01])
+	}
+
+	// But file-change denominators MUST still include c1 — those are honest
+	// counts of how often each file appears, not a coupling signal.
+	if ds.couplingFileChanges["f0.go"] != 2 {
+		t.Errorf("f0.go changes = %d, want 2 (c1 + c2, even though c1 didn't contribute pairs)",
+			ds.couplingFileChanges["f0.go"])
+	}
+	if ds.couplingFileChanges["f9.go"] != 1 {
+		t.Errorf("f9.go changes = %d, want 1", ds.couplingFileChanges["f9.go"])
+	}
+}
+
+func TestCouplingRefactorFilterBoundaries(t *testing.T) {
+	// Exercise the threshold boundaries directly. The refactor filter uses
+	// `len(unique) >= refactorMinFiles` (10) AND `meanChurn < refactorMax-
+	// ChurnPerFile` (5.0, strict). These cases cover both dimensions plus
+	// the pure-rename (zero churn) case that motivated the filter.
+	cases := []struct {
+		name         string
+		files        int
+		churnPerFile int64
+		wantPairs    int // 0 = filtered; non-zero = pairs produced
+	}{
+		{"below minFiles: 9 files zero churn", 9, 0, 9 * 8 / 2},
+		{"pure rename: 10 files zero churn", 10, 0, 0},
+		{"below threshold: 10 files × 4 lines (mean 4.0)", 10, 4, 0},
+		{"at threshold: 10 files × 5 lines (mean 5.0, strict <)", 10, 5, 10 * 9 / 2},
+		{"above threshold: 10 files × 6 lines (mean 6.0)", 10, 6, 10 * 9 / 2},
+		{"large substantive: 20 files × 50 lines", 20, 50, 20 * 19 / 2},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			total := int64(c.files) * c.churnPerFile
+			var lines []string
+			lines = append(lines,
+				fmt.Sprintf(`{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":%d,"deletions":0,"files_changed":%d}`,
+					total, c.files))
+			for i := 0; i < c.files; i++ {
+				lines = append(lines,
+					fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"f%d.go","status":"M","additions":%d,"deletions":0}`,
+						i, c.churnPerFile))
+			}
+			ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+				LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+			if err != nil {
+				t.Fatalf("streamLoad: %v", err)
+			}
+			if got := len(ds.couplingPairs); got != c.wantPairs {
+				t.Errorf("pairs = %d, want %d", got, c.wantPairs)
+			}
+			// Regardless of whether pairs were counted, each file's change
+			// denominator must equal 1 (all participated in the single commit).
+			for i := 0; i < c.files; i++ {
+				path := fmt.Sprintf("f%d.go", i)
+				if got := ds.couplingFileChanges[path]; got != 1 {
+					t.Errorf("%s file changes = %d, want 1 (denominator always counted)", path, got)
+				}
+			}
+		})
+	}
+}
+
+func TestCouplingRenameBelowFilterThreshold(t *testing.T) {
+	// Pins down current behavior at the intersection of two subsystems:
+	// rename tracking and the refactor filter. A commit renaming 8 files
+	// (below refactorMinFiles = 10) has zero churn per file, so mean < 5,
+	// BUT the fileCount threshold isn't met — the filter does not fire.
+	// Pairs between the old paths are generated during streaming, then
+	// re-keyed to the canonical (new) paths in applyRenames.
+	//
+	// Each pair has CoChanges = 1, so a sensible --coupling-min-changes
+	// threshold filters them out of user-facing output. But for callers
+	// who inspect the raw ds.couplingPairs map, the pairs are present.
+	// This test exists so any future tightening (lower refactorMinFiles,
+	// or explicit skip-when-all-renames) is a conscious decision backed
+	// by a failing test, not a silent behavior drift.
+	var lines []string
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":0,"deletions":0,"files_changed":8}`)
+	for i := 0; i < 8; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"new%d.go","path_previous":"old%d.go","status":"R100","additions":0,"deletions":0}`, i, i))
+	}
+	ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+		LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	// 8 files, filter does not fire → C(8,2) = 28 pairs exist.
+	if got := len(ds.couplingPairs); got != 28 {
+		t.Errorf("pairs = %d, want 28 (current behavior — rename commits below refactorMinFiles leak)", got)
+	}
+	// Pairs must be keyed to the NEW paths (post-rename canonical), not old.
+	for pair := range ds.couplingPairs {
+		if !strings.HasPrefix(pair.a, "new") || !strings.HasPrefix(pair.b, "new") {
+			t.Errorf("pair %v contains old-path key; applyRenames should have re-keyed", pair)
+		}
+	}
+}
+
+func TestCouplingKeepsNormalMultiFileCommits(t *testing.T) {
+	// Counter-test: a commit touching 10 files with substantial churn per
+	// file (40+ lines avg) must still contribute pairs — it's not a rename.
+	var lines []string
+	lines = append(lines, `{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":500,"deletions":0,"files_changed":10}`)
+	for i := 0; i < 10; i++ {
+		lines = append(lines,
+			fmt.Sprintf(`{"type":"commit_file","commit":"c1","path_current":"g%d.go","status":"M","additions":50,"deletions":0}`, i))
+	}
+	ds, err := streamLoad(strings.NewReader(strings.Join(lines, "\n")+"\n"),
+		LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	// 10 choose 2 = 45 pairs
+	if got := len(ds.couplingPairs); got != 45 {
+		t.Errorf("coupling pairs = %d, want 45 (substantial per-file churn, should not trigger refactor filter)", got)
 	}
 }
 
@@ -675,6 +1377,470 @@ func TestDevProfilesContribType(t *testing.T) {
 	}
 }
 
+func TestRenameMergesHistory(t *testing.T) {
+	// JSONL newest-first (as git log emits). Historical sequence:
+	// 1) 2024-01 c1 creates old.go
+	// 2) 2024-02 c2 edits old.go
+	// 3) 2024-03 c3 renames old.go → new.go + edits
+	// 4) 2024-04 c4 edits new.go
+	jsonl := `{"type":"commit","sha":"c4","author_name":"A","author_email":"a@x","author_date":"2024-04-15T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c4","path_current":"new.go","path_previous":"new.go","status":"M","additions":5,"deletions":0}
+{"type":"commit","sha":"c3","author_name":"A","author_email":"a@x","author_date":"2024-03-15T10:00:00Z","additions":3,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"new.go","path_previous":"old.go","status":"R100","additions":3,"deletions":2}
+{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":8,"deletions":1,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"old.go","path_previous":"old.go","status":"M","additions":8,"deletions":1}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-05T10:00:00Z","additions":20,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"old.go","path_previous":"old.go","status":"A","additions":20,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+
+	if _, ok := ds.files["old.go"]; ok {
+		t.Errorf("old.go should be merged into new.go, but still exists")
+	}
+	fe, ok := ds.files["new.go"]
+	if !ok {
+		t.Fatalf("new.go missing")
+	}
+	// All 4 commits merged into new.go.
+	if fe.commits != 4 {
+		t.Errorf("new.go commits = %d, want 4", fe.commits)
+	}
+	// firstChange must come from c1 (oldest), not c3 (the rename).
+	if got := fe.firstChange.UTC().Format("2006-01-02"); got != "2024-01-05" {
+		t.Errorf("firstChange = %q, want 2024-01-05 (pre-rename history preserved)", got)
+	}
+	if got := fe.lastChange.UTC().Format("2006-01-02"); got != "2024-04-15" {
+		t.Errorf("lastChange = %q, want 2024-04-15", got)
+	}
+	// monthChurn must span all 4 months.
+	if len(fe.monthChurn) != 4 {
+		t.Errorf("monthChurn months = %d, want 4", len(fe.monthChurn))
+	}
+	if ds.UniqueFileCount != 1 {
+		t.Errorf("UniqueFileCount = %d, want 1 (canonical)", ds.UniqueFileCount)
+	}
+}
+
+func TestRenameChain(t *testing.T) {
+	// A → B (in c2), B → C (in c3). Canonical = C.
+	jsonl := `{"type":"commit","sha":"c3","author_name":"A","author_email":"a@x","author_date":"2024-03-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"C.go","path_previous":"B.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":10,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	for _, orphan := range []string{"A.go", "B.go"} {
+		if _, ok := ds.files[orphan]; ok {
+			t.Errorf("%s should not exist after chain rename", orphan)
+		}
+	}
+	fe, ok := ds.files["C.go"]
+	if !ok {
+		t.Fatal("C.go missing — chain rename not resolved")
+	}
+	if fe.commits != 3 {
+		t.Errorf("C.go commits = %d, want 3 (A+B+C merged)", fe.commits)
+	}
+}
+
+func TestRenameCollapsesCouplingSelfPair(t *testing.T) {
+	// Two files A.go and B.go co-change in c1. Later c2 renames A→B (both
+	// end up as B.go). The pair {A, B} must NOT survive as a self-pair.
+	jsonl := `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":10,"deletions":0,"files_changed":2}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":5,"deletions":0}
+{"type":"commit_file","commit":"c1","path_current":"B.go","path_previous":"B.go","status":"A","additions":5,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	for pair := range ds.couplingPairs {
+		if pair.a == pair.b {
+			t.Errorf("self-pair survived rename collapse: %+v", pair)
+		}
+	}
+}
+
+func TestRenameDevFilesTouchedUsesCanonical(t *testing.T) {
+	// A single dev edits old.go, then renames it to new.go and edits again.
+	// FilesTouched should be 1 (one canonical file), not 2.
+	jsonl := `{"type":"commit","sha":"c3","author_name":"Alice","author_email":"alice@x","author_date":"2024-03-10T10:00:00Z","additions":2,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"new.go","path_previous":"new.go","status":"M","additions":2,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"Alice","author_email":"alice@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"new.go","path_previous":"old.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"Alice","author_email":"alice@x","author_date":"2024-01-10T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"old.go","path_previous":"old.go","status":"A","additions":5,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	alice := ds.contributors["alice@x"]
+	if alice == nil {
+		t.Fatal("alice missing")
+	}
+	if alice.FilesTouched != 1 {
+		t.Errorf("FilesTouched = %d, want 1 (old.go and new.go collapse to same canonical)", alice.FilesTouched)
+	}
+}
+
+func TestRenameSkipsReusedOldPath(t *testing.T) {
+	// Path-reuse scenario: A was renamed to B in old history, then the
+	// name "A" was reused for an unrelated file, which was renamed to D.
+	// JSONL is newest-first, so renameEdges hold {A→D} first and {A→B}
+	// second. Both have oldPath="A" — this is the signal that lineages
+	// cannot be disambiguated safely.
+	//
+	// Before the fix, the first edge won the dedup and applyRenames
+	// migrated the merged ds.files["A"] (containing both lineages'
+	// pre-rename data) into "D", polluting D with lineage-1 commits
+	// that belong to B and stripping B of its pre-rename history.
+	//
+	// After the fix, applyRenames detects the duplicate oldPath and
+	// refuses to migrate either edge. A stays where it is (still with
+	// merged lineages, but no cross-contamination into B or D), and
+	// B and D each keep only their own post-rename data. This is
+	// underattribution, which is safer than active misattribution.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "D"},
+		{oldPath: "A", newPath: "B"},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 2, monthChurn: map[string]int64{}},
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"D": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	a, ok := ds.files["A"]
+	if !ok {
+		t.Fatal("A should remain — path reuse must disable migration")
+	}
+	if a.commits != 2 {
+		t.Errorf("A commits = %d, want 2 (unchanged)", a.commits)
+	}
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B commits = %d, want 1 (A must not have been merged in)", ds.files["B"].commits)
+	}
+	if ds.files["D"].commits != 1 {
+		t.Errorf("D commits = %d, want 1 (A must not have been merged in)", ds.files["D"].commits)
+	}
+}
+
+func TestRenameSkipsSingleEdgeReusedOldPath(t *testing.T) {
+	// Path reuse with a SINGLE rename edge: A → B in old history, then
+	// an unrelated file is created at "A" and never renamed further.
+	// Only one edge involves A, so oldPathCounts[A] = 1 and the
+	// multi-edge heuristic cannot detect reuse. The tell is temporal:
+	// ds.files["A"].lastChange is AFTER the rename's commitDate, which
+	// means activity on "A" continued past the rename — the new file.
+	//
+	// Without this check, direct[A] = B is applied and the new file's
+	// history silently merges into B, corrupting B's stats.
+	tRename := time.Date(2024, 2, 10, 0, 0, 0, 0, time.UTC)
+	tNewFile := time.Date(2024, 5, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tRename},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {
+			commits:    2, // 1 pre-rename (lineage 1) + 1 post-rename (lineage 2)
+			lastChange: tNewFile,
+			monthChurn: map[string]int64{},
+		},
+		"B": {
+			commits:    1,
+			lastChange: tRename,
+			monthChurn: map[string]int64{},
+		},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; !ok {
+		t.Error("A should remain — single-edge path reuse must skip migration")
+	}
+	if a, ok := ds.files["A"]; ok && a.commits != 2 {
+		t.Errorf("A.commits = %d, want 2 (unchanged)", a.commits)
+	}
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (lineage 2 must not have leaked in)", ds.files["B"].commits)
+	}
+}
+
+func TestRenameSingleEdgeReuseViaStream(t *testing.T) {
+	// End-to-end equivalent of TestRenameSkipsSingleEdgeReusedOldPath,
+	// exercising the full ingest path so fileEntry.lastChange and the
+	// renameEdge.commitDate are populated naturally from commit_file
+	// records. Covers the wiring between streamLoadInto and applyRenames.
+	//
+	// Timeline (encoded newest-first as git log emits):
+	//   c6 2024-06-01: modify new A (lineage 2)
+	//   c5 2024-05-01: new file created at A (lineage 2 starts)
+	//   c4 2024-04-01: modify B
+	//   c3 2024-03-15: rename A → B (ends lineage 1)
+	//   c2 2024-02-10: modify A (lineage 1)
+	//   c1 2024-01-05: create A (lineage 1 starts)
+	jsonl := `{"type":"commit","sha":"c6","author_name":"X","author_email":"x@x","author_date":"2024-06-01T10:00:00Z","additions":30,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c6","path_current":"A.go","path_previous":"A.go","status":"M","additions":30,"deletions":0}
+{"type":"commit","sha":"c5","author_name":"X","author_email":"x@x","author_date":"2024-05-01T10:00:00Z","additions":20,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c5","path_current":"A.go","path_previous":"A.go","status":"A","additions":20,"deletions":0}
+{"type":"commit","sha":"c4","author_name":"Y","author_email":"y@x","author_date":"2024-04-01T10:00:00Z","additions":10,"deletions":2,"files_changed":1}
+{"type":"commit_file","commit":"c4","path_current":"B.go","path_previous":"B.go","status":"M","additions":10,"deletions":2}
+{"type":"commit","sha":"c3","author_name":"Y","author_email":"y@x","author_date":"2024-03-15T10:00:00Z","additions":0,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c3","path_current":"B.go","path_previous":"A.go","status":"R100","additions":0,"deletions":0}
+{"type":"commit","sha":"c2","author_name":"Y","author_email":"y@x","author_date":"2024-02-10T10:00:00Z","additions":15,"deletions":3,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"A.go","path_previous":"A.go","status":"M","additions":15,"deletions":3}
+{"type":"commit","sha":"c1","author_name":"Y","author_email":"y@x","author_date":"2024-01-05T10:00:00Z","additions":40,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"A.go","path_previous":"A.go","status":"A","additions":40,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	a, ok := ds.files["A.go"]
+	if !ok {
+		t.Fatal("A.go missing — reuse detection should have skipped migration")
+	}
+	// A.go should contain c1 + c2 (lineage 1 pre-rename) + c5 + c6 (lineage
+	// 2 post-reuse) = 4 commits. They are conflated at the path key level
+	// (known limitation of non-temporal-segmented ingest), but at least
+	// don't leak into B.
+	if a.commits != 4 {
+		t.Errorf("A.go commits = %d, want 4 (c1+c2+c5+c6 conflated at the reused path)", a.commits)
+	}
+	b, ok := ds.files["B.go"]
+	if !ok {
+		t.Fatal("B.go missing")
+	}
+	// B.go should have c3 (rename commit) + c4 (modify) = 2 commits.
+	if b.commits != 2 {
+		t.Errorf("B.go commits = %d, want 2 (c3+c4, no leak from A)", b.commits)
+	}
+}
+
+func TestRenameChainPlusReuse(t *testing.T) {
+	// Refinement catches a case that the pure wasRecreated guard missed:
+	// D → A → B chain followed by a NEW unrelated file created at A.
+	// A is both a rename target (via D→A) and a rename source (via
+	// A→B), so wasRecreated[A] = true. Under the old single-edge
+	// check the reuse detection was disabled here, letting the new A
+	// lineage leak into B. Using maxEdgeDate (the latest edge touching
+	// A), we see that lastChange(A) is AFTER the last A-involving
+	// rename and correctly skip.
+	tD_to_A := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	tA_to_B := time.Date(2024, 3, 10, 0, 0, 0, 0, time.UTC)
+	tReuse := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tA_to_B},
+		{oldPath: "D", newPath: "A", commitDate: tD_to_A},
+	}
+	ds.files = map[string]*fileEntry{
+		"D": {commits: 1, lastChange: tD_to_A, monthChurn: map[string]int64{}},
+		"A": {commits: 3, lastChange: tReuse, monthChurn: map[string]int64{}}, // post-reuse
+		"B": {commits: 1, lastChange: tA_to_B, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	// A must stay — reuse detected.
+	if _, ok := ds.files["A"]; !ok {
+		t.Fatal("A should remain — reuse detected by lastChange > maxEdgeDate")
+	}
+	// D still migrates through its own rename edge (D has no post-
+	// rename activity). D → A because direct[A] was not set.
+	if _, ok := ds.files["D"]; ok {
+		t.Error("D should have been migrated (clean rename with no reuse on D)")
+	}
+	// B stays — A did not leak in.
+	if b := ds.files["B"]; b.commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (A's reuse lineage must not leak into B)", b.commits)
+	}
+}
+
+func TestRenameCleanRenameStillMigrates(t *testing.T) {
+	// Counter-test: the single-edge reuse check must not fire for a
+	// clean rename where all activity on oldPath predates the rename.
+	// lastChange(A) ≤ commitDate(A→B) → migration proceeds, A merges
+	// into B.
+	tLastA := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	tRename := time.Date(2024, 2, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tRename},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 3, lastChange: tLastA, monthChurn: map[string]int64{}},
+		"B": {commits: 1, lastChange: tRename, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been migrated into B (clean rename)")
+	}
+	if ds.files["B"].commits != 4 {
+		t.Errorf("B.commits = %d, want 4 (A=3 + B=1 merged)", ds.files["B"].commits)
+	}
+}
+
+func TestRenameBackThenRenameAgain(t *testing.T) {
+	// Same-lineage chain with a rename-back: A → B → A → C. The repeated
+	// "A" is NOT path reuse — the intermediate edge B → A recreates A
+	// from B, so both A-segments belong to the same lineage and both
+	// should collapse into C. Without the hasIncomingRename check this
+	// would be mistaken for reuse and skipped, leaving stale B files
+	// and an un-migrated A with merged-but-untouched history.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "C"}, // newest rename
+		{oldPath: "B", newPath: "A"}, // middle: rename back
+		{oldPath: "A", newPath: "B"}, // oldest rename
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 2, monthChurn: map[string]int64{}}, // pre-first + post-back, merged
+		"B": {commits: 1, monthChurn: map[string]int64{}}, // mid-chain activity
+		"C": {commits: 1, monthChurn: map[string]int64{}}, // post-final activity
+	}
+	applyRenames(ds)
+
+	for _, orphan := range []string{"A", "B"} {
+		if _, ok := ds.files[orphan]; ok {
+			t.Errorf("%s should have been merged into C (rename-back chain, same lineage)", orphan)
+		}
+	}
+	c, ok := ds.files["C"]
+	if !ok {
+		t.Fatal("C missing — chain should have collapsed into it")
+	}
+	if c.commits != 4 {
+		t.Errorf("C.commits = %d, want 4 (A=2 + B=1 + C=1 merged)", c.commits)
+	}
+}
+
+func TestRenameChainNotMistakenForReuse(t *testing.T) {
+	// Guard against the fix being too aggressive: a genuine chain
+	// A→B→C has DIFFERENT oldPaths (A once, B once) and must still
+	// be collapsed into C as before.
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "B", newPath: "C"},
+		{oldPath: "A", newPath: "B"},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 1, monthChurn: map[string]int64{}},
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"C": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been merged — not a reuse case")
+	}
+	if _, ok := ds.files["B"]; ok {
+		t.Error("B should have been merged — not a reuse case")
+	}
+	if ds.files["C"].commits != 3 {
+		t.Errorf("C.commits = %d, want 3 (A+B+C chain)", ds.files["C"].commits)
+	}
+}
+
+func TestRenameCycleDoesNotCrash(t *testing.T) {
+	// Degenerate: A→B then B→A. Canonical resolution should bail out of
+	// the cycle instead of infinite-looping, and — since migration is
+	// ambiguous — both files survive with their own data rather than
+	// one being silently merged into the other.
+	jsonl := `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"A.go","path_previous":"B.go","status":"R100","additions":1,"deletions":0}
+{"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("streamLoad: %v", err)
+	}
+	// Both files must survive the cycle. If the bail logic accidentally
+	// routed one into the other, this would fail.
+	if _, ok := ds.files["A.go"]; !ok {
+		t.Error("A.go missing — cycle bail should leave both files intact")
+	}
+	if _, ok := ds.files["B.go"]; !ok {
+		t.Error("B.go missing — cycle bail should leave both files intact")
+	}
+}
+
+func TestRenameMixedLineageKnownLimitation(t *testing.T) {
+	// Exotic mixed case documented in METRICS.md as a known limitation:
+	//
+	//   t1: A → B         (lineage 1 renames A away)
+	//   t2: C → A         (lineage 2: a different file C takes the name A)
+	//   t3: A → D         (lineage 2 renames away)
+	//
+	// Because the repeated oldPath "A" has an incoming edge (C → A), the
+	// heuristic treats the two A-edges as a rename-back chain and migrates.
+	// Lineage 1's pre-A→B commits end up misattributed to D.
+	//
+	// Pinning the current behavior here so that a future refactor cannot
+	// silently change the outcome — any future fix (proper temporal
+	// segmentation) should update or remove this test consciously.
+	//
+	// NOTE: fileEntry.lastChange is intentionally left zero. The single-
+	// edge reuse check (`lastChange.After(maxEdgeDate)`) requires non-
+	// zero timestamps to fire; leaving them unset exercises the mixed-
+	// lineage "chain-like" path that the heuristic currently cannot
+	// disambiguate. If a test update accidentally sets lastChange, this
+	// fixture becomes a different scenario (chain+reuse) which IS
+	// detected by the refined check and produces a different result.
+	ds := newDataset()
+	tNew := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	tMid := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	tOld := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "D", commitDate: tNew}, // t3
+		{oldPath: "C", newPath: "A", commitDate: tMid}, // t2
+		{oldPath: "A", newPath: "B", commitDate: tOld}, // t1
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 2, monthChurn: map[string]int64{}}, // merged lineages (no lastChange on purpose)
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"C": {commits: 1, monthChurn: map[string]int64{}},
+		"D": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	// Current (imperfect) behavior: heuristic sees hasIncomingRename[A]=true
+	// via C→A, so it proceeds with migration. Newest edge wins: A → D.
+	// Both C and A collapse into D. B keeps only its post-rename data.
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been migrated (current behavior — chain-like)")
+	}
+	if _, ok := ds.files["C"]; ok {
+		t.Error("C should have been migrated into D")
+	}
+	d, ok := ds.files["D"]
+	if !ok {
+		t.Fatal("D missing")
+	}
+	if d.commits != 4 {
+		t.Errorf("D.commits = %d, want 4 (A=2 + C=1 + D=1 merged — lineage 1's pre-A→B data is misattributed here)", d.commits)
+	}
+	// B keeps only its post-rename data. Lineage 1's pre-rename history
+	// that should live here is instead at D.
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (lineage-1 pre-rename data leaked to D)", ds.files["B"].commits)
+	}
+}
+
 func TestStreamLoadFullPipeline(t *testing.T) {
 	jsonl := `{"type":"commit","sha":"c1","tree":"t","parents":["p1","p2"],"author_name":"Alice","author_email":"alice@x.com","author_date":"2024-03-15T10:00:00Z","committer_name":"Alice","committer_email":"alice@x.com","committer_date":"2024-03-15T10:00:00Z","message":"merge feature","additions":50,"deletions":10,"files_changed":3}
 {"type":"commit_parent","sha":"c1","parent_sha":"p1"}
@@ -728,5 +1894,84 @@ func TestStreamLoadFullPipeline(t *testing.T) {
 	}
 	if len(profiles[0].Scope) == 0 {
 		t.Error("alice scope empty")
+	}
+}
+
+// buildSyntheticLargeDataset creates a deterministic dataset shaped like a
+// mid-size repo: thousands of devs, tens of thousands of files, with each
+// file touched by a few devs. Used by BenchmarkDevProfiles* to exercise the
+// allCollabs pre-compute path at a scale where the old O(D × F × D_avg)
+// implementation was measurable.
+func buildSyntheticLargeDataset(numDevs, numFiles, avgDevsPerFile, numCommits int) *Dataset {
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		CommitCount:  numCommits,
+		Earliest:     t1,
+		Latest:       t1.AddDate(0, 6, 0),
+		commits:      make(map[string]*commitEntry, numCommits),
+		contributors: make(map[string]*ContributorStat, numDevs),
+		files:        make(map[string]*fileEntry, numFiles),
+	}
+	for i := 0; i < numDevs; i++ {
+		email := fmt.Sprintf("dev-%04d@x", i)
+		ds.contributors[email] = &ContributorStat{
+			Email: email, Name: email,
+			Commits: numCommits / numDevs, ActiveDays: 1, FilesTouched: avgDevsPerFile,
+			Additions: 100, Deletions: 10,
+		}
+	}
+	for i := 0; i < numCommits; i++ {
+		email := fmt.Sprintf("dev-%04d@x", i%numDevs)
+		sha := fmt.Sprintf("c%06d", i)
+		ds.commits[sha] = &commitEntry{
+			email: email, date: t1.Add(time.Duration(i) * time.Hour),
+			add: 10, del: 1, files: 1,
+		}
+	}
+	// Deterministic dev assignment per file: stride through dev list.
+	for i := 0; i < numFiles; i++ {
+		path := fmt.Sprintf("src/pkg%03d/file%04d.go", i/100, i)
+		fe := &fileEntry{
+			commits:    avgDevsPerFile,
+			additions:  100 * int64(avgDevsPerFile),
+			deletions:  10 * int64(avgDevsPerFile),
+			devLines:   make(map[string]int64, avgDevsPerFile),
+			devCommits: make(map[string]int, avgDevsPerFile),
+			monthChurn: map[string]int64{"2024-01": 100 * int64(avgDevsPerFile)},
+			firstChange: t1, lastChange: t1,
+		}
+		for d := 0; d < avgDevsPerFile; d++ {
+			email := fmt.Sprintf("dev-%04d@x", (i*7+d*11)%numDevs) // stride + prime for spread
+			fe.devLines[email] = 100
+			fe.devCommits[email] = 1
+		}
+		ds.files[path] = fe
+	}
+	return ds
+}
+
+// BenchmarkDevProfilesAll measures the full-dataset path (generate profiles
+// for every dev). Before the allCollabs pre-compute, this was the hot path
+// in `report` on large repos — kubernetes-scale took >80s even though stats
+// on the same data took <12s. The pre-compute makes this roughly linear in
+// F × D_per_file² instead of D × F × D_per_file.
+func BenchmarkDevProfilesAll(b *testing.B) {
+	ds := buildSyntheticLargeDataset(1000, 10000, 5, 30000)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = DevProfiles(ds, "")
+	}
+}
+
+// BenchmarkDevProfilesFilterEmail measures the single-dev query path.
+// The pre-compute does more work than strictly necessary for a single dev,
+// but the absolute cost is bounded by F × D_per_file² and remains fast.
+func BenchmarkDevProfilesFilterEmail(b *testing.B) {
+	ds := buildSyntheticLargeDataset(1000, 10000, 5, 30000)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = DevProfiles(ds, "dev-0042@x")
 	}
 }

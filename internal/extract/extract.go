@@ -93,6 +93,15 @@ func LoadState(stateFile string, flagOffset int, flagSHA string) (State, error) 
 }
 
 func Run(ctx context.Context, cfg Config) error {
+	// Warn when the repo has a .mailmap but the flag wasn't set — identity
+	// stats (bus factor, dev network, profiles) will split the same person
+	// across aliases without it. Silent divergence is the main concern.
+	if !cfg.Mailmap {
+		if _, err := os.Stat(filepath.Join(cfg.Repo, ".mailmap")); err == nil {
+			log.Printf("warning: %s contains .mailmap but --mailmap was not set; identity metrics (bus factor, dev network, profiles) may split the same person across aliases", cfg.Repo)
+		}
+	}
+
 	initialState, err := LoadState(cfg.StateFile, cfg.StartOffset, cfg.StartSHA)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)

@@ -5,6 +5,35 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
+)
+
+// Thresholds for classification and profile categorization. Exposed as named
+// constants so the values are discoverable and consistent across the package.
+// See docs/METRICS.md for rationale.
+const (
+	// Churn Risk classification
+	classifyColdChurnRatio    = 0.5  // recent_churn ≤ 0.5 × median → cold
+	classifyActiveBusFactor   = 3    // bf ≥ 3 → active (shared)
+	classifyOldAgeDays        = 180  // age ≥ 180d is "old"
+	classifyDecliningTrend    = 0.5  // trend < 0.5 = declining
+	classifyTrendWindowMonths = 3    // recent vs earlier split
+
+	// Developer profile contribution type (del/add ratio)
+	contribRefactorRatio = 0.8 // ratio ≥ 0.8 → refactor
+	contribBalancedRatio = 0.4 // 0.4 ≤ ratio < 0.8 → balanced; else growth
+
+	// Coupling — mechanical refactor heuristic. A commit touching many
+	// files with very low mean churn per file is almost always a rename,
+	// format, or lint fix, not meaningful co-change. Pairs from such
+	// commits are excluded to reduce false coupling. Denominators
+	// (couplingFileChanges) are still counted so ChangesA/ChangesB
+	// remain honest totals.
+	refactorMinFiles = 10
+	// Unit is line-churn = additions + deletions per file, not just
+	// additions. Strict < threshold: a commit with mean exactly 5.0 is
+	// NOT filtered.
+	refactorMaxChurnPerFile = 5.0
 )
 
 type ContributorStat struct {
@@ -68,9 +97,13 @@ type ChurnRiskResult struct {
 	Path           string
 	RecentChurn    float64
 	BusFactor      int
-	RiskScore      float64
+	RiskScore      float64 // kept for CI gate compatibility; not used for ranking
 	TotalChanges   int
 	LastChangeDate string
+	FirstChangeDate string
+	AgeDays         int
+	Trend           float64 // recent 3mo churn / earlier churn; 1 = flat, <0.5 declining, >1.5 growing
+	Label           string  // "cold" | "active" | "active-core" | "silo" | "legacy-hotspot"
 }
 
 type WorkingPattern struct {
@@ -82,8 +115,9 @@ type WorkingPattern struct {
 type DevEdge struct {
 	DevA        string
 	DevB        string
-	SharedFiles int
-	Weight      float64
+	SharedFiles int     // files where both devs contributed at least one line
+	SharedLines int64   // Σ min(linesA, linesB) across shared files — measures real overlap
+	Weight      float64 // shared_files / max(files_A, files_B) * 100 (legacy)
 }
 
 type StatsFlags struct {
@@ -110,10 +144,10 @@ func ComputeSummary(ds *Dataset) Summary {
 	}
 
 	if !ds.Earliest.IsZero() {
-		s.FirstCommitDate = ds.Earliest.Format("2006-01-02")
+		s.FirstCommitDate = ds.Earliest.UTC().Format("2006-01-02")
 	}
 	if !ds.Latest.IsZero() {
-		s.LastCommitDate = ds.Latest.Format("2006-01-02")
+		s.LastCommitDate = ds.Latest.UTC().Format("2006-01-02")
 	}
 
 	return s
@@ -125,8 +159,12 @@ func TopContributors(ds *Dataset, n int) []ContributorStat {
 		result = append(result, *cs)
 	}
 
+	// Deterministic ordering under ties: commits desc, then email asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Commits > result[j].Commits
+		if result[i].Commits != result[j].Commits {
+			return result[i].Commits > result[j].Commits
+		}
+		return result[i].Email < result[j].Email
 	})
 
 	if n > 0 && n < len(result) {
@@ -148,8 +186,12 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 		})
 	}
 
+	// Deterministic ordering under ties: commits desc, then path asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Commits > result[j].Commits
+		if result[i].Commits != result[j].Commits {
+			return result[i].Commits > result[j].Commits
+		}
+		return result[i].Path < result[j].Path
 	})
 
 	if n > 0 && n < len(result) {
@@ -160,19 +202,23 @@ func FileHotspots(ds *Dataset, n int) []FileStat {
 
 type DirStat struct {
 	Dir        string
-	Commits    int
-	Churn      int64
-	Files      int
-	UniqueDevs int
-	BusFactor  int
+	// FileTouches is the sum of per-file commit counts across files in this
+	// directory. A single commit touching N files in the directory contributes
+	// N to this number — it is NOT distinct commits. Named accordingly to
+	// avoid the prior "Commits" misnomer.
+	FileTouches int
+	Churn       int64
+	Files       int
+	UniqueDevs  int
+	BusFactor   int
 }
 
 func DirectoryStats(ds *Dataset, n int) []DirStat {
 	type dirAcc struct {
-		commits int
-		churn   int64
-		files   int
-		devs    map[string]int64
+		fileTouches int
+		churn       int64
+		files       int
+		devs        map[string]int64
 	}
 
 	dirs := make(map[string]*dirAcc)
@@ -187,7 +233,7 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 			dirs[dir] = d
 		}
 		d.files++
-		d.commits += fe.commits
+		d.fileTouches += fe.commits
 		d.churn += fe.additions + fe.deletions
 		for email, lines := range fe.devLines {
 			d.devs[email] += lines
@@ -222,16 +268,22 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 		}
 
 		result = append(result, DirStat{
-			Dir:        dir,
-			Commits:    d.commits,
-			Churn:      d.churn,
-			Files:      d.files,
-			UniqueDevs: len(d.devs),
-			BusFactor:  bf,
+			Dir:         dir,
+			FileTouches: d.fileTouches,
+			Churn:       d.churn,
+			Files:       d.files,
+			UniqueDevs:  len(d.devs),
+			BusFactor:   bf,
 		})
 	}
 
-	sort.Slice(result, func(i, j int) bool { return result[i].Commits > result[j].Commits })
+	// Deterministic ordering under ties: file touches desc, then dir asc.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].FileTouches != result[j].FileTouches {
+			return result[i].FileTouches > result[j].FileTouches
+		}
+		return result[i].Dir < result[j].Dir
+	})
 	if n > 0 && n < len(result) {
 		result = result[:n]
 	}
@@ -247,17 +299,20 @@ func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 			continue
 		}
 
+		// Bucket in UTC so the same commit can't fall into different periods
+		// depending on the author's local timezone.
+		d := cm.date.UTC()
 		var key string
 		switch granularity {
 		case "day":
-			key = cm.date.Format("2006-01-02")
+			key = d.Format("2006-01-02")
 		case "week":
-			y, w := cm.date.ISOWeek()
+			y, w := d.ISOWeek()
 			key = fmt.Sprintf("%04d-W%02d", y, w)
 		case "year":
-			key = cm.date.Format("2006")
+			key = d.Format("2006")
 		default:
-			key = cm.date.Format("2006-01")
+			key = d.Format("2006-01")
 		}
 
 		b, ok := buckets[key]
@@ -323,8 +378,14 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 		})
 	}
 
+	// Deterministic ordering under ties: bus factor asc, then path asc.
+	// Ties on bf=1 are universal in real repos; without a tiebreaker the
+	// top-N varies between invocations (map iteration order is random).
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].BusFactor < result[j].BusFactor
+		if result[i].BusFactor != result[j].BusFactor {
+			return result[i].BusFactor < result[j].BusFactor
+		}
+		return result[i].Path < result[j].Path
 	})
 
 	if n > 0 && n < len(result) {
@@ -363,11 +424,18 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 		})
 	}
 
+	// Co-changes desc, coupling % desc, then path-asc final tiebreak.
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].CoChanges != results[j].CoChanges {
 			return results[i].CoChanges > results[j].CoChanges
 		}
-		return results[i].CouplingPct > results[j].CouplingPct
+		if results[i].CouplingPct != results[j].CouplingPct {
+			return results[i].CouplingPct > results[j].CouplingPct
+		}
+		if results[i].FileA != results[j].FileA {
+			return results[i].FileA < results[j].FileA
+		}
+		return results[i].FileB < results[j].FileB
 	})
 
 	if n > 0 && n < len(results) {
@@ -376,11 +444,92 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 	return results
 }
 
+// churnTrend compares churn from the last 3 months (relative to latest) to
+// churn from earlier months. Returns 1 when there isn't enough signal to tell.
+//
+// Uses string comparison on "YYYY-MM" keys so the classification is stable
+// regardless of the day-of-month of the dataset's latest commit.
+//
+// When the dataset span is shorter than the trend window (e.g. under a tight
+// --since filter), returns 1 — without this, every file appears in the
+// "recent" bucket only, which would falsely return 2 (growing from nothing)
+// for the entire dataset.
+//
+// A file with a single month of churn is still a valid signal: if that month
+// falls before the cutoff, the file's activity ended in the past (declining
+// to zero → 0); if it falls at or after the cutoff, the file has only recent
+// activity (growing from nothing → 2). Only an entirely empty map returns
+// neutral.
+func churnTrend(monthChurn map[string]int64, earliest, latest time.Time) float64 {
+	if len(monthChurn) == 0 || latest.IsZero() {
+		return 1
+	}
+	cutoffKey := latest.UTC().AddDate(0, -classifyTrendWindowMonths, 0).Format("2006-01")
+
+	// Dataset too narrow: the trend window extends before the earliest commit,
+	// so nothing can fall into the "earlier" bucket. No meaningful signal.
+	if !earliest.IsZero() && earliest.UTC().Format("2006-01") >= cutoffKey {
+		return 1
+	}
+
+	var recent, earlier int64
+	for month, v := range monthChurn {
+		if month < cutoffKey {
+			earlier += v
+		} else {
+			recent += v
+		}
+	}
+	if earlier == 0 {
+		if recent == 0 {
+			return 1
+		}
+		return 2 // recent-only: growing from nothing
+	}
+	if recent == 0 {
+		return 0 // earlier-only: declined to nothing (single-month-in-past case)
+	}
+	return float64(recent) / float64(earlier)
+}
+
+// classifyFile assigns an actionable label based on churn, ownership, age,
+// and trend. Thresholds are package constants (classify*).
+func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64) string {
+	if recentChurn <= lowChurn {
+		return "cold"
+	}
+	if bf >= classifyActiveBusFactor {
+		return "active" // shared, healthy
+	}
+	// Concentrated ownership (bf 1-2) with meaningful churn.
+	if ageDays < classifyOldAgeDays {
+		return "active-core" // new code, single author is expected
+	}
+	if trend < classifyDecliningTrend {
+		return "legacy-hotspot" // old + concentrated + declining → urgent
+	}
+	return "silo" // old + concentrated + stable/growing → knowledge bottleneck
+}
+
 func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
+	// Compute median recentChurn as the "cold" threshold.
+	churns := make([]float64, 0, len(ds.files))
+	for _, fe := range ds.files {
+		if fe.recentChurn > 0 {
+			churns = append(churns, fe.recentChurn)
+		}
+	}
+	sort.Float64s(churns)
+	lowChurn := 0.0
+	if len(churns) > 0 {
+		median := churns[len(churns)/2]
+		lowChurn = median * classifyColdChurnRatio
+	}
+
 	var results []ChurnRiskResult
 
 	for path, fe := range ds.files {
-		// Compute real bus factor (80% threshold), same as BusFactor stat
+		// Compute bus factor (80% threshold), same as BusFactor stat.
 		type dl struct{ lines int64 }
 		devs := make([]dl, 0, len(fe.devLines))
 		var totalLines int64
@@ -406,23 +555,47 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 
 		risk := fe.recentChurn / float64(bf)
 
-		lastDate := ""
+		lastDate, firstDate := "", ""
 		if !fe.lastChange.IsZero() {
-			lastDate = fe.lastChange.Format("2006-01-02")
+			lastDate = fe.lastChange.UTC().Format("2006-01-02")
+		}
+		if !fe.firstChange.IsZero() {
+			firstDate = fe.firstChange.UTC().Format("2006-01-02")
 		}
 
+		ageDays := 0
+		if !fe.firstChange.IsZero() && !ds.Latest.IsZero() {
+			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
+		}
+
+		trend := churnTrend(fe.monthChurn, ds.Earliest, ds.Latest)
+		label := classifyFile(fe.recentChurn, lowChurn, bf, ageDays, trend)
+
 		results = append(results, ChurnRiskResult{
-			Path:           path,
-			RecentChurn:    math.Round(fe.recentChurn*10) / 10,
-			BusFactor:      bf,
-			RiskScore:      math.Round(risk*10) / 10,
-			TotalChanges:   fe.commits,
-			LastChangeDate: lastDate,
+			Path:            path,
+			RecentChurn:     math.Round(fe.recentChurn*10) / 10,
+			BusFactor:       bf,
+			RiskScore:       math.Round(risk*10) / 10,
+			TotalChanges:    fe.commits,
+			LastChangeDate:  lastDate,
+			FirstChangeDate: firstDate,
+			AgeDays:         ageDays,
+			Trend:           math.Round(trend*100) / 100,
+			Label:           label,
 		})
 	}
 
+	// Primary sort: recent churn descending (attention = where the activity is).
+	// Tiebreak: lower bus factor first (more concentrated = more exposed).
+	// Final tiebreak on path asc for determinism when integer bus_factor ties.
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].RiskScore > results[j].RiskScore
+		if results[i].RecentChurn != results[j].RecentChurn {
+			return results[i].RecentChurn > results[j].RecentChurn
+		}
+		if results[i].BusFactor != results[j].BusFactor {
+			return results[i].BusFactor < results[j].BusFactor
+		}
+		return results[i].Path < results[j].Path
 	})
 
 	if n > 0 && n < len(results) {
@@ -478,7 +651,7 @@ func TopCommits(ds *Dataset, n int) []BigCommit {
 			SHA:          sha,
 			AuthorName:   authorName,
 			AuthorEmail:  cm.email,
-			Date:         cm.date.Format("2006-01-02"),
+			Date:         cm.date.UTC().Format("2006-01-02"),
 			Message:      msg,
 			Additions:    cm.add,
 			Deletions:    cm.del,
@@ -487,8 +660,12 @@ func TopCommits(ds *Dataset, n int) []BigCommit {
 		})
 	}
 
+	// Deterministic ordering under ties: lines desc, then SHA asc.
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].LinesChanged > result[j].LinesChanged
+		if result[i].LinesChanged != result[j].LinesChanged {
+			return result[i].LinesChanged > result[j].LinesChanged
+		}
+		return result[i].SHA < result[j].SHA
 	})
 
 	if n > 0 && n < len(result) {
@@ -529,7 +706,8 @@ type DirScope struct {
 
 type DevCollaborator struct {
 	Email       string
-	SharedFiles int
+	SharedFiles int   // files where both devs contributed at least one line
+	SharedLines int64 // Σ min(linesA, linesB) across shared files — mirrors DeveloperNetwork
 }
 
 type DevFileContrib struct {
@@ -558,6 +736,65 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		}
 	}
 
+	// Per-dev collaborator pairs pre-computed in one pass over ds.files.
+	// Previously computed inside the per-dev loop below as O(D × F × D_avg),
+	// which is O(1.2e9) on kubernetes. Pre-computing is O(F × D_per_file²)
+	// = O(7e5), roughly three orders of magnitude faster.
+	//
+	// Trade-off: peak memory holds one acc entry per ordered dev-pair that
+	// shares at least one file (~50 MB on kubernetes, ~150 MB on linux).
+	// Acceptable for modern machines; if it matters, a map[devPair]*collabAcc
+	// keyed by sorted pair would halve memory at the cost of a read-time
+	// sort step.
+	type collabAcc struct {
+		files int
+		lines int64
+	}
+	allCollabs := make(map[string]map[string]*collabAcc)
+	for _, fe := range ds.files {
+		if len(fe.devLines) < 2 {
+			continue
+		}
+		devs := make([]string, 0, len(fe.devLines))
+		for email := range fe.devLines {
+			devs = append(devs, email)
+		}
+		// Undirected pair accumulation: write to both a→b and b→a so each
+		// dev's map contains everyone they share the file with.
+		for i := 0; i < len(devs); i++ {
+			a := devs[i]
+			la := fe.devLines[a]
+			for j := i + 1; j < len(devs); j++ {
+				b := devs[j]
+				lb := fe.devLines[b]
+				overlap := la
+				if lb < overlap {
+					overlap = lb
+				}
+				if allCollabs[a] == nil {
+					allCollabs[a] = make(map[string]*collabAcc)
+				}
+				accA := allCollabs[a][b]
+				if accA == nil {
+					accA = &collabAcc{}
+					allCollabs[a][b] = accA
+				}
+				accA.files++
+				accA.lines += overlap
+				if allCollabs[b] == nil {
+					allCollabs[b] = make(map[string]*collabAcc)
+				}
+				accB := allCollabs[b][a]
+				if accB == nil {
+					accB = &collabAcc{}
+					allCollabs[b][a] = accB
+				}
+				accB.files++
+				accB.lines += overlap
+			}
+		}
+	}
+
 	// Per-dev work grid + monthly activity
 	devGrid := make(map[string]*[7][24]int)
 	devMonthly := make(map[string]map[string]*ActivityBucket)
@@ -574,10 +811,13 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		if devGrid[cm.email] == nil {
 			devGrid[cm.email] = &[7][24]int{}
 		}
+		// devGrid uses local TZ on purpose — it describes the author's
+		// work rhythm (when *they* were typing), not UTC instants.
 		di := dayIdx[cm.date.Weekday()]
 		devGrid[cm.email][di][cm.date.Hour()]++
 
-		month := cm.date.Format("2006-01")
+		// Monthly bucket uses UTC for stable grouping.
+		month := cm.date.UTC().Format("2006-01")
 		if devMonthly[cm.email] == nil {
 			devMonthly[cm.email] = make(map[string]*ActivityBucket)
 		}
@@ -602,8 +842,14 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			for path, fa := range files {
 				topFiles = append(topFiles, DevFileContrib{Path: path, Commits: fa.commits, Churn: fa.churn})
 			}
+			// Deterministic: churn desc, then path asc. Without the path
+			// tiebreaker, devs with several files tied on churn would get
+			// different top-N across runs.
 			sort.Slice(topFiles, func(i, j int) bool {
-				return topFiles[i].Churn > topFiles[j].Churn
+				if topFiles[i].Churn != topFiles[j].Churn {
+					return topFiles[i].Churn > topFiles[j].Churn
+				}
+				return topFiles[i].Path < topFiles[j].Path
 			})
 			if len(topFiles) > 10 {
 				topFiles = topFiles[:10]
@@ -659,7 +905,13 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			}
 			scope = append(scope, DirScope{Dir: dir, Files: count, Pct: pct})
 		}
-		sort.Slice(scope, func(i, j int) bool { return scope[i].Files > scope[j].Files })
+		// Deterministic: file count desc, then dir asc.
+		sort.Slice(scope, func(i, j int) bool {
+			if scope[i].Files != scope[j].Files {
+				return scope[i].Files > scope[j].Files
+			}
+			return scope[i].Dir < scope[j].Dir
+		})
 		if len(scope) > 5 {
 			scope = scope[:5]
 		}
@@ -670,9 +922,9 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		if cs.Additions > 0 {
 			contribRatio = math.Round(float64(cs.Deletions)/float64(cs.Additions)*100) / 100
 		}
-		if contribRatio >= 0.8 {
+		if contribRatio >= contribRefactorRatio {
 			contribType = "refactor"
-		} else if contribRatio >= 0.4 {
+		} else if contribRatio >= contribBalancedRatio {
 			contribType = "balanced"
 		}
 
@@ -682,23 +934,25 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			pace = math.Round(float64(cs.Commits)/float64(cs.ActiveDays)*10) / 10
 		}
 
-		// Collaborators: devs sharing files with this dev
-		collabMap := make(map[string]int)
-		for _, fe := range ds.files {
-			if _, ok := fe.devLines[email]; !ok {
-				continue
-			}
-			for otherEmail := range fe.devLines {
-				if otherEmail != email {
-					collabMap[otherEmail]++
-				}
-			}
-		}
+		// Collaborators: looked up from the pre-computed allCollabs map
+		// (built once before this loop). SharedLines uses the min-per-file
+		// overlap (same semantics as DeveloperNetwork).
 		var collabs []DevCollaborator
-		for e, count := range collabMap {
-			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: count})
+		if m, ok := allCollabs[email]; ok {
+			for e, acc := range m {
+				collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: acc.files, SharedLines: acc.lines})
+			}
 		}
-		sort.Slice(collabs, func(i, j int) bool { return collabs[i].SharedFiles > collabs[j].SharedFiles })
+		// Deterministic: shared-lines desc, shared-files desc, email asc.
+		sort.Slice(collabs, func(i, j int) bool {
+			if collabs[i].SharedLines != collabs[j].SharedLines {
+				return collabs[i].SharedLines > collabs[j].SharedLines
+			}
+			if collabs[i].SharedFiles != collabs[j].SharedFiles {
+				return collabs[i].SharedFiles > collabs[j].SharedFiles
+			}
+			return collabs[i].Email < collabs[j].Email
+		})
 		if len(collabs) > 5 {
 			collabs = collabs[:5]
 		}
@@ -715,8 +969,12 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		})
 	}
 
+	// Deterministic ordering under ties: commits desc, then email asc.
 	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].Commits > profiles[j].Commits
+		if profiles[i].Commits != profiles[j].Commits {
+			return profiles[i].Commits > profiles[j].Commits
+		}
+		return profiles[i].Email < profiles[j].Email
 	})
 
 	return profiles
@@ -724,7 +982,11 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 
 func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 	type devPair struct{ a, b string }
-	pairFiles := make(map[devPair]int)
+	type pairAcc struct {
+		files       int
+		sharedLines int64
+	}
+	pairs := make(map[devPair]*pairAcc)
 	devFileCount := make(map[string]int)
 
 	for _, fe := range ds.files {
@@ -741,14 +1003,28 @@ func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 				if a > b {
 					a, b = b, a
 				}
-				pairFiles[devPair{a, b}]++
+				acc, ok := pairs[devPair{a, b}]
+				if !ok {
+					acc = &pairAcc{}
+					pairs[devPair{a, b}] = acc
+				}
+				acc.files++
+				// Real overlap signal: min of each dev's line contribution to
+				// the file. If Alice edited 1 line of README and Bob edited
+				// 200, they share 1 line of real collaboration, not 200.
+				la, lb := fe.devLines[a], fe.devLines[b]
+				if la < lb {
+					acc.sharedLines += la
+				} else {
+					acc.sharedLines += lb
+				}
 			}
 		}
 	}
 
 	var results []DevEdge
-	for p, shared := range pairFiles {
-		if shared < minSharedFiles {
+	for p, acc := range pairs {
+		if acc.files < minSharedFiles {
 			continue
 		}
 		maxFiles := devFileCount[p.a]
@@ -757,18 +1033,29 @@ func DeveloperNetwork(ds *Dataset, n, minSharedFiles int) []DevEdge {
 		}
 		weight := 0.0
 		if maxFiles > 0 {
-			weight = float64(shared) / float64(maxFiles) * 100
+			weight = float64(acc.files) / float64(maxFiles) * 100
 		}
 		results = append(results, DevEdge{
 			DevA:        p.a,
 			DevB:        p.b,
-			SharedFiles: shared,
+			SharedFiles: acc.files,
+			SharedLines: acc.sharedLines,
 			Weight:      math.Round(weight*10) / 10,
 		})
 	}
 
+	// Shared-lines desc, shared-files desc, then dev-pair-asc final tiebreak.
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].SharedFiles > results[j].SharedFiles
+		if results[i].SharedLines != results[j].SharedLines {
+			return results[i].SharedLines > results[j].SharedLines
+		}
+		if results[i].SharedFiles != results[j].SharedFiles {
+			return results[i].SharedFiles > results[j].SharedFiles
+		}
+		if results[i].DevA != results[j].DevA {
+			return results[i].DevA < results[j].DevA
+		}
+		return results[i].DevB < results[j].DevB
 	})
 
 	if n > 0 && n < len(results) {

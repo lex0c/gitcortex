@@ -77,12 +77,12 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{if .Profile.Collaborators}}
 <div style="margin-bottom:16px;">
   <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Collaboration</div>
-  <div class="hint" style="margin-bottom:6px;">Developers who touch the same files as this developer (number = shared files). Higher counts signal close collaboration or shared ownership; few connections with high counts suggest a tight pair rather than broad reach.</div>
+  <div class="hint" style="margin-bottom:6px;">Developers who touch the same files as this developer. <b>files</b> = shared file count; <b>lines</b> = Σ min(linesA, linesB) across those files — the honest overlap signal that discounts trivial one-line touches. Sorted by shared lines.</div>
   <div style="display:flex; flex-wrap:wrap; gap:6px;">
     {{range .Profile.Collaborators}}
     <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; background:#fff; border:1px solid #d0d7de; border-radius:16px; font-size:11px;">
       <span class="mono">{{.Email}}</span>
-      <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;">{{.SharedFiles}}</span>
+      <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;" title="{{.SharedFiles}} files / {{.SharedLines}} lines">{{.SharedFiles}}f · {{.SharedLines}}l</span>
     </span>
     {{end}}
   </div>

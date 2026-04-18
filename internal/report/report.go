@@ -35,15 +35,17 @@ type ReportData struct {
 }
 
 type ParetoData struct {
-	FilesPct80Churn   float64 // % of files that account for 80% of churn
-	DevsPct80Commits  float64 // % of devs that account for 80% of commits
-	DirsPct80Churn    float64 // % of dirs that account for 80% of churn
-	TopChurnFiles     int
-	TotalFiles        int
-	TopCommitDevs     int
-	TotalDevs         int
-	TopChurnDirs      int
-	TotalDirs         int
+	FilesPct80Churn  float64 // % of files that account for 80% of churn
+	DevsPct80Commits float64 // % of devs that account for 80% of commits
+	DevsPct80Churn   float64 // % of devs that account for 80% of churn (see METRICS.md — complements commits)
+	DirsPct80Churn   float64 // % of dirs that account for 80% of churn
+	TopChurnFiles    int
+	TotalFiles       int
+	TopCommitDevs    int
+	TopChurnDevs     int
+	TotalDevs        int
+	TopChurnDirs     int
+	TotalDirs        int
 }
 
 func ComputePareto(ds *stats.Dataset) ParetoData {
@@ -57,37 +59,84 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 		totalChurn += h.Churn
 	}
 	p.TotalFiles = len(hotspots)
-	threshold := float64(totalChurn) * 0.8
-	var cum int64
-	for _, h := range hotspots {
-		cum += h.Churn
-		p.TopChurnFiles++
-		if float64(cum) >= threshold {
-			break
+	// Guard: when totalChurn is zero (merges-only dataset, or all empty
+	// commits), skip the loop entirely. Without this, the first iteration
+	// trips on `cum >= 0` and leaves TopChurnFiles = 1 for empty signal.
+	if totalChurn > 0 {
+		threshold := float64(totalChurn) * 0.8
+		var cum int64
+		for _, h := range hotspots {
+			cum += h.Churn
+			p.TopChurnFiles++
+			if float64(cum) >= threshold {
+				break
+			}
+		}
+		if p.TotalFiles > 0 {
+			p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
 		}
 	}
-	if p.TotalFiles > 0 {
-		p.FilesPct80Churn = math.Round(float64(p.TopChurnFiles) / float64(p.TotalFiles) * 1000) / 10
-	}
 
-	// Devs: % of devs for 80% of commits
+	// Devs: two complementary lenses.
+	// - 80% of commits: rewards frequent committers (bots, squash-off teams).
+	// - 80% of churn:   rewards volume of lines written/removed.
+	// Divergence between the two is informative (bot author vs feature author).
 	contribs := stats.TopContributors(ds, 0)
+	p.TotalDevs = len(contribs)
+
 	var totalCommits int
 	for _, c := range contribs {
 		totalCommits += c.Commits
 	}
-	p.TotalDevs = len(contribs)
-	commitThreshold := float64(totalCommits) * 0.8
-	var cumCommits int
-	for _, c := range contribs {
-		cumCommits += c.Commits
-		p.TopCommitDevs++
-		if float64(cumCommits) >= commitThreshold {
-			break
+	// Guard: when the aggregate is zero, the 80% threshold is zero and the
+	// first iteration trips it, producing TopX=1 for an empty signal. Skip.
+	if totalCommits > 0 {
+		commitThreshold := float64(totalCommits) * 0.8
+		var cumCommits int
+		for _, c := range contribs {
+			cumCommits += c.Commits
+			p.TopCommitDevs++
+			if float64(cumCommits) >= commitThreshold {
+				break
+			}
+		}
+		if p.TotalDevs > 0 {
+			p.DevsPct80Commits = math.Round(float64(p.TopCommitDevs) / float64(p.TotalDevs) * 1000) / 10
 		}
 	}
-	if p.TotalDevs > 0 {
-		p.DevsPct80Commits = math.Round(float64(p.TopCommitDevs) / float64(p.TotalDevs) * 1000) / 10
+
+	// Dev churn ranking: re-sort contribs by lines changed, apply same 80%
+	// cumulative cutoff. Tiebreaker on email asc for determinism. The copy
+	// preserves the commits-ordered `contribs` slice in case of future reuse.
+	byChurn := make([]stats.ContributorStat, len(contribs))
+	copy(byChurn, contribs)
+	sort.Slice(byChurn, func(i, j int) bool {
+		li := byChurn[i].Additions + byChurn[i].Deletions
+		lj := byChurn[j].Additions + byChurn[j].Deletions
+		if li != lj {
+			return li > lj
+		}
+		return byChurn[i].Email < byChurn[j].Email
+	})
+	var totalDevChurn int64
+	for _, c := range byChurn {
+		totalDevChurn += c.Additions + c.Deletions
+	}
+	// Same zero-aggregate guard as above. Without it, zero-churn datasets
+	// (e.g., all empty commits) would report 1 dev as the 80% owner.
+	if totalDevChurn > 0 {
+		devChurnThreshold := float64(totalDevChurn) * 0.8
+		var cumDevChurn int64
+		for _, c := range byChurn {
+			cumDevChurn += c.Additions + c.Deletions
+			p.TopChurnDevs++
+			if float64(cumDevChurn) >= devChurnThreshold {
+				break
+			}
+		}
+		if p.TotalDevs > 0 {
+			p.DevsPct80Churn = math.Round(float64(p.TopChurnDevs) / float64(p.TotalDevs) * 1000) / 10
+		}
 	}
 
 	// Dirs: % of dirs for 80% of churn
@@ -97,17 +146,20 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 		totalDirChurn += d.Churn
 	}
 	p.TotalDirs = len(dirs)
-	dirThreshold := float64(totalDirChurn) * 0.8
-	var cumDirChurn int64
-	for _, d := range dirs {
-		cumDirChurn += d.Churn
-		p.TopChurnDirs++
-		if float64(cumDirChurn) >= dirThreshold {
-			break
+	// Same zero-churn guard as files.
+	if totalDirChurn > 0 {
+		dirThreshold := float64(totalDirChurn) * 0.8
+		var cumDirChurn int64
+		for _, d := range dirs {
+			cumDirChurn += d.Churn
+			p.TopChurnDirs++
+			if float64(cumDirChurn) >= dirThreshold {
+				break
+			}
 		}
-	}
-	if p.TotalDirs > 0 {
-		p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
+		if p.TotalDirs > 0 {
+			p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
+		}
 	}
 
 	return p

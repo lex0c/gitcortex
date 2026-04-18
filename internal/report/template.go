@@ -56,24 +56,31 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <p class="hint">Pareto distribution across files, developers, and directories. Few items carrying 80% of activity means high concentration. Red and yellow markers deserve a closer look — concentration may signal a critical core module or a knowledge bottleneck, depending on context.</p>
 <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:24px;">
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalFiles 0}}⚪{{else if le .Pareto.FilesPct80Churn 10.0}}🔴{{else if le .Pareto.FilesPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnFiles 0}}⚪{{else if le .Pareto.FilesPct80Churn 10.0}}🔴{{else if le .Pareto.FilesPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnFiles}} files concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{if eq .Pareto.TotalFiles 0}}no data{{else if le .Pareto.FilesPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.FilesPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{if eq .Pareto.TopChurnFiles 0}}no data{{else if le .Pareto.FilesPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.FilesPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalDevs 0}}⚪{{else if le .Pareto.DevsPct80Commits 10.0}}🔴{{else if le .Pareto.DevsPct80Commits 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopCommitDevs 0}}⚪{{else if le .Pareto.DevsPct80Commits 10.0}}🔴{{else if le .Pareto.DevsPct80Commits 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopCommitDevs}} devs produce 80% of all commits</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TotalDevs 0}}no data{{else if le .Pareto.DevsPct80Commits 10.0}}extremely concentrated, key-person dependence{{else if le .Pareto.DevsPct80Commits 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TopCommitDevs 0}}no data{{else if le .Pareto.DevsPct80Commits 10.0}}extremely concentrated, key-person dependence{{else if le .Pareto.DevsPct80Commits 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
-    <span style="font-size:20px;">{{if eq .Pareto.TotalDirs 0}}⚪{{else if le .Pareto.DirsPct80Churn 10.0}}🔴{{else if le .Pareto.DirsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnDevs 0}}⚪{{else if le .Pareto.DevsPct80Churn 10.0}}🔴{{else if le .Pareto.DevsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
+    <div>
+      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDevs}} devs produce 80% of all line churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{if eq .Pareto.TopChurnDevs 0}}no data{{else if le .Pareto.DevsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DevsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}. Compare to the commits card: divergence reveals bots (commits ≫ churn) or feature owners (churn ≫ commits).</div>
+    </div>
+  </div>
+  <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
+    <span style="font-size:20px;">{{if eq .Pareto.TopChurnDirs 0}}⚪{{else if le .Pareto.DirsPct80Churn 10.0}}🔴{{else if le .Pareto.DirsPct80Churn 25.0}}🟡{{else}}🟢{{end}}</span>
     <div>
       <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDirs}} directories concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{if eq .Pareto.TotalDirs 0}}no data{{else if le .Pareto.DirsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DirsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
+      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{if eq .Pareto.TopChurnDirs 0}}no data{{else if le .Pareto.DirsPct80Churn 10.0}}extremely concentrated{{else if le .Pareto.DirsPct80Churn 25.0}}moderately concentrated{{else}}well distributed{{end}}</div>
     </div>
   </div>
 </div>
@@ -156,13 +163,13 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Directories}}
 <h2>Directories</h2>
-<p class="hint">Module-level health. Commits and churn aggregated by directory. Low bus factor = knowledge concentrated in few people.</p>
+<p class="hint">Module-level health. <b>File touches</b> is the sum of per-file commit counts (one commit touching N files contributes N), not distinct commits. Low bus factor = knowledge concentrated in few people.</p>
 <table>
-<tr><th>Directory</th><th>Commits</th><th>Churn</th><th>Files</th><th>Devs</th><th>Bus Factor</th></tr>
+<tr><th>Directory</th><th>File Touches</th><th>Churn</th><th>Files</th><th>Devs</th><th>Bus Factor</th></tr>
 {{range .Directories}}
 <tr>
   <td class="mono">{{.Dir}}</td>
-  <td>{{.Commits}}</td>
+  <td>{{.FileTouches}}</td>
   <td>{{.Churn}}</td>
   <td>{{.Files}}</td>
   <td>{{.UniqueDevs}}</td>
@@ -174,17 +181,19 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
-<p class="hint">Files ranked by recent churn weighted by bus factor. High risk = lots of recent changes owned by few people. Prioritize knowledge transfer here.</p>
+<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.</p>
 <table>
-<tr><th>Path</th><th>Risk</th><th></th><th>Recent Churn</th><th>Bus Factor</th><th>Last Change</th></tr>
-{{$maxRisk := 0.0}}{{range .ChurnRisk}}{{if gt .RiskScore $maxRisk}}{{$maxRisk = .RiskScore}}{{end}}{{end}}
+<tr><th>Path</th><th>Label</th><th>Recent Churn</th><th></th><th>BF</th><th>Age</th><th>Trend</th><th>Last Change</th></tr>
+{{$maxChurn := 0.0}}{{range .ChurnRisk}}{{if gt .RecentChurn $maxChurn}}{{$maxChurn = .RecentChurn}}{{end}}{{end}}
 {{range .ChurnRisk}}
 <tr>
   <td class="mono truncate">{{.Path}}</td>
-  <td>{{printf "%.1f" .RiskScore}}</td>
-  <td style="width:20%"><div class="bar-container"><div class="bar bar-del" style="width: {{printf "%.0f" (pct (int64 .RiskScore) (int64 $maxRisk))}}%"></div></div></td>
+  <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
+  <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{printf "%.0f" (pct (int64 .RecentChurn) (int64 $maxChurn))}}%"></div></div></td>
   <td>{{.BusFactor}}</td>
+  <td>{{.AgeDays}}d</td>
+  <td>{{if lt .Trend 0.5}}↓ {{printf "%.2f" .Trend}}{{else if gt .Trend 1.5}}↑ {{printf "%.2f" .Trend}}{{else}}→ {{printf "%.2f" .Trend}}{{end}}</td>
   <td class="mono">{{.LastChangeDate}}</td>
 </tr>
 {{end}}
@@ -258,14 +267,15 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .DevNetwork}}
 <h2>Developer Network</h2>
-<p class="hint">Developers who modify the same files. Strong connections indicate collaboration or shared ownership. Isolated nodes may signal silos.</p>
+<p class="hint">Developers who modify the same files. <b>Shared lines</b> = Σ min(lines_A, lines_B) per file — measures real overlap, not trivial one-line touches. Sorted by shared lines.</p>
 <table>
-<tr><th>Developer A</th><th>Developer B</th><th>Shared Files</th><th>Weight</th></tr>
+<tr><th>Developer A</th><th>Developer B</th><th>Shared Files</th><th>Shared Lines</th><th>Weight</th></tr>
 {{range .DevNetwork}}
 <tr>
   <td class="mono" style="font-size:11px">{{.DevA}}</td>
   <td class="mono" style="font-size:11px">{{.DevB}}</td>
   <td>{{.SharedFiles}}</td>
+  <td>{{.SharedLines}}</td>
   <td><div class="bar-container"><div class="bar bar-score" style="width: {{.Weight}}%"></div><span class="bar-value">{{printf "%.1f" .Weight}}%</span></div></td>
 </tr>
 {{end}}
@@ -291,7 +301,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span>{{printf "%.1f" .Pace}} commits/active day</span>
 
     <span style="color:#656d76;">Collaboration</span>
-    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}}){{end}}{{else}}solo contributor{{end}}</span>
+    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}} files, {{$c.SharedLines}} lines){{end}}{{else}}solo contributor{{end}}</span>
 
     <span style="color:#656d76;">Weekend</span>
     <span>{{printf "%.1f" .WeekendPct}}%</span>

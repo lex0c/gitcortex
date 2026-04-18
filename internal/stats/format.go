@@ -124,20 +124,20 @@ func (f *Formatter) PrintDirectories(dirs []DirStat) error {
 		for i, d := range dirs {
 			rows[i] = []string{
 				d.Dir,
-				fmt.Sprintf("%d", d.Commits),
+				fmt.Sprintf("%d", d.FileTouches),
 				fmt.Sprintf("%d", d.Churn),
 				fmt.Sprintf("%d", d.Files),
 				fmt.Sprintf("%d", d.UniqueDevs),
 				fmt.Sprintf("%d", d.BusFactor),
 			}
 		}
-		return f.writeCSV([]string{"directory", "commits", "churn", "files", "devs", "bus_factor"}, rows)
+		return f.writeCSV([]string{"directory", "file_touches", "churn", "files", "devs", "bus_factor"}, rows)
 	default:
 		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(tw, "DIRECTORY\tCOMMITS\tCHURN\tFILES\tDEVS\tBUS FACTOR\n")
-		fmt.Fprintf(tw, "---------\t-------\t-----\t-----\t----\t----------\n")
+		fmt.Fprintf(tw, "DIRECTORY\tFILE TOUCHES\tCHURN\tFILES\tDEVS\tBUS FACTOR\n")
+		fmt.Fprintf(tw, "---------\t------------\t-----\t-----\t----\t----------\n")
 		for _, d := range dirs {
-			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\n", d.Dir, d.Commits, d.Churn, d.Files, d.UniqueDevs, d.BusFactor)
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%d\t%d\t%d\n", d.Dir, d.FileTouches, d.Churn, d.Files, d.UniqueDevs, d.BusFactor)
 		}
 		return tw.Flush()
 	}
@@ -230,20 +230,23 @@ func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
 		for i, r := range results {
 			rows[i] = []string{
 				r.Path,
-				fmt.Sprintf("%.1f", r.RiskScore),
+				r.Label,
 				fmt.Sprintf("%.1f", r.RecentChurn),
 				fmt.Sprintf("%d", r.BusFactor),
+				fmt.Sprintf("%d", r.AgeDays),
+				fmt.Sprintf("%.2f", r.Trend),
 				fmt.Sprintf("%d", r.TotalChanges),
+				r.FirstChangeDate,
 				r.LastChangeDate,
 			}
 		}
-		return f.writeCSV([]string{"path", "risk_score", "recent_churn", "bus_factor", "total_changes", "last_change"}, rows)
+		return f.writeCSV([]string{"path", "label", "recent_churn", "bus_factor", "age_days", "trend", "total_changes", "first_change", "last_change"}, rows)
 	default:
 		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(tw, "PATH\tRISK\tRECENT CHURN\tBUS FACTOR\tTOTAL CHANGES\tLAST CHANGE\n")
-		fmt.Fprintf(tw, "----\t----\t------------\t----------\t-------------\t-----------\n")
+		fmt.Fprintf(tw, "PATH\tLABEL\tRECENT CHURN\tBF\tAGE\tTREND\tLAST CHANGE\n")
+		fmt.Fprintf(tw, "----\t-----\t------------\t--\t---\t-----\t-----------\n")
 		for _, r := range results {
-			fmt.Fprintf(tw, "%s\t%.1f\t%.1f\t%d\t%d\t%s\n", r.Path, r.RiskScore, r.RecentChurn, r.BusFactor, r.TotalChanges, r.LastChangeDate)
+			fmt.Fprintf(tw, "%s\t%s\t%.1f\t%d\t%dd\t%.2f\t%s\n", r.Path, r.Label, r.RecentChurn, r.BusFactor, r.AgeDays, r.Trend, r.LastChangeDate)
 		}
 		return tw.Flush()
 	}
@@ -301,16 +304,17 @@ func (f *Formatter) PrintDevNetwork(edges []DevEdge) error {
 			rows[i] = []string{
 				e.DevA, e.DevB,
 				fmt.Sprintf("%d", e.SharedFiles),
+				fmt.Sprintf("%d", e.SharedLines),
 				fmt.Sprintf("%.1f", e.Weight),
 			}
 		}
-		return f.writeCSV([]string{"dev_a", "dev_b", "shared_files", "weight_pct"}, rows)
+		return f.writeCSV([]string{"dev_a", "dev_b", "shared_files", "shared_lines", "weight_pct"}, rows)
 	default:
 		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(tw, "DEV A\tDEV B\tSHARED FILES\tWEIGHT\n")
-		fmt.Fprintf(tw, "-----\t-----\t------------\t------\n")
+		fmt.Fprintf(tw, "DEV A\tDEV B\tSHARED FILES\tSHARED LINES\tWEIGHT\n")
+		fmt.Fprintf(tw, "-----\t-----\t------------\t------------\t------\n")
 		for _, e := range edges {
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%.1f%%\n", e.DevA, e.DevB, e.SharedFiles, e.Weight)
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%.1f%%\n", e.DevA, e.DevB, e.SharedFiles, e.SharedLines, e.Weight)
 		}
 		return tw.Flush()
 	}
