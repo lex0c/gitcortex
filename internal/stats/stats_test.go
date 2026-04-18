@@ -747,6 +747,76 @@ func TestChurnRiskPercentilesPopulatedOnLargeDataset(t *testing.T) {
 	}
 }
 
+func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
+	// Mature-repo shape: half the files are dormant (trend=0 via the
+	// earlier-only path), half are active. Without the declining-trend
+	// floor, P25 collapses to 0 and `trend < 0` never fires — dormant
+	// concentrated files would silently be misclassified as silo
+	// instead of legacy-hotspot, hiding the strongest alarm.
+	//
+	// The floor guarantees the threshold is strictly positive so the
+	// signal survives the adaptive-mode switch.
+	latest := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		// Wide span so "earlier" window exists for the active files.
+		Earliest: latest.AddDate(-3, 0, 0),
+		Latest:   latest,
+		files:    map[string]*fileEntry{},
+	}
+
+	// 6 dormant files — single activity 2 years ago, nothing since.
+	// churnTrend returns 0 for these (earlier-only bucket).
+	for i := 0; i < 6; i++ {
+		path := fmt.Sprintf("dormant/old_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 200, // above cold threshold
+			firstChange: latest.AddDate(-2, 0, 0),
+			lastChange:  latest.AddDate(-2, 0, 0),
+			devLines:    map[string]int64{"solo@x": 300}, // bf=1
+			monthChurn:  map[string]int64{"2022-06": 300},
+		}
+	}
+	// 6 active files — current activity, fresh history.
+	for i := 0; i < 6; i++ {
+		path := fmt.Sprintf("active/new_%02d.go", i)
+		ds.files[path] = &fileEntry{
+			commits:     3,
+			additions:   200,
+			deletions:   100,
+			recentChurn: 200,
+			firstChange: latest.AddDate(-2, 0, 0),
+			lastChange:  latest,
+			devLines:    map[string]int64{"a@x": 100, "b@x": 100, "c@x": 100}, // bf=3
+			monthChurn:  map[string]int64{"2024-05": 300},
+		}
+	}
+
+	results := ChurnRisk(ds, 0)
+	var legacyCount int
+	var dormantLabels []string
+	for _, r := range results {
+		if r.Label == "legacy-hotspot" {
+			legacyCount++
+		}
+		if strings.HasPrefix(r.Path, "dormant/") {
+			dormantLabels = append(dormantLabels, r.Label)
+		}
+	}
+	if legacyCount == 0 {
+		t.Errorf("expected dormant+concentrated files to be flagged legacy-hotspot; got 0 "+
+			"(dormant labels: %v). P25 likely collapsed to 0 without the floor.", dormantLabels)
+	}
+	// Sanity: every dormant file (bf=1, old, trend=0) should be legacy-hotspot.
+	for _, lbl := range dormantLabels {
+		if lbl != "legacy-hotspot" {
+			t.Errorf("dormant file got label %q, want legacy-hotspot", lbl)
+		}
+	}
+}
+
 func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
 	// Degenerate trend case: every file's history fits entirely inside the
 	// trend window (earlier bucket is empty), so churnTrend returns the

@@ -19,6 +19,17 @@ const (
 	classifyDecliningTrend    = 0.5  // fallback "declining" threshold under the same condition; adaptive mode uses the P25 of file trends
 	classifyTrendWindowMonths = 3    // recent vs earlier split
 	classifyMinSample         = 8    // below this, percentile estimates are noisy and we fall back to the absolute constants above
+	// adaptiveDecliningTrendFloor keeps the P25-derived "declining"
+	// threshold strictly positive. churnTrend clamps its output at 0
+	// for files with earlier-only history (the strongest
+	// legacy-hotspot signal). In mature repos where ≥25% of files are
+	// dormant, P25 collapses to 0; without this floor, `trend < 0`
+	// never fires and every dormant concentrated file is misrouted to
+	// silo instead of legacy-hotspot — the exact signal the rule is
+	// supposed to surface. Epsilon is small enough not to widen the
+	// declining band past the fallback (0.5) even in the pathological
+	// case, large enough that 0.0 ≠ threshold under float compare.
+	adaptiveDecliningTrendFloor = 0.01
 
 	// Developer profile contribution type (del/add ratio)
 	contribRefactorRatio = 0.8 // ratio ≥ 0.8 → refactor
@@ -604,9 +615,13 @@ func computeBands(ages []int, trends []float64) classifyBands {
 	copy(sortedTrends, trends)
 	sort.Float64s(sortedTrends)
 
+	declining := percentileFloat(sortedTrends, 25)
+	if declining < adaptiveDecliningTrendFloor {
+		declining = adaptiveDecliningTrendFloor
+	}
 	return classifyBands{
 		OldAgeDays:     percentileInt(sortedAges, 75),
-		DecliningTrend: percentileFloat(sortedTrends, 25),
+		DecliningTrend: declining,
 		sortedAges:     sortedAges,
 		sortedTrends:   sortedTrends,
 	}

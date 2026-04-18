@@ -146,7 +146,7 @@ Where:
 
 `oldAgeThreshold` and `decliningTrendThreshold` are not fixed constants: they are derived from the dataset's own distribution each run. With at least `classifyMinSample` (8) files present:
 - `oldAgeThreshold` = **P75** of file ages in this dataset
-- `decliningTrendThreshold` = **P25** of file trends in this dataset
+- `decliningTrendThreshold` = **P25** of file trends in this dataset, clamped to at least `adaptiveDecliningTrendFloor` (0.01). The floor matters on mature repos where ≥25% of files are dormant (trend=0 via the earlier-only path): P25 would otherwise collapse to 0 and the strict `trend < threshold` check would never fire, silently misclassifying every dormant concentrated file as `silo` instead of `legacy-hotspot`. The floor keeps the threshold strictly positive so the trend=0 signal — the strongest legacy-hotspot alarm — still reaches the rule.
 
 This makes "old" mean "older than 75% of tracked files in this repo" instead of an absolute 180 days. A 4-year-old file in a 12-year-old codebase was previously tagged `legacy-hotspot` even though it was newer than most of the repo — now the same file lands in `active-core`. Below the sample threshold, the absolute fallbacks `classifyOldAgeDays` and `classifyDecliningTrend` apply so tiny repos still produce labels.
 
@@ -279,6 +279,7 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `classifyOldAgeDays` | `180` | **Fallback only** (dataset < `classifyMinSample` files). Adaptive path uses P75 of the dataset's own age distribution. |
 | `classifyDecliningTrend` | `0.5` | **Fallback only**. Adaptive path uses P25 of the dataset's own trend distribution. |
 | `classifyMinSample` | `8` | Below this many files, percentile estimates are too noisy to trust and the two thresholds above revert to absolutes. |
+| `adaptiveDecliningTrendFloor` | `0.01` | Minimum value for the adaptive `decliningTrendThreshold`. Prevents P25 from collapsing to 0 on mature repos where dormant files dominate, which would hide every legacy-hotspot. |
 | `suspectWarningMinChurnRatio` | `0.10` | Vendor/generated path warning fires only when matched paths together exceed this fraction of total repo churn — prevents a single incidental `.lock` file from triggering noise. |
 | `classifyTrendWindowMonths` | `3` | Window (months, relative to latest commit) for the recent vs earlier split in `trend`. |
 | `contribRefactorRatio` | `0.8` | `del/add ≥ this` → dev profile `contribType = refactor`. |
