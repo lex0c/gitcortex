@@ -138,8 +138,13 @@ type ChurnRiskResult struct {
 	// omitted rather than a `-1` sentinel. Surfacing these alongside the
 	// label makes the distance from the classification boundary visible:
 	// `legacy-hotspot (age P92, trend P08)` vs a file that barely crossed.
-	AgePercentile   *int `json:"age_percentile,omitempty"`
-	TrendPercentile *int `json:"trend_percentile,omitempty"`
+	// Tag form `json:",omitempty"` (with the leading comma) keeps Go's
+	// default PascalCase name — AgePercentile / TrendPercentile — so the
+	// field names match every other field on this struct. Without it
+	// the explicit snake_case name would make the emitted schema mix
+	// two conventions in the same object.
+	AgePercentile   *int `json:",omitempty"`
+	TrendPercentile *int `json:",omitempty"`
 }
 
 type WorkingPattern struct {
