@@ -219,9 +219,23 @@ func printSuspectWarning(w io.Writer, buckets []stats.SuspectBucket) {
 		fmt.Fprintf(w, "     %-22s %4d files, %8d churn   (%s)\n",
 			b.Pattern.Glob, len(b.Paths), b.Churn, b.Pattern.Reason)
 	}
-	fmt.Fprint(w, "   Rerun extract with --ignore to drop them, e.g.:\n     gitcortex extract --repo .")
+	// Deduplicate suggestions across buckets — suggestDirGlob may yield
+	// the same prefix from different seeds in pathological setups, and
+	// constantSuggest is idempotent across repeated matches.
+	seen := map[string]struct{}{}
+	var suggestions []string
 	for _, b := range shown {
-		fmt.Fprintf(w, " --ignore '%s'", b.Pattern.Glob)
+		for _, s := range b.Suggestions {
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			suggestions = append(suggestions, s)
+		}
+	}
+	fmt.Fprint(w, "   Rerun extract with --ignore to drop them, e.g.:\n     gitcortex extract --repo .")
+	for _, s := range suggestions {
+		fmt.Fprintf(w, " --ignore '%s'", s)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)

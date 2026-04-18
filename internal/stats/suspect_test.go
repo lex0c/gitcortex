@@ -75,6 +75,94 @@ func TestDetectSuspectFilesEmpty(t *testing.T) {
 	}
 }
 
+func TestDetectSuspectFilesNestedDirSuggestions(t *testing.T) {
+	// Directory-segment matcher catches nested occurrences (pkg/vendor/...,
+	// subproject/node_modules/...), but the Glob label is only a short
+	// bucket header. The Suggestions list must include the *specific*
+	// parent paths so extract --ignore actually removes the matched
+	// files — extract treats "vendor/*" as a repo-root prefix and will
+	// not match "pkg/vendor/foo.go".
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"vendor/a.go":               {additions: 100, deletions: 50},
+			"pkg/vendor/b.go":           {additions: 100, deletions: 50},
+			"pkg/vendor/c.go":           {additions: 100, deletions: 50},
+			"services/auth/vendor/d.go": {additions: 100, deletions: 50},
+			"node_modules/e.js":         {additions: 50, deletions: 25},
+			"sub/node_modules/f.js":     {additions: 50, deletions: 25},
+		},
+	}
+	buckets, _ := DetectSuspectFiles(ds)
+	byGlob := map[string]SuspectBucket{}
+	for _, b := range buckets {
+		byGlob[b.Pattern.Glob] = b
+	}
+
+	vb, ok := byGlob["vendor/*"]
+	if !ok {
+		t.Fatal("vendor/* bucket missing")
+	}
+	wantVendor := map[string]bool{"vendor/*": true, "pkg/vendor/*": true, "services/auth/vendor/*": true}
+	if len(vb.Suggestions) != len(wantVendor) {
+		t.Errorf("vendor Suggestions = %v, want keys %v", vb.Suggestions, keys(wantVendor))
+	}
+	for _, s := range vb.Suggestions {
+		if !wantVendor[s] {
+			t.Errorf("unexpected vendor suggestion %q", s)
+		}
+	}
+
+	nm, ok := byGlob["node_modules/*"]
+	if !ok {
+		t.Fatal("node_modules/* bucket missing")
+	}
+	wantNM := map[string]bool{"node_modules/*": true, "sub/node_modules/*": true}
+	for _, s := range nm.Suggestions {
+		if !wantNM[s] {
+			t.Errorf("unexpected node_modules suggestion %q", s)
+		}
+	}
+	if len(nm.Suggestions) != len(wantNM) {
+		t.Errorf("node_modules Suggestions = %v, want %v", nm.Suggestions, keys(wantNM))
+	}
+}
+
+func TestDetectSuspectFilesSuffixSuggestionsUnchanged(t *testing.T) {
+	// Suffix/basename matchers already work at any depth via extract's
+	// basename match path, so their Suggestions collapse to a single
+	// canonical glob regardless of how deeply nested the matches are.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"app.min.js":               {additions: 500, deletions: 500},
+			"static/jquery.min.js":     {additions: 500, deletions: 500},
+			"sub/dist/foo/bar.min.js":  {additions: 500, deletions: 500}, // also matches dist/*, first match wins
+			"pkg/sub/package-lock.json": {additions: 500, deletions: 500},
+			"package-lock.json":        {additions: 500, deletions: 500},
+		},
+	}
+	buckets, _ := DetectSuspectFiles(ds)
+	for _, b := range buckets {
+		switch b.Pattern.Glob {
+		case "*.min.js":
+			if len(b.Suggestions) != 1 || b.Suggestions[0] != "*.min.js" {
+				t.Errorf("*.min.js Suggestions = %v, want [*.min.js]", b.Suggestions)
+			}
+		case "package-lock.json":
+			if len(b.Suggestions) != 1 || b.Suggestions[0] != "package-lock.json" {
+				t.Errorf("package-lock.json Suggestions = %v, want [package-lock.json]", b.Suggestions)
+			}
+		}
+	}
+}
+
+func keys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestDetectSuspectFilesOrdering(t *testing.T) {
 	// Buckets must be sorted by churn desc; ties by glob asc. Determinism
 	// matters because the warning output lists top-N.

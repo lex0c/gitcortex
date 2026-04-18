@@ -12,19 +12,29 @@ import (
 const suspectWarningMinChurnRatio = 0.10
 
 // SuspectPattern is a path heuristic for likely vendor/generated content
-// that would distort hotspots, churn-risk, and bus factor. Glob is a
-// ready-to-paste pattern for the extract --ignore flag.
+// that would distort hotspots, churn-risk, and bus factor. Glob is the
+// bucket label (short, always the same); Suggest returns the actual
+// --ignore glob that matches the path supplied, which may differ for
+// nested occurrences (e.g. vendor appearing under pkg/, subproject/ ...)
+// because extract.shouldIgnore treats directory patterns as repo-root
+// prefixes.
 type SuspectPattern struct {
-	Glob   string
-	Reason string
-	Match  func(path string) bool
+	Glob    string
+	Reason  string
+	Match   func(path string) bool
+	Suggest func(path string) string
 }
 
 // SuspectBucket is one pattern's match set aggregated across the dataset.
+// Suggestions lists the unique extract --ignore globs needed to cover
+// every matched path — typically one entry for suffix/basename patterns,
+// possibly several for directory patterns that matched at multiple
+// depths (e.g. "vendor/*" and "pkg/vendor/*" for the same bucket).
 type SuspectBucket struct {
-	Pattern SuspectPattern
-	Paths   []string
-	Churn   int64
+	Pattern     SuspectPattern
+	Paths       []string
+	Churn       int64
+	Suggestions []string
 }
 
 // defaultSuspectPatterns covers high-confidence vendor/generated paths.
@@ -33,29 +43,56 @@ type SuspectBucket struct {
 // out of scope until we have evidence they help rather than create
 // false positives.
 var defaultSuspectPatterns = []SuspectPattern{
-	{Glob: "vendor/*", Reason: "vendored third-party code", Match: hasPathSegment("vendor")},
-	{Glob: "node_modules/*", Reason: "npm dependencies", Match: hasPathSegment("node_modules")},
-	{Glob: "dist/*", Reason: "build artifacts", Match: hasPathSegment("dist")},
-	{Glob: "build/*", Reason: "build output", Match: hasPathSegment("build")},
-	{Glob: "third_party/*", Reason: "third-party code", Match: hasPathSegment("third_party")},
-	{Glob: "*.min.js", Reason: "minified JS", Match: hasSuffixOf(".min.js")},
-	{Glob: "*.min.css", Reason: "minified CSS", Match: hasSuffixOf(".min.css")},
-	{Glob: "*.lock", Reason: "generic lock file", Match: hasSuffixOf(".lock")},
-	{Glob: "package-lock.json", Reason: "npm lockfile", Match: basenameEquals("package-lock.json")},
-	{Glob: "yarn.lock", Reason: "yarn lockfile", Match: basenameEquals("yarn.lock")},
-	{Glob: "pnpm-lock.yaml", Reason: "pnpm lockfile", Match: basenameEquals("pnpm-lock.yaml")},
-	{Glob: "go.sum", Reason: "go module hashes", Match: basenameEquals("go.sum")},
-	{Glob: "Cargo.lock", Reason: "cargo lockfile", Match: basenameEquals("Cargo.lock")},
-	{Glob: "poetry.lock", Reason: "poetry lockfile", Match: basenameEquals("poetry.lock")},
-	{Glob: "*.pb.go", Reason: "protobuf generated (Go)", Match: hasSuffixOf(".pb.go")},
-	{Glob: "*_pb2.py", Reason: "protobuf generated (Python)", Match: hasSuffixOf("_pb2.py")},
-	{Glob: "*.generated.*", Reason: "generated code", Match: containsSegment(".generated.")},
+	{Glob: "vendor/*", Reason: "vendored third-party code", Match: hasPathSegment("vendor"), Suggest: suggestDirGlob("vendor")},
+	{Glob: "node_modules/*", Reason: "npm dependencies", Match: hasPathSegment("node_modules"), Suggest: suggestDirGlob("node_modules")},
+	{Glob: "dist/*", Reason: "build artifacts", Match: hasPathSegment("dist"), Suggest: suggestDirGlob("dist")},
+	{Glob: "build/*", Reason: "build output", Match: hasPathSegment("build"), Suggest: suggestDirGlob("build")},
+	{Glob: "third_party/*", Reason: "third-party code", Match: hasPathSegment("third_party"), Suggest: suggestDirGlob("third_party")},
+	{Glob: "*.min.js", Reason: "minified JS", Match: hasSuffixOf(".min.js"), Suggest: constantSuggest("*.min.js")},
+	{Glob: "*.min.css", Reason: "minified CSS", Match: hasSuffixOf(".min.css"), Suggest: constantSuggest("*.min.css")},
+	{Glob: "*.lock", Reason: "generic lock file", Match: hasSuffixOf(".lock"), Suggest: constantSuggest("*.lock")},
+	{Glob: "package-lock.json", Reason: "npm lockfile", Match: basenameEquals("package-lock.json"), Suggest: constantSuggest("package-lock.json")},
+	{Glob: "yarn.lock", Reason: "yarn lockfile", Match: basenameEquals("yarn.lock"), Suggest: constantSuggest("yarn.lock")},
+	{Glob: "pnpm-lock.yaml", Reason: "pnpm lockfile", Match: basenameEquals("pnpm-lock.yaml"), Suggest: constantSuggest("pnpm-lock.yaml")},
+	{Glob: "go.sum", Reason: "go module hashes", Match: basenameEquals("go.sum"), Suggest: constantSuggest("go.sum")},
+	{Glob: "Cargo.lock", Reason: "cargo lockfile", Match: basenameEquals("Cargo.lock"), Suggest: constantSuggest("Cargo.lock")},
+	{Glob: "poetry.lock", Reason: "poetry lockfile", Match: basenameEquals("poetry.lock"), Suggest: constantSuggest("poetry.lock")},
+	{Glob: "*.pb.go", Reason: "protobuf generated (Go)", Match: hasSuffixOf(".pb.go"), Suggest: constantSuggest("*.pb.go")},
+	{Glob: "*_pb2.py", Reason: "protobuf generated (Python)", Match: hasSuffixOf("_pb2.py"), Suggest: constantSuggest("*_pb2.py")},
+	{Glob: "*.generated.*", Reason: "generated code", Match: containsSegment(".generated."), Suggest: constantSuggest("*.generated.*")},
 }
 
 func hasPathSegment(seg string) func(string) bool {
 	return func(p string) bool {
 		return strings.HasPrefix(p, seg+"/") || strings.Contains(p, "/"+seg+"/")
 	}
+}
+
+// suggestDirGlob returns, for the path that matched seg somewhere in its
+// directory chain, the specific "...parent/.../seg/*" glob that extract
+// --ignore will actually act on. extract.shouldIgnore reads "dist/*" as
+// a repo-root prefix, so emitting just that for a match on
+// "pkg/dist/foo.js" would tell the user to run a fix that doesn't
+// remove the offending paths and the warning would keep firing.
+func suggestDirGlob(seg string) func(string) string {
+	return func(p string) string {
+		if strings.HasPrefix(p, seg+"/") {
+			return seg + "/*"
+		}
+		marker := "/" + seg + "/"
+		if i := strings.Index(p, marker); i >= 0 {
+			// p[:i] is everything before "/seg/", add "/seg/*" back.
+			return p[:i] + "/" + seg + "/*"
+		}
+		return seg + "/*"
+	}
+}
+
+func constantSuggest(glob string) func(string) string {
+	// Suffix and basename patterns work at any depth via extract's
+	// basename match, so a single glob suffices regardless of where the
+	// file lives.
+	return func(string) string { return glob }
 }
 
 func hasSuffixOf(suf string) func(string) bool {
@@ -87,6 +124,8 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 	}
 
 	buckets := make(map[string]*SuspectBucket)
+	// Per-bucket suggestion sets so identical globs aren't listed twice.
+	suggSets := make(map[string]map[string]struct{})
 	var totalChurn, suspectChurn int64
 
 	for path, fe := range ds.files {
@@ -103,10 +142,14 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 			if !ok {
 				b = &SuspectBucket{Pattern: pat}
 				buckets[pat.Glob] = b
+				suggSets[pat.Glob] = map[string]struct{}{}
 			}
 			b.Paths = append(b.Paths, path)
 			b.Churn += fileChurn
 			suspectChurn += fileChurn
+			if pat.Suggest != nil {
+				suggSets[pat.Glob][pat.Suggest(path)] = struct{}{}
+			}
 			break
 		}
 	}
@@ -118,6 +161,13 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 	out := make([]SuspectBucket, 0, len(buckets))
 	for _, b := range buckets {
 		sort.Strings(b.Paths) // deterministic inner order
+		if set := suggSets[b.Pattern.Glob]; set != nil {
+			b.Suggestions = make([]string, 0, len(set))
+			for s := range set {
+				b.Suggestions = append(b.Suggestions, s)
+			}
+			sort.Strings(b.Suggestions)
+		}
 		out = append(out, *b)
 	}
 	sort.Slice(out, func(i, j int) bool {
