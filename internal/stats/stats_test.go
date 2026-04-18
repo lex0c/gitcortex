@@ -670,20 +670,51 @@ func TestComputeBandsFallsBackBelowMinSample(t *testing.T) {
 
 func TestComputeBandsAdaptive(t *testing.T) {
 	// With 10 files spanning a wide range, P75 of ages and P25 of trends
-	// should replace the absolute constants.
+	// should replace the absolute constants. Nearest-rank indexing:
+	//   idx(p, n) = ceil(p*n/100) - 1
 	ages := []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 1000}
-	// nearest-rank P75 over 10 items: idx = 75*9/100 = 6 → sorted[6] = 70
+	// P75 over 10 items: ceil(750/100)-1 = 7 → sorted[7] = 80
 	trends := []float64{0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0}
-	// P25 over 10 items: idx = 25*9/100 = 2 → sorted[2] = 0.5
+	// P25 over 10 items: ceil(250/100)-1 = 2 → sorted[2] = 0.5
 	b := computeBands(ages, trends)
 	if !b.HasPercentiles() {
 		t.Fatal("HasPercentiles should be true for 10-item sample")
 	}
-	if b.OldAgeDays != 70 {
-		t.Errorf("adaptive OldAgeDays = %d, want 70 (P75 of 10 values)", b.OldAgeDays)
+	if b.OldAgeDays != 80 {
+		t.Errorf("adaptive OldAgeDays = %d, want 80 (P75 of 10 values, nearest-rank)", b.OldAgeDays)
 	}
 	if b.DecliningTrend != 0.5 {
-		t.Errorf("adaptive DecliningTrend = %.2f, want 0.5 (P25)", b.DecliningTrend)
+		t.Errorf("adaptive DecliningTrend = %.2f, want 0.5 (P25 nearest-rank)", b.DecliningTrend)
+	}
+}
+
+func TestNearestRankIndex(t *testing.T) {
+	cases := []struct {
+		p, n, want int
+	}{
+		// Exact percentile positions (no ceiling kicks in).
+		{25, 4, 0},   // ceil(1.0)-1 = 0
+		{50, 4, 1},   // ceil(2.0)-1 = 1
+		{75, 4, 2},   // ceil(3.0)-1 = 2
+		{100, 4, 3},  // ceil(4.0)-1 = 3
+
+		// Ceiling-driven cases — the classic pitfall the previous
+		// implementation missed.
+		{75, 10, 7},  // ceil(7.5)-1 = 7 (old impl returned 6)
+		{25, 10, 2},  // ceil(2.5)-1 = 2
+		{25, 7, 1},   // ceil(1.75)-1 = 1
+		{75, 11, 8},  // ceil(8.25)-1 = 8
+
+		// Edges: p=0 clamps to 0, p=100 to n-1, n=1 collapses both.
+		{0, 10, 0},
+		{100, 10, 9},
+		{50, 1, 0},
+		{99, 1, 0},
+	}
+	for _, c := range cases {
+		if got := nearestRankIndex(c.p, c.n); got != c.want {
+			t.Errorf("nearestRankIndex(p=%d, n=%d) = %d, want %d", c.p, c.n, got, c.want)
+		}
 	}
 }
 

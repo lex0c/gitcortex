@@ -627,6 +627,38 @@ func computeBands(ages []int, trends []float64) classifyBands {
 	}
 }
 
+// nearestRankIndex returns the 0-indexed slice position for the p-th
+// percentile of an N-element sorted sequence using the textbook
+// nearest-rank method: idx = ceil(p * N / 100) - 1. Tie-rules,
+// clamping, and edge cases (p=0, p=100, N=1) are handled here so
+// percentileInt/percentileFloat stay a single line each.
+//
+// A previous implementation used (p * (N-1)) / 100, which is actually
+// truncated linear-position addressing — it systematically under-picks
+// the cutoff for many {p, N} pairs (e.g. P75 of 10 → idx 6 instead of
+// 7) and lowered oldAgeThreshold / decliningTrendThreshold by one
+// sorted position. Files near the quartile boundary were labelled
+// inconsistently with the stated P75/P25 semantics. Using nearest-rank
+// aligns the implementation with the documentation.
+func nearestRankIndex(p, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	num := p * n
+	idx := num / 100
+	if num%100 != 0 {
+		idx++
+	}
+	idx--
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	return idx
+}
+
 // percentileInt returns the p-th percentile of a sorted int slice using
 // the nearest-rank method. Assumes len(sorted) >= 1 (callers guard via
 // classifyMinSample).
@@ -634,28 +666,14 @@ func percentileInt(sorted []int, p int) int {
 	if len(sorted) == 0 {
 		return 0
 	}
-	idx := (p * (len(sorted) - 1)) / 100
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
+	return sorted[nearestRankIndex(p, len(sorted))]
 }
 
 func percentileFloat(sorted []float64, p int) float64 {
 	if len(sorted) == 0 {
 		return 0
 	}
-	idx := (p * (len(sorted) - 1)) / 100
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
+	return sorted[nearestRankIndex(p, len(sorted))]
 }
 
 // rankInt returns the percentile rank (0-100) of v within a sorted
