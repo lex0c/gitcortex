@@ -299,10 +299,6 @@ Extract emits a warning when the repo has a `.mailmap` file but the flag was omi
 gitcortex extract --repo . --mailmap
 ```
 
-### `--ignore` can desynchronize commit-level and file-level totals
-
-Commit-level fields (`Summary.TotalAdditions/Deletions`) are computed from the `commit` records in JSONL. File-level aggregations (`Hotspots.Churn`, `DirectoryStats.Churn`) come from the `commit_file` records. When `--ignore` filters files during extraction, the commit totals are not re-computed — so `Σ hotspot.churn ≠ TotalAdditions + TotalDeletions`. This is not a bug, but the difference is not surfaced anywhere.
-
 ### Timezone handling
 
 Two classes of metrics, different rules:

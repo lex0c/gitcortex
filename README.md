@@ -46,7 +46,7 @@ Patterns match against the file path as emitted by `git log --raw` (forward-slas
 
 Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
 
-> Once `--ignore` filters a file, commit-level totals (`Summary.TotalAdditions/Deletions`) still include its lines because those are computed from the commit record before the file filter applies. Hotspot/churn totals diverge accordingly — documented in `docs/METRICS.md`.
+> Both commit-level (`Summary.TotalAdditions/Deletions`) and file-level aggregations recompute from the filtered set, so all totals stay consistent after `--ignore` — the extract step recalculates commit additions/deletions as the sum of non-ignored file records before writing them to JSONL.
 
 ## Privacy and reliability
 
