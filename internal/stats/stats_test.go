@@ -692,6 +692,54 @@ func TestChurnTrend(t *testing.T) {
 	if got := churnTrend(recentSingle, earliestWide, latest); got != 2 {
 		t.Errorf("recent-only single-month → %.2f, want 2 (grew from nothing)", got)
 	}
+
+	// Zero-value entry (possible when a month only contains renames with
+	// no content change: cf.Additions + cf.Deletions = 0). Both buckets
+	// end up zero — defensive fallthrough must return 1, not 0 or 2.
+	zeroOnly := map[string]int64{"2024-05": 0}
+	if got := churnTrend(zeroOnly, earliestWide, latest); got != 1 {
+		t.Errorf("zero-value single-month → %.2f, want 1 (no signal)", got)
+	}
+}
+
+func TestChurnRiskLegacyHotspotFromSingleOldMonth(t *testing.T) {
+	// Integration: file touched only in one old month, bf=1, age > 180.
+	// Before the churnTrend fix (len<2 guard), this file returned
+	// trend=1 (stable) and landed at label=silo. After the fix,
+	// trend=0 (declined to nothing) routes it through the legacy-hotspot
+	// branch. Pins the end-to-end wiring so a future regression in
+	// churnTrend, classifyFile, or ChurnRisk can't silently send such
+	// files back to silo.
+	t1 := time.Date(2020, 1, 15, 10, 0, 0, 0, time.UTC)
+	latest := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1,
+		Latest:   latest,
+		files: map[string]*fileEntry{
+			"old.go": {
+				commits:     1,
+				recentChurn: 100, // kept high enough to clear the cold threshold
+				devLines:    map[string]int64{"alice@x": 500},
+				monthChurn:  map[string]int64{"2020-01": 500},
+				firstChange: t1,
+				lastChange:  t1,
+			},
+		},
+	}
+	results := ChurnRisk(ds, 0)
+	if len(results) != 1 {
+		t.Fatalf("len = %d, want 1", len(results))
+	}
+	r := results[0]
+	if r.Label != "legacy-hotspot" {
+		t.Errorf("Label = %q, want legacy-hotspot (single-old-month + bf=1 + age>180)", r.Label)
+	}
+	if r.Trend != 0 {
+		t.Errorf("Trend = %.2f, want 0 (earlier-only — the fix)", r.Trend)
+	}
+	if r.BusFactor != 1 {
+		t.Errorf("BusFactor = %d, want 1", r.BusFactor)
+	}
 }
 
 func TestWorkingPatterns(t *testing.T) {
