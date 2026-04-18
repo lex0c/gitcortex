@@ -1535,16 +1535,80 @@ func TestRenameChainNotMistakenForReuse(t *testing.T) {
 }
 
 func TestRenameCycleDoesNotCrash(t *testing.T) {
-	// Degenerate: A→B then B→A. Canonical resolution should bail out
-	// of the cycle instead of infinite-looping.
+	// Degenerate: A→B then B→A. Canonical resolution should bail out of
+	// the cycle instead of infinite-looping, and — since migration is
+	// ambiguous — both files survive with their own data rather than
+	// one being silently merged into the other.
 	jsonl := `{"type":"commit","sha":"c2","author_name":"A","author_email":"a@x","author_date":"2024-02-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
 {"type":"commit_file","commit":"c2","path_current":"A.go","path_previous":"B.go","status":"R100","additions":1,"deletions":0}
 {"type":"commit","sha":"c1","author_name":"A","author_email":"a@x","author_date":"2024-01-10T10:00:00Z","additions":1,"deletions":0,"files_changed":1}
 {"type":"commit_file","commit":"c1","path_current":"B.go","path_previous":"A.go","status":"R100","additions":1,"deletions":0}
 `
-	_, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
 	if err != nil {
 		t.Fatalf("streamLoad: %v", err)
+	}
+	// Both files must survive the cycle. If the bail logic accidentally
+	// routed one into the other, this would fail.
+	if _, ok := ds.files["A.go"]; !ok {
+		t.Error("A.go missing — cycle bail should leave both files intact")
+	}
+	if _, ok := ds.files["B.go"]; !ok {
+		t.Error("B.go missing — cycle bail should leave both files intact")
+	}
+}
+
+func TestRenameMixedLineageKnownLimitation(t *testing.T) {
+	// Exotic mixed case documented in METRICS.md as a known limitation:
+	//
+	//   t1: A → B         (lineage 1 renames A away)
+	//   t2: C → A         (lineage 2: a different file C takes the name A)
+	//   t3: A → D         (lineage 2 renames away)
+	//
+	// Because the repeated oldPath "A" has an incoming edge (C → A), the
+	// heuristic treats the two A-edges as a rename-back chain and migrates.
+	// Lineage 1's pre-A→B commits end up misattributed to D.
+	//
+	// Pinning the current behavior here so that a future refactor cannot
+	// silently change the outcome — any future fix (proper temporal
+	// segmentation) should update or remove this test consciously.
+	ds := newDataset()
+	tNew := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	tMid := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	tOld := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "D", commitDate: tNew}, // t3
+		{oldPath: "C", newPath: "A", commitDate: tMid}, // t2
+		{oldPath: "A", newPath: "B", commitDate: tOld}, // t1
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 2, monthChurn: map[string]int64{}}, // merged lineages
+		"B": {commits: 1, monthChurn: map[string]int64{}},
+		"C": {commits: 1, monthChurn: map[string]int64{}},
+		"D": {commits: 1, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	// Current (imperfect) behavior: heuristic sees hasIncomingRename[A]=true
+	// via C→A, so it proceeds with migration. Newest edge wins: A → D.
+	// Both C and A collapse into D. B keeps only its post-rename data.
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been migrated (current behavior — chain-like)")
+	}
+	if _, ok := ds.files["C"]; ok {
+		t.Error("C should have been migrated into D")
+	}
+	d, ok := ds.files["D"]
+	if !ok {
+		t.Fatal("D missing")
+	}
+	if d.commits != 4 {
+		t.Errorf("D.commits = %d, want 4 (A=2 + C=1 + D=1 merged — lineage 1's pre-A→B data is misattributed here)", d.commits)
+	}
+	// B keeps only its post-rename data. Lineage 1's pre-rename history
+	// that should live here is instead at D.
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (lineage-1 pre-rename data leaked to D)", ds.files["B"].commits)
 	}
 }
 

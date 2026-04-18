@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +40,12 @@ type filePair struct{ a, b string }
 
 type renameEdge struct {
 	oldPath, newPath string
+	// commitDate captures when the rename was made. applyRenames sorts by
+	// this descending so the "first-seen wins" dedup corresponds to the
+	// most recent rename even if the JSONL arrives out of order (e.g. if
+	// the extractor ever emits --reverse or a future format change
+	// reshuffles the stream).
+	commitDate time.Time
 }
 
 type Dataset struct {
@@ -291,9 +298,14 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			// the log is emitted newest-first, so pre-rename history comes
 			// later in the stream than the rename commit itself.
 			if strings.HasPrefix(cf.Status, "R") && cf.PathPrevious != "" && cf.PathCurrent != "" && cf.PathPrevious != cf.PathCurrent {
+				var edgeDate time.Time
+				if cm := ds.commits[cf.Commit]; cm != nil {
+					edgeDate = cm.date
+				}
 				ds.renameEdges = append(ds.renameEdges, renameEdge{
-					oldPath: pathPrefix + cf.PathPrevious,
-					newPath: pathPrefix + cf.PathCurrent,
+					oldPath:    pathPrefix + cf.PathPrevious,
+					newPath:    pathPrefix + cf.PathCurrent,
+					commitDate: edgeDate,
 				})
 			}
 
@@ -428,21 +440,33 @@ func applyRenames(ds *Dataset) {
 	// Heuristic: treat oldPath as reuse iff count > 1 AND no edge has
 	// it as newPath. Imperfect on exotic mixed cases (A→B, C→A, A→D)
 	// but correctly handles pure reuse and the common rename-back flow.
+
+	// Sort edges by commitDate desc so the dedup below ("first seen for
+	// each oldPath wins") corresponds to the chronologically newest
+	// rename regardless of the order the stream arrived in. Otherwise we
+	// would silently break if the extractor ever changed from newest-
+	// first emission.
+	sort.SliceStable(ds.renameEdges, func(i, j int) bool {
+		return ds.renameEdges[i].commitDate.After(ds.renameEdges[j].commitDate)
+	})
+
 	oldPathCounts := make(map[string]int)
-	hasIncomingRename := make(map[string]bool)
+	isRenameTarget := make(map[string]bool)
 	for _, e := range ds.renameEdges {
 		oldPathCounts[e.oldPath]++
-		hasIncomingRename[e.newPath] = true
+		isRenameTarget[e.newPath] = true
 	}
 
 	direct := make(map[string]string, len(ds.renameEdges))
 	for _, e := range ds.renameEdges {
-		if oldPathCounts[e.oldPath] > 1 && !hasIncomingRename[e.oldPath] {
+		isDuplicate := oldPathCounts[e.oldPath] > 1
+		wasRecreated := isRenameTarget[e.oldPath]
+		if isDuplicate && !wasRecreated {
 			continue // path reused — refuse to migrate
 		}
-		// JSONL is newest-first; keep the first edge seen for each
-		// oldPath, which corresponds to the most recent rename — the
-		// direction the lineage continues in.
+		// First edge wins per oldPath; edges are pre-sorted so this is
+		// the chronologically newest rename (the direction the lineage
+		// continues in).
 		if _, ok := direct[e.oldPath]; !ok {
 			direct[e.oldPath] = e.newPath
 		}
