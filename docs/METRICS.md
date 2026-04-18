@@ -331,11 +331,17 @@ Limits:
 - Git's rename detection defaults to ~50% similarity. A rename with heavy edits may not be detected, resulting in separate delete + add entries.
 - Copies (`C*` status) are **not** merged — copied files legitimately live as two entries.
 - If the rename commit falls outside a `--since` filter, the edge isn't captured and the old/new paths stay separate within the filtered window. The reuse heuristics (`oldPathCounts`, `isRenameTarget`, `maxEdgeDate`) are computed only over edges *inside* the filter window, so a rename that happened outside the window cannot participate in the signal — `wasRecreated` may be false even when the repo history contains a recreation, which can cause the single-edge reuse check to fire (or not fire) differently than it would on the full history.
-- **Path reuse vs rename-back:** duplicate `oldPath` edges can arise in two different ways. gitcortex distinguishes them:
-  - **Path reuse (different lineages):** `A → B` then an unrelated file is created at `A` and later renamed to `D`. The repeated `A` has no intermediate edge pointing at it. The two lineages are already conflated in `ds.files["A"]` at ingest time and cannot be disambiguated without per-commit temporal tracking. gitcortex **refuses to migrate** — `ds.files["A"]` stays put with merged lineages, and neither `B` nor `D` inherits data that could belong to the other lineage. This is underattribution but safer than misattribution.
-  - **Rename-back chain (same lineage):** `A → B → A → C` — the repeated `A` is recreated by an explicit edge `B → A`, so the whole chain belongs to one lineage and collapses into `C`. Detected by the presence of any edge whose `newPath` equals the duplicated `oldPath`.
+- **Path reuse patterns.** gitcortex detects four distinct shapes where `oldPath` is ambiguous and handles each explicitly:
 
-  The heuristic is exact for these two common cases and imperfect on exotic mixed cases (e.g. `A → B` in one lineage, then `C → A` starting a second lineage, then `A → D`). Those are treated as chain and will misattribute one lineage — a known limitation that a full fix would require per-commit temporal segmentation to solve.
+  1. **Multi-edge reuse (different lineages):** `A → B`, then later the name `A` is reused for an unrelated file that gets renamed to `D`. Two edges with `oldPath = A`, no intermediate edge pointing at `A`. gitcortex **refuses to migrate** either edge — A stays put with merged lineages, B and D keep only their own post-rename data. Detected by `oldPathCounts[A] > 1 && !isRenameTarget[A]`.
+
+  2. **Rename-back chain (same lineage):** `A → B → A → C`. The repeated `A` is recreated by an explicit `B → A` edge, so the whole chain belongs to one lineage and collapses into `C`. Detected by `oldPathCounts[A] > 1 && isRenameTarget[A]`.
+
+  3. **Single-edge reuse (different lineages, common in the wild):** `A → B` (one edge), then a new unrelated file is created at `A` and never renamed further. `oldPathCounts[A] = 1`, so the multi-edge heuristic does not fire. Detected **temporally**: `ds.files["A"].lastChange` is after `maxEdgeDate[A]` (the latest commitDate of any edge involving `A`, as source or target). Activity on `A` that continued past every rename involving `A` means a new lineage. Skip migration.
+
+  4. **Chain + reuse (same temporal check, harder pattern):** `D → A → B` chain followed by a new file at `A`. `A` is both a rename target (`D → A`) and a rename source (`A → B`), so pattern #2 would classify it as rename-back. The temporal check correctly fires because `lastChange(A) > maxEdgeDate[A]` (= `A → B` commit date). Real-data impact: 136 such files in the kubernetes snapshot.
+
+  **Known limitation:** the exotic mixed pattern `A → B` (lineage 1), then `C → A` (lineage 2 recreation-via-rename), then `A → D` (lineage 2 renamed) — here `wasRecreated[A] = true` via `C → A`, `maxEdgeDate[A]` = `A → D` commit date, and typical `lastChange(A)` is bounded by that. The heuristic treats it as chain and misattributes lineage 1's pre-rename commits to `D`. A full fix requires per-commit temporal segmentation of `ds.files["A"]`, a larger architectural change.
 
 ### `--since` filter + ChurnRisk age
 
