@@ -675,6 +675,23 @@ func TestChurnTrend(t *testing.T) {
 	if got := churnTrend(recentOnly, shortSpan, latest); got != 1 {
 		t.Errorf("short-span → %.2f, want 1 (no signal when window < trend window)", got)
 	}
+
+	// Single-month histories used to short-circuit to 1 via len(monthChurn)<2,
+	// silencing the two strongest trend signals: earlier-only (declined to
+	// nothing) and recent-only (grew from nothing). Both must now come
+	// through so old concentrated files can be classified as legacy-hotspot.
+
+	// Earlier-only: a single month well before the cutoff.
+	earlierOnly := map[string]int64{"2023-05": 500}
+	if got := churnTrend(earlierOnly, earliestWide, latest); got != 0 {
+		t.Errorf("earlier-only single-month → %.2f, want 0 (declined to nothing)", got)
+	}
+
+	// Recent-only: a single month inside the trend window.
+	recentSingle := map[string]int64{"2024-06": 100}
+	if got := churnTrend(recentSingle, earliestWide, latest); got != 2 {
+		t.Errorf("recent-only single-month → %.2f, want 2 (grew from nothing)", got)
+	}
 }
 
 func TestWorkingPatterns(t *testing.T) {

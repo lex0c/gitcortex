@@ -140,7 +140,7 @@ rows implicitly assume the earlier rows didn't match.
 
 Where:
 - `age = days between firstChange and latest commit in dataset`
-- `trend = churn_last_3_months / churn_earlier` (1 if neither side has signal; 2 if recent-only)
+- `trend = churn_last_3_months / churn_earlier`. Edge cases: empty history returns 1 (no signal); recent-only history returns 2 (grew from nothing); earlier-only history returns 0 (declined to nothing — the strongest `legacy-hotspot` signal); short-span datasets whose entire window fits inside the trend window return 1 to avoid false "growing" reports
 
 ### Additional columns
 

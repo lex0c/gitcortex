@@ -454,8 +454,14 @@ func FileCoupling(ds *Dataset, n, minCoChanges int) []CouplingResult {
 // --since filter), returns 1 — without this, every file appears in the
 // "recent" bucket only, which would falsely return 2 (growing from nothing)
 // for the entire dataset.
+//
+// A file with a single month of churn is still a valid signal: if that month
+// falls before the cutoff, the file's activity ended in the past (declining
+// to zero → 0); if it falls at or after the cutoff, the file has only recent
+// activity (growing from nothing → 2). Only an entirely empty map returns
+// neutral.
 func churnTrend(monthChurn map[string]int64, earliest, latest time.Time) float64 {
-	if len(monthChurn) < 2 || latest.IsZero() {
+	if len(monthChurn) == 0 || latest.IsZero() {
 		return 1
 	}
 	cutoffKey := latest.UTC().AddDate(0, -classifyTrendWindowMonths, 0).Format("2006-01")
@@ -478,8 +484,10 @@ func churnTrend(monthChurn map[string]int64, earliest, latest time.Time) float64
 		if recent == 0 {
 			return 1
 		}
-		return 2 // genuine growing signal — dataset spans the window but this
-		// file only has recent activity
+		return 2 // recent-only: growing from nothing
+	}
+	if recent == 0 {
+		return 0 // earlier-only: declined to nothing (single-month-in-past case)
 	}
 	return float64(recent) / float64(earlier)
 }
