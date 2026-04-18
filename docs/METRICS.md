@@ -203,6 +203,7 @@ Per-developer report combining multiple metrics.
 | Pace | commits / active_days (smooths bursts — a dev with 100 commits on 2 days and silence for 28 shows pace=50, which reads as a steady rate but isn't) |
 | Weekend % | commits on Saturday+Sunday / total commits × 100 |
 | Scope | Top 5 directories by unique file count, as % of total files touched |
+| Specialization | Herfindahl index over the **full** per-directory file-count distribution: Σ pᵢ² where pᵢ is the share of the dev's files in directory i. 1 = all files in one directory (narrow specialist); 1/N for a uniform spread across N directories; approaches 0 as the distribution widens. Computed before the top-5 Scope truncation so it reflects actual breadth. Labels (see `specBroadGeneralistMax`, `specBalancedMax`, `specFocusedMax` constants): `< 0.15` broad generalist, `< 0.35` balanced, `< 0.7` focused specialist, `≥ 0.7` narrow specialist. Herfindahl, not Gini, because Gini would collapse "1 file in 1 dir" and "1 file in each of 5 dirs" to the same value (both have zero inequality among buckets), which misses the specialization distinction. **Measures file distribution, not domain expertise** — see caveat below. **Display vs raw:** CLI and HTML show the value rounded to 3 decimals (`%.3f`) for readability; JSON output preserves the full float64. Band classification runs against the raw float, so a value like 0.149 lands in `broad generalist` even though %.2f would have rounded it to `0.15`. JSON consumers that reproduce the banding must use the raw value, not a rounded version. |
 | Contribution type | Based on del/add ratio: growth (<0.4), balanced (0.4-0.8), refactor (>0.8) |
 | Collaborators | Top 5 devs sharing code with this dev. Ranked by `shared_lines` (Σ min(linesA, linesB) across shared files), tiebreak `shared_files`, then email. Same `shared_lines` semantics as the Developer Network metric — discounts trivial one-line touches so "collaborator" reflects real overlap. |
 
@@ -270,6 +271,9 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `contribBalancedRatio` | `0.4` | `0.4 ≤ del/add < 0.8` → `balanced`; below 0.4 → `growth`. |
 | `refactorMinFiles` | `10` | Minimum files for a commit to be a mechanical-refactor candidate (coupling filter). |
 | `refactorMaxChurnPerFile` | `5.0` | Mean churn per file below this in a candidate commit → treated as refactor; its pairs are excluded from coupling. |
+| `specBroadGeneralistMax` | `0.15` | Specialization Herfindahl `< 0.15` → `broad generalist` label in dev profile. |
+| `specBalancedMax` | `0.35` | `0.15 ≤ H < 0.35` → `balanced`. |
+| `specFocusedMax` | `0.7` | `0.35 ≤ H < 0.7` → `focused specialist`; `H ≥ 0.7` → `narrow specialist`. |
 
 ### Reproducibility
 
@@ -350,3 +354,13 @@ If you need the label to reflect true age, either extract without `--since` (the
 - **Renames reverted (cycle A→B→A).** The resolver bails out of the cycle with the current path; it doesn't crash but the "canonical" is implementation-defined for cyclic inputs.
 - **Repo with single file.** The median-based `cold` threshold degenerates (median is that file's churn); the single file is never classified `cold`.
 - **All files with identical churn.** Median equals every value, `lowChurn = median × 0.5`, so nothing is `cold`. Everything falls into the bf/age/trend tree.
+
+### Dev specialization measures distribution, not expertise
+
+The `Specialization` number and its label (`broad generalist` … `narrow specialist`) describe **where the dev's files live on disk**, not their semantic area of expertise. The two diverge whenever the person's domain cuts across the directory structure rather than aligning with it:
+
+- A security engineer who audited and refactored auth across `api/`, `web/`, `gateway/`, and `services/` touches four dirs. Herfindahl is low, the label says "broad generalist" — but the person is a domain specialist whose domain happens to be cross-cutting.
+- A release engineer who maintains CI/CD config scattered across `.github/`, `docker/`, `scripts/`, and `deploy/` lands the same way.
+- Conversely, a generalist who happened to do a big one-off refactor of a single module in the recent window looks like a "narrow specialist" for the snapshot.
+
+The label is a shortcut for reading the Herfindahl value. Use it when directory structure aligns with domains (one dir per module); cross-reference with `TopFiles`, `Scope`, and `Collaborators` to confirm when the repo is organized along another axis (e.g. monorepo with service boundaries cutting across dirs, or a library where concerns are horizontal). The raw Herfindahl value is objective; the interpretation of the label is not.

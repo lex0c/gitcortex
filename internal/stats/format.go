@@ -9,6 +9,22 @@ import (
 	"text/tabwriter"
 )
 
+// specLabel turns a DevProfile.Specialization (Herfindahl) value into a
+// short human-readable classification. Thresholds live in stats.go as
+// named constants so templates can reuse the same values.
+func specLabel(h float64) string {
+	switch {
+	case h < specBroadGeneralistMax:
+		return "broad generalist"
+	case h < specBalancedMax:
+		return "balanced"
+	case h < specFocusedMax:
+		return "focused specialist"
+	default:
+		return "narrow specialist"
+	}
+}
+
 func JoinDevs(devs []string) string {
 	if len(devs) <= 3 {
 		return strings.Join(devs, ", ")
@@ -397,6 +413,12 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintf(f.w, "%s (%.0f%%)", s.Dir, s.Pct)
 			}
 			fmt.Fprintln(f.w)
+			// %.3f (not %.2f): labels are assigned at thresholds 0.15 / 0.35
+			// / 0.7 using the unrounded float. With %.2f a value like
+			// 0.149 displays as "0.15" and the "broad generalist" label
+			// reads as inconsistent with the shown number. %.3f keeps
+			// the boundary distinguishable (0.149 vs 0.150).
+			fmt.Fprintf(f.w, "  Specialization: %.3f (%s)\n", p.Specialization, specLabel(p.Specialization))
 			fmt.Fprintf(f.w, "  Contribution:  %s (ratio %.2f — add: %d, del: %d)\n", p.ContribType, p.ContribRatio, p.Additions, p.Deletions)
 			fmt.Fprintf(f.w, "  Pace:          %.1f commits/active day\n", p.Pace)
 			fmt.Fprintf(f.w, "  Collaboration: ")

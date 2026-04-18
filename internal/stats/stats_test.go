@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -1894,6 +1895,291 @@ func TestStreamLoadFullPipeline(t *testing.T) {
 	}
 	if len(profiles[0].Scope) == 0 {
 		t.Error("alice scope empty")
+	}
+}
+
+func TestHerfindahlHelper(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []int
+		want float64
+	}{
+		{"empty", nil, 0},
+		{"single", []int{5}, 1},                    // 1 bucket = fully concentrated
+		{"single zero", []int{0}, 0},               // sum=0 short-circuits
+		{"zeros only", []int{0, 0, 0}, 0},
+		{"uniform 2", []int{5, 5}, 0.5},            // 0.25 + 0.25
+		{"uniform 5", []int{1, 1, 1, 1, 1}, 0.2},   // 5 × (1/5)²
+		{"70/30", []int{7, 3}, 0.58},               // 0.49 + 0.09
+		{"90/10", []int{9, 1}, 0.82},               // 0.81 + 0.01
+		{"100-in-one", []int{0, 0, 100}, 1},        // single non-zero bucket
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := herfindahl(c.in)
+			diff := got - c.want
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > 0.005 {
+				t.Errorf("herfindahl(%v) = %.3f, want ≈ %.3f", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestPrintProfilesSpecializationDisplayPrecision(t *testing.T) {
+	// The Specialization display must show enough decimals that the
+	// rendered number is self-consistent with the band label. At %.2f a
+	// true value of 0.149 rounds to "0.15" and the shown label
+	// "broad generalist" (correct: 0.149 < 0.15) appears to contradict
+	// the displayed number (0.15 is NOT < 0.15). Using %.3f renders
+	// "0.149" and the reader can verify the classification at a glance.
+	p := DevProfile{
+		Name: "N", Email: "n@x", Commits: 1, ActiveDays: 1,
+		FirstDate: "2024-01-01", LastDate: "2024-01-01",
+		Specialization: 0.149, // just under specBroadGeneralistMax
+	}
+	var buf bytes.Buffer
+	f := NewFormatter(&buf, "table")
+	if err := f.PrintProfiles([]DevProfile{p}); err != nil {
+		t.Fatalf("PrintProfiles: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "0.149") {
+		t.Errorf("output should contain %q to match the classification band (%%.3f), got:\n%s", "0.149", out)
+	}
+	if !strings.Contains(out, "broad generalist") {
+		t.Errorf("output should contain label 'broad generalist' for H=0.149, got:\n%s", out)
+	}
+}
+
+func TestHerfindahlPreservesPrecision(t *testing.T) {
+	// herfindahl must return the full float64 value; rounding happens only
+	// at display time. A prior version rounded to 3 decimals inside the
+	// function, which would misclassify boundary cases (e.g. true 0.1496
+	// rounding to 0.150 and flipping from "broad generalist" to "balanced").
+	// Three uniform buckets produce H = 1/3 exactly; the stored value must
+	// be the full-precision float, not a rounded approximation.
+	h := herfindahl([]int{1, 1, 1})
+	if h == 0.333 {
+		t.Fatal("herfindahl returned 0.333 — the function is rounding internally again")
+	}
+	oneThird := 1.0 / 3.0
+	if diff := h - oneThird; diff < -1e-12 || diff > 1e-12 {
+		t.Errorf("herfindahl([1,1,1]) = %.18f, want 1/3 = %.18f", h, oneThird)
+	}
+}
+
+func TestSpecLabelBandsBoundaryPrecision(t *testing.T) {
+	// Thresholds are strict <, so a value exactly at the threshold lands in
+	// the next band. Before the precision fix, internal rounding could move
+	// a value JUST under a threshold (say 0.14999) up to 0.150, crossing
+	// the band. Verify that values near boundaries classify by their true
+	// precision, not by a rounded approximation.
+	cases := []struct {
+		h    float64
+		want string
+	}{
+		{0.149999, "broad generalist"},  // just under specBroadGeneralistMax
+		{0.150001, "balanced"},          // just over
+		{0.349999, "balanced"},
+		{0.350001, "focused specialist"},
+		{0.699999, "focused specialist"},
+		{0.700001, "narrow specialist"},
+	}
+	for _, c := range cases {
+		if got := specLabel(c.h); got != c.want {
+			t.Errorf("specLabel(%.6f) = %q, want %q (boundary precision)", c.h, got, c.want)
+		}
+	}
+}
+
+func TestSpecLabelBands(t *testing.T) {
+	// Guard the four-band classification: boundaries are defined by the
+	// specBroadGeneralistMax / specBalancedMax / specFocusedMax constants.
+	// Constants drift without this test would silently change label output
+	// in both CLI and HTML.
+	cases := []struct {
+		h    float64
+		want string
+	}{
+		{0.0, "broad generalist"},
+		{0.14, "broad generalist"},
+		{specBroadGeneralistMax, "balanced"}, // boundary: < is strict
+		{0.34, "balanced"},
+		{specBalancedMax, "focused specialist"},
+		{0.69, "focused specialist"},
+		{specFocusedMax, "narrow specialist"},
+		{1.0, "narrow specialist"},
+	}
+	for _, c := range cases {
+		if got := specLabel(c.h); got != c.want {
+			t.Errorf("specLabel(%.3f) = %q, want %q", c.h, got, c.want)
+		}
+	}
+}
+
+func TestDevProfilesSpecialization(t *testing.T) {
+	// Three devs with deliberately distinct scope patterns:
+	//   - narrow: 100% in one dir
+	//   - focused: 70/30 across two dirs
+	//   - broad: evenly spread across 5 dirs
+	// Specialization (Gini over per-dir file counts) must rank them
+	// narrow > focused > broad.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{
+			"c1": {email: "narrow@x", date: t1, add: 10, del: 0, files: 1},
+			"c2": {email: "focused@x", date: t1, add: 10, del: 0, files: 1},
+			"c3": {email: "broad@x", date: t1, add: 10, del: 0, files: 1},
+		},
+		contributors: map[string]*ContributorStat{
+			"narrow@x":  {Email: "narrow@x", Name: "N", Commits: 1, ActiveDays: 1, FilesTouched: 5, Additions: 10},
+			"focused@x": {Email: "focused@x", Name: "F", Commits: 1, ActiveDays: 1, FilesTouched: 10, Additions: 10},
+			"broad@x":   {Email: "broad@x", Name: "B", Commits: 1, ActiveDays: 1, FilesTouched: 5, Additions: 10},
+		},
+		files: map[string]*fileEntry{},
+	}
+	// narrow@x: 5 files all in one dir
+	for i := 0; i < 5; i++ {
+		path := fmt.Sprintf("auth/f%d.go", i)
+		ds.files[path] = &fileEntry{commits: 1, devLines: map[string]int64{"narrow@x": 10}, devCommits: map[string]int{"narrow@x": 1}, monthChurn: map[string]int64{}}
+	}
+	// focused@x: 7 in one dir, 3 in another
+	for i := 0; i < 7; i++ {
+		path := fmt.Sprintf("api/f%d.go", i)
+		ds.files[path] = &fileEntry{commits: 1, devLines: map[string]int64{"focused@x": 10}, devCommits: map[string]int{"focused@x": 1}, monthChurn: map[string]int64{}}
+	}
+	for i := 0; i < 3; i++ {
+		path := fmt.Sprintf("web/f%d.go", i)
+		ds.files[path] = &fileEntry{commits: 1, devLines: map[string]int64{"focused@x": 10}, devCommits: map[string]int{"focused@x": 1}, monthChurn: map[string]int64{}}
+	}
+	// broad@x: 1 file in each of 5 different dirs
+	for i, d := range []string{"a", "b", "c", "d", "e"} {
+		path := fmt.Sprintf("%s/f%d.go", d, i)
+		ds.files[path] = &fileEntry{commits: 1, devLines: map[string]int64{"broad@x": 10}, devCommits: map[string]int{"broad@x": 1}, monthChurn: map[string]int64{}}
+	}
+
+	profiles := DevProfiles(ds, "")
+	get := func(email string) float64 {
+		for _, p := range profiles {
+			if p.Email == email {
+				return p.Specialization
+			}
+		}
+		t.Fatalf("missing profile %s", email)
+		return 0
+	}
+	narrow := get("narrow@x")
+	focused := get("focused@x")
+	broad := get("broad@x")
+
+	// Herfindahl semantics:
+	//   narrow@x  (5 files all in 1 dir) → H = 1
+	//   focused@x (7 in api, 3 in web)   → H = 0.49 + 0.09 = 0.58
+	//   broad@x   (1 file in each of 5 dirs) → H = 5 × 0.04 = 0.2
+	// Ordering: narrow > focused > broad. The old Gini collapsed narrow
+	// and broad to 0 and was the reason this test was rewritten.
+	if narrow != 1.0 {
+		t.Errorf("narrow@x (1 dir) specialization = %.3f, want 1.0 (fully concentrated)", narrow)
+	}
+	if !(focused > 0.5 && focused < 0.65) {
+		t.Errorf("focused@x (7+3 split) specialization = %.3f, want ~0.58", focused)
+	}
+	if !(broad > 0.15 && broad < 0.25) {
+		t.Errorf("broad@x (5 dirs uniform) specialization = %.3f, want ~0.2", broad)
+	}
+	if !(narrow > focused && focused > broad) {
+		t.Errorf("ordering failed: narrow=%.2f focused=%.2f broad=%.2f; want narrow > focused > broad",
+			narrow, focused, broad)
+	}
+}
+
+func TestDevProfilesSpecializationRootFilesBucket(t *testing.T) {
+	// Bug reported in review: when a dev touches only repo-root files
+	// (no slash in path), DevProfiles used to treat each filename as its
+	// own "directory". A dev with README, Makefile, go.mod, LICENSE
+	// ended up with 4 pseudo-dirs × 1 file → Herfindahl = 0.25
+	// ("balanced") instead of 1.0 ("narrow specialist on the repo root").
+	// Fix collapses root-level files into the "." bucket, matching the
+	// convention in DirectoryStats.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": {email: "root@x", date: t1, add: 10, del: 0, files: 4}},
+		contributors: map[string]*ContributorStat{
+			"root@x": {Email: "root@x", Name: "R", Commits: 1, ActiveDays: 1, FilesTouched: 4, Additions: 10},
+		},
+		files: map[string]*fileEntry{
+			"README.md": {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"Makefile":  {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"go.mod":    {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"LICENSE":   {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	// All four files are at the root, so they must collapse into one
+	// bucket named ".". Specialization must be 1.0 (narrow specialist).
+	if p.Specialization != 1.0 {
+		t.Errorf("root-only dev specialization = %.3f, want 1.0 (all four files collapse to one bucket)", p.Specialization)
+	}
+	if len(p.Scope) != 1 {
+		t.Fatalf("Scope = %d entries, want 1 (the '.' bucket)", len(p.Scope))
+	}
+	if p.Scope[0].Dir != "." {
+		t.Errorf("Scope[0].Dir = %q, want \".\"", p.Scope[0].Dir)
+	}
+	if p.Scope[0].Files != 4 {
+		t.Errorf("Scope[0].Files = %d, want 4", p.Scope[0].Files)
+	}
+}
+
+func TestDevProfilesSpecializationEdgeCases(t *testing.T) {
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	// Case 1: dev listed as contributor but no files touched.
+	// dirCount empty → Herfindahl returns 0. Label falls through to
+	// "broad generalist", which is semantically stretchy but consistent
+	// with "no signal means no specialization".
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": {email: "ghost@x", date: t1, add: 0, del: 0, files: 0}},
+		contributors: map[string]*ContributorStat{
+			"ghost@x": {Email: "ghost@x", Name: "G", Commits: 1, ActiveDays: 1, FilesTouched: 0},
+		},
+		files: map[string]*fileEntry{},
+	}
+	profiles := DevProfiles(ds, "")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	if profiles[0].Specialization != 0 {
+		t.Errorf("no-files dev specialization = %.2f, want 0", profiles[0].Specialization)
+	}
+
+	// Case 2: dev with 1 file in 1 dir. Should be maximally specialized.
+	ds2 := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": {email: "solo@x", date: t1, add: 10, del: 0, files: 1}},
+		contributors: map[string]*ContributorStat{
+			"solo@x": {Email: "solo@x", Name: "S", Commits: 1, ActiveDays: 1, FilesTouched: 1, Additions: 10},
+		},
+		files: map[string]*fileEntry{
+			"auth/login.go": {commits: 1, devLines: map[string]int64{"solo@x": 10}, devCommits: map[string]int{"solo@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles = DevProfiles(ds2, "")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	if profiles[0].Specialization != 1.0 {
+		t.Errorf("single-file-single-dir specialization = %.2f, want 1.0 (fully concentrated — the canonical narrow specialist)", profiles[0].Specialization)
 	}
 }
 
