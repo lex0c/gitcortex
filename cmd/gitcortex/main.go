@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -180,12 +181,50 @@ func statsCmd() *cobra.Command {
 			fmt.Fprintf(os.Stderr, "Loaded %d commits, %d files, %d devs\n\n",
 				ds.CommitCount, ds.UniqueFileCount, ds.DevCount)
 
+			// Suspect vendor/generated warning only fires when the
+			// aggregate matched churn exceeds suspectWarningMinChurnRatio
+			// of the total. Text-format stats only: JSON/CSV consumers
+			// typically pipe the output and don't want a chatter prefix.
+			if sf.format == "" || sf.format == "table" {
+				if buckets, worth := stats.DetectSuspectFiles(ds); worth {
+					printSuspectWarning(os.Stderr, buckets)
+				}
+			}
+
 			return renderStats(ds, &sf)
 		},
 	}
 
 	addStatsFlags(cmd, &sf)
 	return cmd
+}
+
+// printSuspectWarning emits a stderr block listing likely vendor/generated
+// patterns that matched, with a copy-pasteable --ignore suggestion. Called
+// only when DetectSuspectFiles reports the matched churn crosses the
+// noise floor, so repos with one incidental .lock file don't get spammed.
+func printSuspectWarning(w io.Writer, buckets []stats.SuspectBucket) {
+	if len(buckets) == 0 {
+		return
+	}
+	// Top 6 buckets — enough to be useful, not enough to drown the prompt.
+	const maxShown = 6
+	shown := buckets
+	if len(shown) > maxShown {
+		shown = shown[:maxShown]
+	}
+	fmt.Fprintln(w, "⚠  Suspect vendor/generated paths detected — they inflate churn and bus factor")
+	fmt.Fprintln(w, "   without reflecting hand-authored code. Top matches:")
+	for _, b := range shown {
+		fmt.Fprintf(w, "     %-22s %4d files, %8d churn   (%s)\n",
+			b.Pattern.Glob, len(b.Paths), b.Churn, b.Pattern.Reason)
+	}
+	fmt.Fprint(w, "   Rerun extract with --ignore to drop them, e.g.:\n     gitcortex extract --repo .")
+	for _, b := range shown {
+		fmt.Fprintf(w, " --ignore '%s'", b.Pattern.Glob)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w)
 }
 
 func renderStats(ds *stats.Dataset, sf *statsFlags) error {
