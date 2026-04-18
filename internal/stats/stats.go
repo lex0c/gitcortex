@@ -736,6 +736,65 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 		}
 	}
 
+	// Per-dev collaborator pairs pre-computed in one pass over ds.files.
+	// Previously computed inside the per-dev loop below as O(D × F × D_avg),
+	// which is O(1.2e9) on kubernetes. Pre-computing is O(F × D_per_file²)
+	// = O(7e5), roughly three orders of magnitude faster.
+	//
+	// Trade-off: peak memory holds one acc entry per ordered dev-pair that
+	// shares at least one file (~50 MB on kubernetes, ~150 MB on linux).
+	// Acceptable for modern machines; if it matters, a map[devPair]*collabAcc
+	// keyed by sorted pair would halve memory at the cost of a read-time
+	// sort step.
+	type collabAcc struct {
+		files int
+		lines int64
+	}
+	allCollabs := make(map[string]map[string]*collabAcc)
+	for _, fe := range ds.files {
+		if len(fe.devLines) < 2 {
+			continue
+		}
+		devs := make([]string, 0, len(fe.devLines))
+		for email := range fe.devLines {
+			devs = append(devs, email)
+		}
+		// Undirected pair accumulation: write to both a→b and b→a so each
+		// dev's map contains everyone they share the file with.
+		for i := 0; i < len(devs); i++ {
+			a := devs[i]
+			la := fe.devLines[a]
+			for j := i + 1; j < len(devs); j++ {
+				b := devs[j]
+				lb := fe.devLines[b]
+				overlap := la
+				if lb < overlap {
+					overlap = lb
+				}
+				if allCollabs[a] == nil {
+					allCollabs[a] = make(map[string]*collabAcc)
+				}
+				accA := allCollabs[a][b]
+				if accA == nil {
+					accA = &collabAcc{}
+					allCollabs[a][b] = accA
+				}
+				accA.files++
+				accA.lines += overlap
+				if allCollabs[b] == nil {
+					allCollabs[b] = make(map[string]*collabAcc)
+				}
+				accB := allCollabs[b][a]
+				if accB == nil {
+					accB = &collabAcc{}
+					allCollabs[b][a] = accB
+				}
+				accB.files++
+				accB.lines += overlap
+			}
+		}
+	}
+
 	// Per-dev work grid + monthly activity
 	devGrid := make(map[string]*[7][24]int)
 	devMonthly := make(map[string]map[string]*ActivityBucket)
@@ -875,39 +934,14 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			pace = math.Round(float64(cs.Commits)/float64(cs.ActiveDays)*10) / 10
 		}
 
-		// Collaborators: devs sharing files with this dev. SharedLines uses
-		// the min-per-file overlap (same semantics as DeveloperNetwork) so
-		// trivial one-line touches don't dominate the ranking.
-		type collabAcc struct {
-			files int
-			lines int64
-		}
-		collabMap := make(map[string]*collabAcc)
-		for _, fe := range ds.files {
-			myLines, ok := fe.devLines[email]
-			if !ok {
-				continue
-			}
-			for otherEmail, otherLines := range fe.devLines {
-				if otherEmail == email {
-					continue
-				}
-				acc, ok := collabMap[otherEmail]
-				if !ok {
-					acc = &collabAcc{}
-					collabMap[otherEmail] = acc
-				}
-				acc.files++
-				overlap := myLines
-				if otherLines < overlap {
-					overlap = otherLines
-				}
-				acc.lines += overlap
-			}
-		}
+		// Collaborators: looked up from the pre-computed allCollabs map
+		// (built once before this loop). SharedLines uses the min-per-file
+		// overlap (same semantics as DeveloperNetwork).
 		var collabs []DevCollaborator
-		for e, acc := range collabMap {
-			collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: acc.files, SharedLines: acc.lines})
+		if m, ok := allCollabs[email]; ok {
+			for e, acc := range m {
+				collabs = append(collabs, DevCollaborator{Email: e, SharedFiles: acc.files, SharedLines: acc.lines})
+			}
 		}
 		// Deterministic: shared-lines desc, shared-files desc, email asc.
 		sort.Slice(collabs, func(i, j int) bool {
