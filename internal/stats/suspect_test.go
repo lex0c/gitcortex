@@ -129,6 +129,53 @@ func TestDetectSuspectFilesNestedDirSuggestions(t *testing.T) {
 	}
 }
 
+func TestDetectSuspectFilesGeneratedMatchesBasenameOnly(t *testing.T) {
+	// *.generated.* in the detector used to match on the full path via
+	// strings.Contains, catching paths where `.generated.` appeared in
+	// a directory name (src/foo.generated.v1/bar.go). The emitted
+	// suggestion is the literal `*.generated.*` glob, and extract's
+	// basename match would not ignore bar.go, so the warning would
+	// keep firing on every subsequent run.
+	//
+	// The matcher is now a basename check so directory-name occurrences
+	// don't get flagged in the first place. This test pins both sides:
+	// the flagged path IS matched by the suggestion, and the dir-only
+	// path is NOT flagged.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"src/main.generated.go":          {additions: 500, deletions: 500}, // real generated file → should flag
+			"src/foo.generated.v1/bar.go":    {additions: 500, deletions: 500}, // `.generated.` is in dir name → should NOT flag
+			"pkg/util/types.generated.proto": {additions: 500, deletions: 500}, // basename has it → should flag
+		},
+	}
+	buckets, _ := DetectSuspectFiles(ds)
+	var gen *SuspectBucket
+	for i := range buckets {
+		if buckets[i].Pattern.Glob == "*.generated.*" {
+			gen = &buckets[i]
+			break
+		}
+	}
+	if gen == nil {
+		t.Fatal("*.generated.* bucket missing — expected at least the two basename matches")
+	}
+	// Must contain the two basename matches, must NOT contain the dir-only one.
+	wantIn := map[string]bool{
+		"src/main.generated.go":          true,
+		"pkg/util/types.generated.proto": true,
+	}
+	wantOut := "src/foo.generated.v1/bar.go"
+	for _, p := range gen.Paths {
+		if !wantIn[p] && p != wantOut {
+			t.Errorf("unexpected path in *.generated.* bucket: %q", p)
+		}
+		if p == wantOut {
+			t.Errorf("path %q has `.generated.` only in its directory — should not be flagged because "+
+				"`--ignore '*.generated.*'` would not cover it (shouldIgnore matches basename)", p)
+		}
+	}
+}
+
 func TestDetectSuspectFilesSuffixSuggestionsUnchanged(t *testing.T) {
 	// Suffix/basename matchers already work at any depth via extract's
 	// basename match path, so their Suggestions collapse to a single

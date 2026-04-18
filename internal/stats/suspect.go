@@ -59,7 +59,7 @@ var defaultSuspectPatterns = []SuspectPattern{
 	{Glob: "poetry.lock", Reason: "poetry lockfile", Match: basenameEquals("poetry.lock"), Suggest: constantSuggest("poetry.lock")},
 	{Glob: "*.pb.go", Reason: "protobuf generated (Go)", Match: hasSuffixOf(".pb.go"), Suggest: constantSuggest("*.pb.go")},
 	{Glob: "*_pb2.py", Reason: "protobuf generated (Python)", Match: hasSuffixOf("_pb2.py"), Suggest: constantSuggest("*_pb2.py")},
-	{Glob: "*.generated.*", Reason: "generated code", Match: containsSegment(".generated."), Suggest: constantSuggest("*.generated.*")},
+	{Glob: "*.generated.*", Reason: "generated code", Match: basenameContains(".generated."), Suggest: constantSuggest("*.generated.*")},
 }
 
 func hasPathSegment(seg string) func(string) bool {
@@ -108,8 +108,19 @@ func basenameEquals(name string) func(string) bool {
 	}
 }
 
-func containsSegment(seg string) func(string) bool {
-	return func(p string) bool { return strings.Contains(p, seg) }
+// basenameContains matches when seg appears in the final path segment
+// (the filename), not in any intermediate directory. Aligns with how
+// extract.ShouldIgnore applies `*.generated.*` style globs — if the
+// detector matches on a directory but the Suggest glob only targets
+// basenames, the user's copy-pasted --ignore would leave the file in.
+func basenameContains(seg string) func(string) bool {
+	return func(p string) bool {
+		base := p
+		if i := strings.LastIndex(p, "/"); i >= 0 {
+			base = p[i+1:]
+		}
+		return strings.Contains(base, seg)
+	}
 }
 
 // DetectSuspectFiles scans the dataset for paths matching known
