@@ -4,15 +4,18 @@ Extracts commit metadata, file changes, blob sizes, and developer info into JSON
 
 ## Performance
 
-Benchmarked on open-source repositories (bare clones):
+Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built binary on a single machine (not a controlled lab benchmark; directional, not absolute).
 
-| Repository | Commits | Devs | Extract time | Throughput | JSONL size |
-|------------|---------|------|-------------|------------|------------|
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 286 | 0.9s | 7,800/s | 23K lines |
-| [Praat](https://github.com/praat/praat) | 10,221 | 24 | 26s | 393/s | 95K lines |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 1,140/s | 298K lines |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,480 | 2m 00s | 1,140/s | 943K lines |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,281 | 13m 12s | 1,816/s | 6M lines |
+| Repository | Commits | Devs | Extract | Stats (JSON) | Report (HTML) | JSONL size |
+|------------|---------|------|---------|-------------|--------------|------------|
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 1.5s | 0.18s | 0.27s | 23K lines / 6.5 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 25s | 0.96s | 1.0s | 95K lines / 30 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 47s | 2.9s | 3.0s | 298K lines / 96 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 2m 4s | 11.7s | 1m 29s | 943K lines / 314 MB |
+| [Chromium](https://chromium.googlesource.com/chromium/src) | 1,319,124 | — | — | 20s | 2m 4s | 1.3M lines / 498 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 6,078,056 | — | — | 1m 15s | 21m 24s | 6M lines / 1.9 GB |
+
+`extract` and `stats` are both roughly linear in commit count. `report` diverges from `stats` on large repos because it builds per-developer profiles (O(D × C) work); on kubernetes that adds ~80 seconds over `stats`, on linux it adds ~20 minutes. If you only need the aggregate data, use `stats --format json` for interactive analysis; run `report` when you actually want the HTML dashboard.
 
 ## Privacy and reliability
 
