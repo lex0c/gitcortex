@@ -319,6 +319,8 @@ When `stats` loads a dataset in table format, it scans for paths matching a cons
 
 If the matched paths together account for at least `suspectWarningMinChurnRatio` (10%) of total repo churn, a warning is emitted to stderr listing the top-6 buckets with a copy-pasteable `extract --ignore` invocation. Below the floor, no warning — a single incidental `.lock` file in an otherwise clean repo stays silent.
 
+Directory-segment heuristics (`vendor`, `node_modules`, `dist`, `build`, `third_party`) match the segment wherever it appears in the path, but `extract --ignore` treats a bare `dist/*` glob as a repo-root prefix. To avoid suggesting a fix that wouldn't actually remove the matched files, each bucket carries a `Suggestions` list of the specific parent prefixes it matched (e.g. `wp-includes/js/dist/*`, `services/auth/vendor/*`), and the warning emits every unique prefix so the copy-pasteable command covers every source of distortion. Suffix and basename patterns (`*.min.js`, `package-lock.json`, etc.) collapse to a single glob because extract's basename match already handles them at any depth.
+
 The warning is advisory. Nothing is auto-filtered; the user decides whether to re-extract. Matches do not affect computed stats in that run. JSON/CSV output paths skip the warning since they're typically piped.
 
 Statistical heuristics (very high churn-per-commit, single-author bulk updates) are deliberately out of scope — their false-positive rate on hand-authored code is higher than the path-based list and we'd rather stay quiet than cry wolf.
