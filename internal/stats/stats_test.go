@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -1924,6 +1925,32 @@ func TestHerfindahlHelper(t *testing.T) {
 				t.Errorf("herfindahl(%v) = %.3f, want ≈ %.3f", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+func TestPrintProfilesSpecializationDisplayPrecision(t *testing.T) {
+	// The Specialization display must show enough decimals that the
+	// rendered number is self-consistent with the band label. At %.2f a
+	// true value of 0.149 rounds to "0.15" and the shown label
+	// "broad generalist" (correct: 0.149 < 0.15) appears to contradict
+	// the displayed number (0.15 is NOT < 0.15). Using %.3f renders
+	// "0.149" and the reader can verify the classification at a glance.
+	p := DevProfile{
+		Name: "N", Email: "n@x", Commits: 1, ActiveDays: 1,
+		FirstDate: "2024-01-01", LastDate: "2024-01-01",
+		Specialization: 0.149, // just under specBroadGeneralistMax
+	}
+	var buf bytes.Buffer
+	f := NewFormatter(&buf, "table")
+	if err := f.PrintProfiles([]DevProfile{p}); err != nil {
+		t.Fatalf("PrintProfiles: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "0.149") {
+		t.Errorf("output should contain %q to match the classification band (%%.3f), got:\n%s", "0.149", out)
+	}
+	if !strings.Contains(out, "broad generalist") {
+		t.Errorf("output should contain label 'broad generalist' for H=0.149, got:\n%s", out)
 	}
 }
 
