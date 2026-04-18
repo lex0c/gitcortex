@@ -240,12 +240,21 @@ func (f *Formatter) PrintCoupling(results []CouplingResult) error {
 // LabelWithPercentile decorates a churn-risk label with the age and trend
 // percentile ranks when they are available, so readers can tell a barely
 // classified file from a strongly classified one. Returns the bare label
-// when percentiles are -1 (dataset below classifyMinSample).
-func LabelWithPercentile(label string, agePercentile, trendPercentile int) string {
-	if agePercentile < 0 || trendPercentile < 0 {
+// when either percentile is nil (dataset below classifyMinSample).
+func LabelWithPercentile(label string, agePercentile, trendPercentile *int) string {
+	if agePercentile == nil || trendPercentile == nil {
 		return label
 	}
-	return fmt.Sprintf("%s (age P%02d, trend P%02d)", label, agePercentile, trendPercentile)
+	return fmt.Sprintf("%s (age P%d, trend P%d)", label, *agePercentile, *trendPercentile)
+}
+
+// formatPercentile renders a percentile pointer for CSV: empty string
+// when nil so the column stays machine-parseable without a magic sentinel.
+func formatPercentile(p *int) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *p)
 }
 
 func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
@@ -261,9 +270,9 @@ func (f *Formatter) PrintChurnRisk(results []ChurnRiskResult) error {
 				fmt.Sprintf("%.1f", r.RecentChurn),
 				fmt.Sprintf("%d", r.BusFactor),
 				fmt.Sprintf("%d", r.AgeDays),
-				fmt.Sprintf("%d", r.AgePercentile),
+				formatPercentile(r.AgePercentile),
 				fmt.Sprintf("%.2f", r.Trend),
-				fmt.Sprintf("%d", r.TrendPercentile),
+				formatPercentile(r.TrendPercentile),
 				fmt.Sprintf("%d", r.TotalChanges),
 				r.FirstChangeDate,
 				r.LastChangeDate,

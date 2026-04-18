@@ -734,17 +734,22 @@ func TestChurnRiskPercentilesPopulatedOnLargeDataset(t *testing.T) {
 		t.Fatalf("got %d results, want 10", len(results))
 	}
 	for _, r := range results {
-		if r.AgePercentile < 0 || r.AgePercentile > 100 {
-			t.Errorf("%s: AgePercentile out of range: %d", r.Path, r.AgePercentile)
+		if r.AgePercentile == nil || r.TrendPercentile == nil {
+			t.Errorf("%s: percentiles should be populated on large dataset", r.Path)
+			continue
 		}
-		if r.TrendPercentile < 0 || r.TrendPercentile > 100 {
-			t.Errorf("%s: TrendPercentile out of range: %d", r.Path, r.TrendPercentile)
+		if *r.AgePercentile < 0 || *r.AgePercentile > 100 {
+			t.Errorf("%s: AgePercentile out of range: %d", r.Path, *r.AgePercentile)
+		}
+		if *r.TrendPercentile < 0 || *r.TrendPercentile > 100 {
+			t.Errorf("%s: TrendPercentile out of range: %d", r.Path, *r.TrendPercentile)
 		}
 	}
 }
 
 func TestChurnRiskPercentilesNotSetOnSmallDataset(t *testing.T) {
-	// 3 files → below classifyMinSample. Percentile fields should be -1.
+	// 3 files → below classifyMinSample. Percentile pointers should be nil
+	// so JSON consumers see omitted fields, not a `-1` sentinel.
 	ds := &Dataset{
 		Earliest: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
 		Latest:   time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -761,9 +766,31 @@ func TestChurnRiskPercentilesNotSetOnSmallDataset(t *testing.T) {
 	}
 	results := ChurnRisk(ds, 0)
 	for _, r := range results {
-		if r.AgePercentile != -1 || r.TrendPercentile != -1 {
-			t.Errorf("%s: percentiles should be -1 for small dataset, got age=%d trend=%d",
+		if r.AgePercentile != nil || r.TrendPercentile != nil {
+			t.Errorf("%s: percentiles should be nil for small dataset, got age=%v trend=%v",
 				r.Path, r.AgePercentile, r.TrendPercentile)
+		}
+	}
+}
+
+func TestLabelWithPercentile(t *testing.T) {
+	p := func(v int) *int { return &v }
+	cases := []struct {
+		name, label         string
+		age, trend          *int
+		want                string
+	}{
+		{"both nil → bare label", "legacy-hotspot", nil, nil, "legacy-hotspot"},
+		{"age nil → bare label", "silo", nil, p(10), "silo"},
+		{"trend nil → bare label", "active", p(75), nil, "active"},
+		{"both set → suffix", "legacy-hotspot", p(92), p(8), "legacy-hotspot (age P92, trend P8)"},
+		{"zero values render", "active-core", p(0), p(0), "active-core (age P0, trend P0)"},
+		{"three-digit value renders unpadded", "active", p(100), p(100), "active (age P100, trend P100)"},
+	}
+	for _, c := range cases {
+		got := LabelWithPercentile(c.label, c.age, c.trend)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
 }

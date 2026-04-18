@@ -394,10 +394,22 @@ var funcMap = template.FuncMap{
 	"joinDevs":  stats.JoinDevs,
 	"seq":       seq,
 	"list":      list,
-	"int64":      toInt64,
-	"actColor":   actColor,
-	"pctRatio":   pctRatio,
-	"plusInt":    plusInt,
+	"int64":     toInt64,
+	"actColor":  actColor,
+	"pctRatio":  pctRatio,
+	"plusInt":   plusInt,
+	"derefInt":  derefInt,
+}
+
+// derefInt returns the value behind an *int, or 0 if nil. Template-side
+// helper for optional percentile fields on ChurnRiskResult: nil becomes a
+// safe zero so `{{derefInt .AgePercentile}}` never panics or prints a
+// pointer address (which is what %d on *int would do).
+func derefInt(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 var tmpl = template.Must(template.New("report").Funcs(funcMap).Parse(reportHTML))

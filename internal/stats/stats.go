@@ -122,12 +122,13 @@ type ChurnRiskResult struct {
 	Trend           float64 // recent 3mo churn / earlier churn; 1 = flat, <0.5 declining, >1.5 growing
 	Label           string  // "cold" | "active" | "active-core" | "silo" | "legacy-hotspot"
 	// AgePercentile and TrendPercentile report where this file lands in the
-	// per-dataset distribution (0-100). -1 means "not computed" (dataset
-	// too small for adaptive thresholds). Surfacing these alongside the
+	// per-dataset distribution (0-100). Nil when the fallback path ran
+	// (dataset below classifyMinSample) so JSON consumers see the field
+	// omitted rather than a `-1` sentinel. Surfacing these alongside the
 	// label makes the distance from the classification boundary visible:
 	// `legacy-hotspot (age P92, trend P08)` vs a file that barely crossed.
-	AgePercentile   int
-	TrendPercentile int
+	AgePercentile   *int `json:"age_percentile,omitempty"`
+	TrendPercentile *int `json:"trend_percentile,omitempty"`
 }
 
 type WorkingPattern struct {
@@ -773,10 +774,12 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 
 		label := classifyFile(fe.recentChurn, lowChurn, bf, it.ageDays, it.trend, bands)
 
-		agePct, trendPct := -1, -1
+		var agePct, trendPct *int
 		if bands.HasPercentiles() {
-			agePct = rankInt(bands.sortedAges, it.ageDays)
-			trendPct = rankFloat(bands.sortedTrends, it.trend)
+			a := rankInt(bands.sortedAges, it.ageDays)
+			tr := rankFloat(bands.sortedTrends, it.trend)
+			agePct = &a
+			trendPct = &tr
 		}
 
 		results = append(results, ChurnRiskResult{
