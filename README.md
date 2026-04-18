@@ -16,6 +16,38 @@ Benchmarked on open-source repositories. `extract` reads bare clones; `stats` an
 
 `extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
 
+## Vendor and generated code
+
+**This is the biggest practical distortion in every stat.** Line-count metrics treat a 50k-line `generated.pb.go` the same as a 50k-line hand-written module. Lock files like `package-lock.json` regenerate with every dependency bump. Vendored dependencies inflate churn whenever they're updated. OpenAPI specs, minified JS, `bindata.go`-style embeds — all common, all inflate churn and bus factor without reflecting real human contribution.
+
+Run gitcortex on kubernetes without filtering and the top legacy-hotspots are `vendor/golang.org/x/tools/…/manifest.go`, `api/openapi-spec/v3/…v1alpha3_openapi.json`, and `staging/…/generated.pb.go` — technically correct per the data, practically useless for decision-making.
+
+Mitigate with `--ignore` glob patterns at extract time. Files matched are dropped from the JSONL entirely, so **every downstream stat** (hotspots, churn-risk, bus factor, coupling, dev-network, profiles) reflects only hand-authored code:
+
+```bash
+# Typical starter set
+gitcortex extract --repo . \
+  --ignore "vendor/*" \
+  --ignore "node_modules/*" \
+  --ignore "dist/*" \
+  --ignore "build/*" \
+  --ignore "*.min.js" \
+  --ignore "*.min.css" \
+  --ignore "package-lock.json" \
+  --ignore "yarn.lock" \
+  --ignore "Cargo.lock" \
+  --ignore "go.sum" \
+  --ignore "poetry.lock" \
+  --ignore "*.pb.go" \
+  --ignore "*_generated.go"
+```
+
+Patterns match against the file path as emitted by `git log --raw` (forward-slash, repo-relative). Directory patterns like `vendor/*` exclude anything under that prefix. File-name patterns like `*.pb.go` match at any depth.
+
+Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
+
+> Once `--ignore` filters a file, commit-level totals (`Summary.TotalAdditions/Deletions`) still include its lines because those are computed from the commit record before the file filter applies. Hotspot/churn totals diverge accordingly — documented in `docs/METRICS.md`.
+
 ## Privacy and reliability
 
 All processing is **100% local**. No external services, no network calls, **no AI**, no telemetry. gitcortex reads only git metadata (commits, authors, dates, file paths, line counts) — it never reads source code content. Commit messages are excluded by default and only included with `--include-commit-messages`. Data stays on your machine as a JSONL file that you control.
