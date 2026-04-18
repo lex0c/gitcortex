@@ -1927,6 +1927,47 @@ func TestHerfindahlHelper(t *testing.T) {
 	}
 }
 
+func TestHerfindahlPreservesPrecision(t *testing.T) {
+	// herfindahl must return the full float64 value; rounding happens only
+	// at display time. A prior version rounded to 3 decimals inside the
+	// function, which would misclassify boundary cases (e.g. true 0.1496
+	// rounding to 0.150 and flipping from "broad generalist" to "balanced").
+	// Three uniform buckets produce H = 1/3 exactly; the stored value must
+	// be the full-precision float, not a rounded approximation.
+	h := herfindahl([]int{1, 1, 1})
+	if h == 0.333 {
+		t.Fatal("herfindahl returned 0.333 — the function is rounding internally again")
+	}
+	oneThird := 1.0 / 3.0
+	if diff := h - oneThird; diff < -1e-12 || diff > 1e-12 {
+		t.Errorf("herfindahl([1,1,1]) = %.18f, want 1/3 = %.18f", h, oneThird)
+	}
+}
+
+func TestSpecLabelBandsBoundaryPrecision(t *testing.T) {
+	// Thresholds are strict <, so a value exactly at the threshold lands in
+	// the next band. Before the precision fix, internal rounding could move
+	// a value JUST under a threshold (say 0.14999) up to 0.150, crossing
+	// the band. Verify that values near boundaries classify by their true
+	// precision, not by a rounded approximation.
+	cases := []struct {
+		h    float64
+		want string
+	}{
+		{0.149999, "broad generalist"},  // just under specBroadGeneralistMax
+		{0.150001, "balanced"},          // just over
+		{0.349999, "balanced"},
+		{0.350001, "focused specialist"},
+		{0.699999, "focused specialist"},
+		{0.700001, "narrow specialist"},
+	}
+	for _, c := range cases {
+		if got := specLabel(c.h); got != c.want {
+			t.Errorf("specLabel(%.6f) = %q, want %q (boundary precision)", c.h, got, c.want)
+		}
+	}
+}
+
 func TestSpecLabelBands(t *testing.T) {
 	// Guard the four-band classification: boundaries are defined by the
 	// specBroadGeneralistMax / specBalancedMax / specFocusedMax constants.

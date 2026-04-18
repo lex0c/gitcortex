@@ -144,7 +144,12 @@ type DevEdge struct {
 // spread across many directories is a generalist.
 //
 // Returns 0 for empty input or zero-sum input; returns 1 for a single
-// non-zero bucket.
+// non-zero bucket. Returns full float64 precision — callers that need
+// to display the value should round at format time (the CLI and HTML
+// templates use %.2f). Rounding inside this function caused quantization-
+// induced label misclassification at band boundaries: a true value of
+// 0.1496 would round to 0.150 and flip from "broad generalist" to
+// "balanced".
 func herfindahl(values []int) float64 {
 	if len(values) == 0 {
 		return 0
@@ -168,7 +173,7 @@ func herfindahl(values []int) float64 {
 		p := float64(v) / total
 		h += p * p
 	}
-	return math.Round(h*1000) / 1000
+	return h
 }
 
 type StatsFlags struct {
