@@ -294,6 +294,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span style="color:#656d76;">Scope</span>
     <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
 
+    <span style="color:#656d76;">Specialization</span>
+    <span>{{printf "%.2f" .Specialization}} <span style="color:#656d76;">({{if lt .Specialization 0.15}}broad generalist{{else if lt .Specialization 0.35}}balanced{{else if lt .Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}})</span></span>
+
     <span style="color:#656d76;">Contribution</span>
     <span>{{if eq .ContribType "growth"}}<span style="color:#2da44e;">{{.ContribType}}</span>{{else if eq .ContribType "refactor"}}<span style="color:#cf222e;">{{.ContribType}}</span>{{else}}<span style="color:#bf8700;">{{.ContribType}}</span>{{end}} <span style="color:#656d76;">(ratio {{printf "%.2f" .ContribRatio}} · +{{.Additions}} −{{.Deletions}})</span></span>
 

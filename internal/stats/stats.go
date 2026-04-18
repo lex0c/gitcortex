@@ -34,6 +34,17 @@ const (
 	// additions. Strict < threshold: a commit with mean exactly 5.0 is
 	// NOT filtered.
 	refactorMaxChurnPerFile = 5.0
+
+	// Developer specialization labels, applied to DevProfile.Specialization
+	// (Herfindahl over per-directory file distribution). Tuned so that
+	// plausible repo shapes land in the expected band:
+	//   uniform spread over 7+ dirs → broad generalist
+	//   2-4 dirs with one somewhat dominant → balanced
+	//   one dir clearly dominant (~60-85% of files) → focused specialist
+	//   ≥ 85% of files in one dir → narrow specialist
+	specBroadGeneralistMax = 0.15
+	specBalancedMax        = 0.35
+	specFocusedMax         = 0.7
 )
 
 type ContributorStat struct {
@@ -118,6 +129,46 @@ type DevEdge struct {
 	SharedFiles int     // files where both devs contributed at least one line
 	SharedLines int64   // Σ min(linesA, linesB) across shared files — measures real overlap
 	Weight      float64 // shared_files / max(files_A, files_B) * 100 (legacy)
+}
+
+// herfindahl returns the Herfindahl–Hirschman concentration index of a
+// sample of non-negative values: Σ (pᵢ)² where pᵢ = valueᵢ / Σ value.
+//
+// Unlike Gini (which measures inequality between buckets and so returns 0
+// for both "100% in 1 bucket" and "evenly across N buckets"), Herfindahl
+// distinguishes these cases:
+//   100% in 1 bucket → 1 (maximal concentration / specialization)
+//   evenly across N buckets → 1/N (approaches 0 as N grows)
+// This matches the specialization semantics needed here: a developer
+// working in a single directory is maximally specialized, a developer
+// spread across many directories is a generalist.
+//
+// Returns 0 for empty input or zero-sum input; returns 1 for a single
+// non-zero bucket.
+func herfindahl(values []int) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var sum int64
+	for _, v := range values {
+		if v < 0 {
+			v = 0
+		}
+		sum += int64(v)
+	}
+	if sum == 0 {
+		return 0
+	}
+	total := float64(sum)
+	var h float64
+	for _, v := range values {
+		if v <= 0 {
+			continue
+		}
+		p := float64(v) / total
+		h += p * p
+	}
+	return math.Round(h*1000) / 1000
 }
 
 type StatsFlags struct {
@@ -689,6 +740,7 @@ type DevProfile struct {
 	LastDate        string
 	TopFiles        []DevFileContrib
 	Scope           []DirScope
+	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
 	Pace            float64 // commits per active day
@@ -912,6 +964,16 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			}
 			return scope[i].Dir < scope[j].Dir
 		})
+		// Specialization index: Herfindahl over the FULL per-directory
+		// file-count distribution (before truncation to top 5). 1.0 = all
+		// files in one directory (narrow specialist); ~0 = spread across
+		// many dirs (broad generalist). See herfindahl() for why this
+		// captures concentration rather than inequality.
+		specValues := make([]int, 0, len(dirCount))
+		for _, count := range dirCount {
+			specValues = append(specValues, count)
+		}
+		specialization := herfindahl(specValues)
 		if len(scope) > 5 {
 			scope = scope[:5]
 		}
@@ -962,7 +1024,7 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope,
+			TopFiles: topFiles, Scope: scope, Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,

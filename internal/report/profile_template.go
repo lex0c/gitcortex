@@ -53,8 +53,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 
 <div style="margin-bottom:16px;">
-  <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Scope</div>
-  <div class="hint" style="margin-bottom:6px;">Where this developer works, by share of files touched per directory. One dominant bar = specialist; evenly split = generalist or cross-team.</div>
+  <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Scope <span style="font-size:11px; color:#656d76; font-style:italic; margin-left:4px;">Specialization {{printf "%.2f" .Profile.Specialization}} — {{if lt .Profile.Specialization 0.15}}broad generalist{{else if lt .Profile.Specialization 0.35}}balanced{{else if lt .Profile.Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}}</span></div>
+  <div class="hint" style="margin-bottom:6px;">Where this developer works, by share of files touched per directory. The specialization number is the Herfindahl index over the full per-directory distribution: 1 = all files in a single directory, 1/N for a uniform spread across N directories (approaches 0 as N grows).</div>
   <div style="display:flex; height:28px; border-radius:4px; overflow:hidden; gap:1px;">
     {{range $i, $s := .Profile.Scope}}<div style="flex:{{printf "%.0f" $s.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$s.Dir}} — {{$s.Files}} files ({{printf "%.0f" $s.Pct}}%)">{{if gt $s.Pct 8.0}}{{$s.Dir}} {{printf "%.0f" $s.Pct}}%{{end}}</div>{{end}}
   </div>
