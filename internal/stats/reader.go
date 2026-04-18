@@ -462,7 +462,29 @@ func applyRenames(ds *Dataset) {
 		isDuplicate := oldPathCounts[e.oldPath] > 1
 		wasRecreated := isRenameTarget[e.oldPath]
 		if isDuplicate && !wasRecreated {
-			continue // path reused — refuse to migrate
+			continue // path reused — refuse to migrate (multi-edge pattern)
+		}
+		// Single-edge reuse pattern: oldPath appears in exactly one rename,
+		// but a new unrelated file was created at oldPath after that
+		// rename. The multi-edge heuristic can't see this — detect it by
+		// comparing the oldPath's lastChange to the rename's commitDate.
+		// If lastChange is after the rename, the activity belongs to a
+		// second lineage that must not leak into newPath.
+		//
+		// Guard with `!wasRecreated`: when the oldPath is also the target
+		// of some other rename (rename-back chain or cycle A↔B), the
+		// later rename commit updates ds.files[oldPath].lastChange to
+		// its own date, so lastChange.After(commitDate) would trigger
+		// spuriously. wasRecreated signals that the activity after the
+		// original rename is itself coming from a rename edge, not from
+		// a brand-new unrelated file.
+		//
+		// Requires both dates to be known; the check is defensive and
+		// only fires when we have enough signal to be certain.
+		if fe, ok := ds.files[e.oldPath]; ok && !wasRecreated &&
+			!e.commitDate.IsZero() && !fe.lastChange.IsZero() &&
+			fe.lastChange.After(e.commitDate) {
+			continue
 		}
 		// First edge wins per oldPath; edges are pre-sorted so this is
 		// the chronologically newest rename (the direction the lineage

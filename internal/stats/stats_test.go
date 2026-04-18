@@ -1538,6 +1538,72 @@ func TestRenameSkipsReusedOldPath(t *testing.T) {
 	}
 }
 
+func TestRenameSkipsSingleEdgeReusedOldPath(t *testing.T) {
+	// Path reuse with a SINGLE rename edge: A → B in old history, then
+	// an unrelated file is created at "A" and never renamed further.
+	// Only one edge involves A, so oldPathCounts[A] = 1 and the
+	// multi-edge heuristic cannot detect reuse. The tell is temporal:
+	// ds.files["A"].lastChange is AFTER the rename's commitDate, which
+	// means activity on "A" continued past the rename — the new file.
+	//
+	// Without this check, direct[A] = B is applied and the new file's
+	// history silently merges into B, corrupting B's stats.
+	tRename := time.Date(2024, 2, 10, 0, 0, 0, 0, time.UTC)
+	tNewFile := time.Date(2024, 5, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tRename},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {
+			commits:    2, // 1 pre-rename (lineage 1) + 1 post-rename (lineage 2)
+			lastChange: tNewFile,
+			monthChurn: map[string]int64{},
+		},
+		"B": {
+			commits:    1,
+			lastChange: tRename,
+			monthChurn: map[string]int64{},
+		},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; !ok {
+		t.Error("A should remain — single-edge path reuse must skip migration")
+	}
+	if a, ok := ds.files["A"]; ok && a.commits != 2 {
+		t.Errorf("A.commits = %d, want 2 (unchanged)", a.commits)
+	}
+	if ds.files["B"].commits != 1 {
+		t.Errorf("B.commits = %d, want 1 (lineage 2 must not have leaked in)", ds.files["B"].commits)
+	}
+}
+
+func TestRenameCleanRenameStillMigrates(t *testing.T) {
+	// Counter-test: the single-edge reuse check must not fire for a
+	// clean rename where all activity on oldPath predates the rename.
+	// lastChange(A) ≤ commitDate(A→B) → migration proceeds, A merges
+	// into B.
+	tLastA := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	tRename := time.Date(2024, 2, 10, 0, 0, 0, 0, time.UTC)
+	ds := newDataset()
+	ds.renameEdges = []renameEdge{
+		{oldPath: "A", newPath: "B", commitDate: tRename},
+	}
+	ds.files = map[string]*fileEntry{
+		"A": {commits: 3, lastChange: tLastA, monthChurn: map[string]int64{}},
+		"B": {commits: 1, lastChange: tRename, monthChurn: map[string]int64{}},
+	}
+	applyRenames(ds)
+
+	if _, ok := ds.files["A"]; ok {
+		t.Error("A should have been migrated into B (clean rename)")
+	}
+	if ds.files["B"].commits != 4 {
+		t.Errorf("B.commits = %d, want 4 (A=3 + B=1 merged)", ds.files["B"].commits)
+	}
+}
+
 func TestRenameBackThenRenameAgain(t *testing.T) {
 	// Same-lineage chain with a rename-back: A → B → A → C. The repeated
 	// "A" is NOT path reuse — the intermediate edge B → A recreates A
