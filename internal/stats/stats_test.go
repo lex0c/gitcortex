@@ -2029,6 +2029,49 @@ func TestDevProfilesSpecialization(t *testing.T) {
 	}
 }
 
+func TestDevProfilesSpecializationRootFilesBucket(t *testing.T) {
+	// Bug reported in review: when a dev touches only repo-root files
+	// (no slash in path), DevProfiles used to treat each filename as its
+	// own "directory". A dev with README, Makefile, go.mod, LICENSE
+	// ended up with 4 pseudo-dirs × 1 file → Herfindahl = 0.25
+	// ("balanced") instead of 1.0 ("narrow specialist on the repo root").
+	// Fix collapses root-level files into the "." bucket, matching the
+	// convention in DirectoryStats.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": {email: "root@x", date: t1, add: 10, del: 0, files: 4}},
+		contributors: map[string]*ContributorStat{
+			"root@x": {Email: "root@x", Name: "R", Commits: 1, ActiveDays: 1, FilesTouched: 4, Additions: 10},
+		},
+		files: map[string]*fileEntry{
+			"README.md": {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"Makefile":  {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"go.mod":    {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+			"LICENSE":   {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "")
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	// All four files are at the root, so they must collapse into one
+	// bucket named ".". Specialization must be 1.0 (narrow specialist).
+	if p.Specialization != 1.0 {
+		t.Errorf("root-only dev specialization = %.3f, want 1.0 (all four files collapse to one bucket)", p.Specialization)
+	}
+	if len(p.Scope) != 1 {
+		t.Fatalf("Scope = %d entries, want 1 (the '.' bucket)", len(p.Scope))
+	}
+	if p.Scope[0].Dir != "." {
+		t.Errorf("Scope[0].Dir = %q, want \".\"", p.Scope[0].Dir)
+	}
+	if p.Scope[0].Files != 4 {
+		t.Errorf("Scope[0].Files = %d, want 4", p.Scope[0].Files)
+	}
+}
+
 func TestDevProfilesSpecializationEdgeCases(t *testing.T) {
 	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 

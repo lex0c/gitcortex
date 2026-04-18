@@ -938,11 +938,17 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			wpct = math.Round(float64(weekend)/float64(total)*1000) / 10
 		}
 
-		// Scope: top directories by file count
+		// Scope: top directories by file count. Root-level files (no "/"
+		// in path) collapse into "." so they form a single bucket instead
+		// of each filename becoming its own pseudo-directory. Matches the
+		// convention in DirectoryStats and keeps Specialization honest —
+		// otherwise a dev who only touches README, Makefile, go.mod, etc.
+		// appears as a broad generalist across N pseudo-dirs instead of
+		// a narrow specialist on the repo root.
 		dirCount := make(map[string]int)
 		if files, ok := devFiles[email]; ok {
 			for path := range files {
-				dir := path
+				dir := "."
 				if idx := strings.LastIndex(path, "/"); idx >= 0 {
 					dir = path[:idx]
 				}
