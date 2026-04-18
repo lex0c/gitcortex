@@ -46,6 +46,8 @@ Patterns match against the file path as emitted by `git log --raw` (forward-slas
 
 Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
 
+**You don't need to get this right on the first try.** When `stats` runs on an un-filtered dataset and likely vendor/generated paths account for ≥10% of repo churn, it prints a warning to stderr with the matched buckets and a copy-pasteable `--ignore` invocation. Running the suggestion and re-extracting is the fastest path from raw repo to usable stats.
+
 > Both commit-level (`Summary.TotalAdditions/Deletions`) and file-level aggregations recompute from the filtered set, so all totals stay consistent after `--ignore` — the extract step recalculates commit additions/deletions as the sum of non-ignored file records before writing them to JSONL.
 
 ## Privacy and reliability
@@ -256,26 +258,26 @@ gitcortex stats --input data.jsonl --stat churn-risk --top 15
 gitcortex stats --input data.jsonl --stat churn-risk --churn-half-life 60   # faster decay
 ```
 
-Real output from the Pi-hole repository (one sample per label):
+Real output:
 
 ```
-PATH                                        LABEL           CHURN   BF  AGE    TREND
-automated install/basic-install.sh          active          115.3   15  4121d  0.00
-.github/workflows/codeql-analysis.yml       legacy-hotspot  66.2    2   1640d  0.26
-advanced/bash-completion/pihole-ftl.bash    silo            16.5    1   240d   1.00
-test/_alpine_3_23.Dockerfile                active-core     7.1     1   120d   1.00
-advanced/Templates/gravity.db.schema        cold            0.0     1   2616d  1.00
+PATH                                   LABEL                                       RECENT CHURN  BF   AGE    TREND
+automated install/basic-install.sh     active (age P90, trend P87)                 115.3         15   4121d  0.00
+.github/workflows/codeql-analysis.yml  active-core (age P30, trend P95)            66.2          2    1640d  0.26
+advanced/Scripts/utils.sh              active-core (age P27, trend P94)            53.3          2    1523d  0.10
 ```
 
 | Label | Meaning |
 |-------|---------|
 | `cold` | Low recent churn — ignore. |
 | `active` | Shared ownership (bus factor ≥ 3). Healthy. |
-| `active-core` | New code (< 180d), single author. Usually fine. |
+| `active-core` | New code (younger than most of the repo), single author. Usually fine. |
 | `silo` | Old + concentrated + stable/growing. Knowledge bottleneck — plan transfer. |
 | `legacy-hotspot` | **Urgent.** Old + concentrated + declining. Deprecated paths still being touched. |
 
 Sort key is `recent_churn`; the label answers "is this activity a problem?". The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
+
+**The `(age PXX, trend PYY)` suffix** reports where the file sits in this repo's distribution: `age P90` = older than 90% of tracked files, `trend P08` = declining more sharply than 92%. Classification thresholds are not absolute — they adapt to each dataset (P75 age and P25 trend, with a fallback to fixed constants for repos under 8 files). A `legacy-hotspot` with `(age P76, trend P24)` barely qualifies; one at `(age P98, trend P03)` is the real alarm. Distance from the boundary is now visible instead of hidden. See `docs/METRICS.md` for the adaptive-thresholds section.
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
 
