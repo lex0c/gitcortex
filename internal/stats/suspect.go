@@ -192,6 +192,17 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 	return out, worth
 }
 
+// ShellQuoteSingle wraps s in POSIX single quotes, escaping any
+// embedded single quotes via the `'\''` sequence. Git paths can
+// legally contain single quotes (and every other shell metacharacter),
+// so suggestion globs derived from real repo paths must not be
+// interpolated into copy-paste commands with naive `'%s'` formatting —
+// one stray `'` in a subdirectory name would split the command into
+// multiple words and break everything after it.
+func ShellQuoteSingle(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // CollectAllSuggestions returns deduplicated --ignore globs across
 // every bucket, preserving bucket order followed by in-bucket order.
 // Callers surface a subset of buckets in their UI (e.g. top-N display)

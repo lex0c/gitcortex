@@ -230,7 +230,7 @@ func printSuspectWarning(w io.Writer, buckets []stats.SuspectBucket) {
 	suggestions := stats.CollectAllSuggestions(buckets)
 	fmt.Fprint(w, "   Rerun extract with --ignore to drop them, e.g.:\n     gitcortex extract --repo .")
 	for _, s := range suggestions {
-		fmt.Fprintf(w, " --ignore '%s'", s)
+		fmt.Fprintf(w, " --ignore %s", stats.ShellQuoteSingle(s))
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w)

@@ -220,6 +220,85 @@ func keys(m map[string]bool) []string {
 // ShouldIgnore that tightens prefix semantics would break the
 // suspect warning's entire value proposition without any stats test
 // firing.
+func TestShellQuoteSingle(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"vendor/*", `'vendor/*'`},
+		{"*.min.js", `'*.min.js'`},
+		{"package-lock.json", `'package-lock.json'`},
+		{"", `''`},
+		// The whole reason this helper exists: paths carrying a single
+		// quote would break naive '%s' interpolation. Expected POSIX
+		// shell-quoting closes the quote, appends an escaped `'`, then
+		// reopens the quote.
+		{"foo's vendor/*", `'foo'\''s vendor/*'`},
+		{"a'b'c", `'a'\''b'\''c'`},
+		{"'", `''\'''`},
+		// Other shell metacharacters stay safe inside single quotes.
+		{"$VAR`cmd`/*", `'$VAR` + "`cmd`" + `/*'`},
+		{`has "double" quotes/*`, `'has "double" quotes/*'`},
+	}
+	for _, c := range cases {
+		got := ShellQuoteSingle(c.in)
+		if got != c.want {
+			t.Errorf("ShellQuoteSingle(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestShellQuoteSingleRoundTrip sanity-checks that the quoted form
+// actually parses back to the original string under POSIX shell
+// single-quote rules. Implemented by a hand-rolled mini-parser rather
+// than shelling out, so the test is deterministic and hermetic.
+func TestShellQuoteSingleRoundTrip(t *testing.T) {
+	inputs := []string{
+		"vendor/*",
+		"foo's dir/*.go",
+		"it's a/b's c",
+		"'",
+		"''",
+		"a'b",
+		"plain/path",
+	}
+	for _, in := range inputs {
+		quoted := ShellQuoteSingle(in)
+		got := posixSingleQuoteUnquote(t, quoted)
+		if got != in {
+			t.Errorf("round-trip of %q via %q → %q", in, quoted, got)
+		}
+	}
+}
+
+// posixSingleQuoteUnquote parses a string composed only of single-quoted
+// segments and `\'` escapes (the exact shape ShellQuoteSingle emits).
+// Anything else is a test failure.
+func posixSingleQuoteUnquote(t *testing.T, s string) string {
+	t.Helper()
+	var out []byte
+	i := 0
+	for i < len(s) {
+		if s[i] != '\'' {
+			t.Fatalf("expected opening ' at index %d in %q", i, s)
+		}
+		i++ // consume opening '
+		for i < len(s) && s[i] != '\'' {
+			out = append(out, s[i])
+			i++
+		}
+		if i >= len(s) {
+			t.Fatalf("unterminated single quote in %q", s)
+		}
+		i++ // consume closing '
+		// Optional `\'` escape bridging two single-quoted segments
+		if i+1 < len(s) && s[i] == '\\' && s[i+1] == '\'' {
+			out = append(out, '\'')
+			i += 2
+		}
+	}
+	return string(out)
+}
+
 func TestCollectAllSuggestionsCoversUnshownBuckets(t *testing.T) {
 	// Construct a dataset that triggers every directory-segment and
 	// common lockfile/suffix bucket, more than the CLI's display limit
