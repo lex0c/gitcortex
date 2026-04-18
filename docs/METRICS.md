@@ -203,6 +203,7 @@ Per-developer report combining multiple metrics.
 | Pace | commits / active_days (smooths bursts — a dev with 100 commits on 2 days and silence for 28 shows pace=50, which reads as a steady rate but isn't) |
 | Weekend % | commits on Saturday+Sunday / total commits × 100 |
 | Scope | Top 5 directories by unique file count, as % of total files touched |
+| Specialization | Herfindahl index over the **full** per-directory file-count distribution: Σ pᵢ² where pᵢ is the share of the dev's files in directory i. 1 = all files in one directory (narrow specialist); 1/N for a uniform spread across N directories; approaches 0 as the distribution widens. Computed before the top-5 Scope truncation so it reflects actual breadth. Labels (see `specBroadGeneralistMax`, `specBalancedMax`, `specFocusedMax` constants): `< 0.15` broad generalist, `< 0.35` balanced, `< 0.7` focused specialist, `≥ 0.7` narrow specialist. Herfindahl, not Gini, because Gini would collapse "1 file in 1 dir" and "1 file in each of 5 dirs" to the same value (both have zero inequality among buckets), which misses the specialization distinction. |
 | Contribution type | Based on del/add ratio: growth (<0.4), balanced (0.4-0.8), refactor (>0.8) |
 | Collaborators | Top 5 devs sharing code with this dev. Ranked by `shared_lines` (Σ min(linesA, linesB) across shared files), tiebreak `shared_files`, then email. Same `shared_lines` semantics as the Developer Network metric — discounts trivial one-line touches so "collaborator" reflects real overlap. |
 
@@ -270,6 +271,9 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `contribBalancedRatio` | `0.4` | `0.4 ≤ del/add < 0.8` → `balanced`; below 0.4 → `growth`. |
 | `refactorMinFiles` | `10` | Minimum files for a commit to be a mechanical-refactor candidate (coupling filter). |
 | `refactorMaxChurnPerFile` | `5.0` | Mean churn per file below this in a candidate commit → treated as refactor; its pairs are excluded from coupling. |
+| `specBroadGeneralistMax` | `0.15` | Specialization Herfindahl `< 0.15` → `broad generalist` label in dev profile. |
+| `specBalancedMax` | `0.35` | `0.15 ≤ H < 0.35` → `balanced`. |
+| `specFocusedMax` | `0.7` | `0.35 ≤ H < 0.7` → `focused specialist`; `H ≥ 0.7` → `narrow specialist`. |
 
 ### Reproducibility
 

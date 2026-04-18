@@ -196,7 +196,7 @@ Available stats:
 | `churn-risk` | Files ranked by recent churn, classified into `cold` / `active` / `active-core` / `silo` / `legacy-hotspot` |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
-| `profile` | Per-developer report: scope, contribution type, pace, collaboration, top files |
+| `profile` | Per-developer report: scope, specialization index, contribution type, pace, collaboration, top files |
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
 | `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 
@@ -206,7 +206,7 @@ See [`docs/METRICS.md`](docs/METRICS.md) for how each metric is calculated, incl
 
 ### Developer profile
 
-Manager-facing report per developer showing scope, contribution type, pace, collaboration, and top files.
+Manager-facing report per developer showing scope, specialization, contribution type, pace, collaboration, and top files.
 
 ```bash
 # All developers, ranked by commits
@@ -221,9 +221,10 @@ gitcortex stats --input data.jsonl --stat profile --format json
 
 Each profile includes:
 - **Scope**: top directories where the dev works (by unique files, %)
+- **Specialization**: Herfindahl concentration over the dev's full directory distribution; 1 = all files in one dir (narrow specialist), approaches 0 for broad generalists. Labelled `broad generalist` / `balanced` / `focused specialist` / `narrow specialist`
 - **Contribution**: growth (add >> del), balanced, or refactor (del >> add)
 - **Pace**: commits per active day
-- **Collaboration**: top devs sharing the same files
+- **Collaboration**: top devs sharing the same files (ranked by `shared_lines` = Σ min(linesA, linesB))
 - **Weekend %**: off-hours work ratio
 - **Top files**: most impacted files by churn
 
