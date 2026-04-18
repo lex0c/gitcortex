@@ -269,30 +269,12 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	if showAll || sf.stat == "pareto" {
 		fmt.Fprintln(os.Stderr, "\n=== Concentration (Pareto) ===")
 		p := reportpkg.ComputePareto(ds)
-		judge := func(pct float64, total int) string {
-			if total == 0 {
-				return "no data"
-			}
-			if pct <= 10 {
-				return "extremely concentrated"
-			} else if pct <= 25 {
-				return "moderately concentrated"
-			}
-			return "well distributed"
-		}
-		devsLabel := judge(p.DevsPct80Commits, p.TopCommitDevs)
-		if p.TopCommitDevs > 0 && p.DevsPct80Commits <= 10 {
-			devsLabel += ", key-person dependence"
-		}
-		// Gate each line on the corresponding TopChurn/TopCommit count.
-		// judge() only uses its second arg as a zero-guard, so passing the
-		// Top* count (which is 0 when the signal is absent, e.g. zero-churn
-		// dataset or empty contributors) maps directly to "no data" without
-		// falsely hitting the "extremely concentrated" branch.
-		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, judge(p.FilesPct80Churn, p.TopChurnFiles))
-		fmt.Fprintf(os.Stdout, "Devs (commits): %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, devsLabel)
-		fmt.Fprintf(os.Stdout, "Devs (churn):   %d of %d devs produce 80%% of line churn — %s\n", p.TopChurnDevs, p.TotalDevs, judge(p.DevsPct80Churn, p.TopChurnDevs))
-		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, judge(p.DirsPct80Churn, p.TopChurnDirs))
+		// Labels are precomputed in ComputePareto so CLI and HTML share
+		// one source of truth on thresholds and wording.
+		fmt.Fprintf(os.Stdout, "Files:  %d of %d files concentrate 80%% of churn — %s\n", p.TopChurnFiles, p.TotalFiles, p.FilesLabel)
+		fmt.Fprintf(os.Stdout, "Devs (commits): %d of %d devs produce 80%% of commits — %s\n", p.TopCommitDevs, p.TotalDevs, p.DevsCommitsLabel)
+		fmt.Fprintf(os.Stdout, "Devs (churn):   %d of %d devs produce 80%% of line churn — %s\n", p.TopChurnDevs, p.TotalDevs, p.DevsChurnLabel)
+		fmt.Fprintf(os.Stdout, "Dirs:   %d of %d dirs concentrate 80%% of churn — %s\n", p.TopChurnDirs, p.TotalDirs, p.DirsLabel)
 	}
 	if showAll || sf.stat == "top-commits" {
 		fmt.Fprintf(os.Stderr, "\n=== Top %d Commits ===\n", sf.topN)

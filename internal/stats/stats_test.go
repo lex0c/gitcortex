@@ -528,6 +528,44 @@ func TestBusFactorOrderDeterministicUnderTies(t *testing.T) {
 	}
 }
 
+func TestBusFactorTopDevsDeterministicUnderTies(t *testing.T) {
+	// Two devs touching the same file with equal line counts. Without an
+	// email tiebreaker inside the per-file sort, TopDevs order flips between
+	// runs because the iteration that builds the slice comes from a random
+	// map ordering. Small binary assets (.gif, .png, one-liner configs) in
+	// real repos frequently hit this case.
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"tied.bin": {commits: 2, devLines: map[string]int64{
+				"zeta@x": 5,
+				"alpha@x": 5,
+			}},
+		},
+	}
+	first := BusFactor(ds, 10)
+	if len(first) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(first))
+	}
+	// Run 30 times; TopDevs ordering must stay identical.
+	for i := 0; i < 30; i++ {
+		run := BusFactor(ds, 10)
+		if len(run[0].TopDevs) != len(first[0].TopDevs) {
+			t.Fatalf("iter %d: TopDevs length drift: got %v, want %v",
+				i, run[0].TopDevs, first[0].TopDevs)
+		}
+		for j, e := range run[0].TopDevs {
+			if e != first[0].TopDevs[j] {
+				t.Fatalf("iter %d idx %d: got %q, want %q (full: %v vs %v)",
+					i, j, e, first[0].TopDevs[j], run[0].TopDevs, first[0].TopDevs)
+			}
+		}
+	}
+	// Expected tiebreaker: email asc → alpha before zeta.
+	if first[0].TopDevs[0] != "alpha@x" {
+		t.Errorf("TopDevs[0] = %q, want %q", first[0].TopDevs[0], "alpha@x")
+	}
+}
+
 func TestBusFactorSingleDev(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{

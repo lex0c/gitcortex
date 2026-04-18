@@ -11,6 +11,14 @@ import (
 	"github.com/lex0c/gitcortex/internal/stats"
 )
 
+// Pareto concentration label boundaries, in % of the universe needed to
+// cover 80% of activity. Shared by the HTML report and the CLI so both
+// surfaces classify and color concentration consistently.
+const (
+	paretoExtremelyConcentratedMax = 10.0 // ≤10% of items → extremely concentrated (🔴)
+	paretoModeratelyConcentratedMax = 25.0 // ≤25% → moderately concentrated (🟡); above → well distributed (🟢)
+)
+
 type ReportData struct {
 	RepoName     string
 	Summary      stats.Summary
@@ -46,6 +54,34 @@ type ParetoData struct {
 	TotalDevs        int
 	TopChurnDirs     int
 	TotalDirs        int
+
+	// Precomputed human labels and emoji markers. Both CLI and HTML read
+	// from these so the two surfaces never drift on thresholds or wording.
+	FilesLabel        string
+	FilesMarker       string
+	DevsCommitsLabel  string
+	DevsCommitsMarker string
+	DevsChurnLabel    string
+	DevsChurnMarker   string
+	DirsLabel         string
+	DirsMarker        string
+}
+
+// concentrationLabel classifies a Pareto percentage (items holding 80% of
+// activity) into a textual band and matching emoji marker. topCount is the
+// raw count used as a zero-guard: empty signals map to "no data" / ⚪
+// regardless of the pct value (which would otherwise be 0 and trip ≤10).
+func concentrationLabel(pct float64, topCount int) (label, marker string) {
+	if topCount == 0 {
+		return "no data", "⚪"
+	}
+	if pct <= paretoExtremelyConcentratedMax {
+		return "extremely concentrated", "🔴"
+	}
+	if pct <= paretoModeratelyConcentratedMax {
+		return "moderately concentrated", "🟡"
+	}
+	return "well distributed", "🟢"
 }
 
 func ComputePareto(ds *stats.Dataset) ParetoData {
@@ -63,7 +99,7 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	// commits), skip the loop entirely. Without this, the first iteration
 	// trips on `cum >= 0` and leaves TopChurnFiles = 1 for empty signal.
 	if totalChurn > 0 {
-		threshold := float64(totalChurn) * 0.8
+		threshold := float64(totalChurn) * stats.Pct80Threshold
 		var cum int64
 		for _, h := range hotspots {
 			cum += h.Churn
@@ -91,7 +127,7 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	// Guard: when the aggregate is zero, the 80% threshold is zero and the
 	// first iteration trips it, producing TopX=1 for an empty signal. Skip.
 	if totalCommits > 0 {
-		commitThreshold := float64(totalCommits) * 0.8
+		commitThreshold := float64(totalCommits) * stats.Pct80Threshold
 		var cumCommits int
 		for _, c := range contribs {
 			cumCommits += c.Commits
@@ -125,7 +161,7 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	// Same zero-aggregate guard as above. Without it, zero-churn datasets
 	// (e.g., all empty commits) would report 1 dev as the 80% owner.
 	if totalDevChurn > 0 {
-		devChurnThreshold := float64(totalDevChurn) * 0.8
+		devChurnThreshold := float64(totalDevChurn) * stats.Pct80Threshold
 		var cumDevChurn int64
 		for _, c := range byChurn {
 			cumDevChurn += c.Additions + c.Deletions
@@ -148,7 +184,7 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	p.TotalDirs = len(dirs)
 	// Same zero-churn guard as files.
 	if totalDirChurn > 0 {
-		dirThreshold := float64(totalDirChurn) * 0.8
+		dirThreshold := float64(totalDirChurn) * stats.Pct80Threshold
 		var cumDirChurn int64
 		for _, d := range dirs {
 			cumDirChurn += d.Churn
@@ -161,6 +197,14 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 			p.DirsPct80Churn = math.Round(float64(p.TopChurnDirs) / float64(p.TotalDirs) * 1000) / 10
 		}
 	}
+
+	p.FilesLabel, p.FilesMarker = concentrationLabel(p.FilesPct80Churn, p.TopChurnFiles)
+	p.DevsCommitsLabel, p.DevsCommitsMarker = concentrationLabel(p.DevsPct80Commits, p.TopCommitDevs)
+	if p.TopCommitDevs > 0 && p.DevsPct80Commits <= paretoExtremelyConcentratedMax {
+		p.DevsCommitsLabel += ", key-person dependence"
+	}
+	p.DevsChurnLabel, p.DevsChurnMarker = concentrationLabel(p.DevsPct80Churn, p.TopChurnDevs)
+	p.DirsLabel, p.DirsMarker = concentrationLabel(p.DirsPct80Churn, p.TopChurnDirs)
 
 	return p
 }

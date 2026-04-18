@@ -45,6 +45,11 @@ const (
 	specBroadGeneralistMax = 0.15
 	specBalancedMax        = 0.35
 	specFocusedMax         = 0.7
+
+	// Pct80Threshold is the classic 80/20 cutoff. Any question of the
+	// form "what is the smallest subset that accounts for 80% of X?" uses
+	// this (bus factor across files/dirs, Pareto across files/devs/dirs).
+	Pct80Threshold = 0.8
 )
 
 type ContributorStat struct {
@@ -311,7 +316,7 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 		sort.Slice(devSlice, func(i, j int) bool { return devSlice[i].lines > devSlice[j].lines })
 		bf := 0
 		var cum int64
-		threshold := float64(totalLines) * 0.8
+		threshold := float64(totalLines) * Pct80Threshold
 		for _, dv := range devSlice {
 			cum += dv.lines
 			bf++
@@ -411,10 +416,13 @@ func BusFactor(ds *Dataset, n int) []BusFactorResult {
 		}
 
 		sort.Slice(devs, func(i, j int) bool {
-			return devs[i].lines > devs[j].lines
+			if devs[i].lines != devs[j].lines {
+				return devs[i].lines > devs[j].lines
+			}
+			return devs[i].email < devs[j].email
 		})
 
-		threshold := float64(totalLines) * 0.8
+		threshold := float64(totalLines) * Pct80Threshold
 		var cumulative int64
 		busFactor := 0
 		var topDevs []string
@@ -597,7 +605,7 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 
 		bf := 0
 		var cum int64
-		threshold := float64(totalLines) * 0.8
+		threshold := float64(totalLines) * Pct80Threshold
 		for _, d := range devs {
 			cum += d.lines
 			bf++
