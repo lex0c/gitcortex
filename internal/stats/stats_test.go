@@ -848,6 +848,36 @@ func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
 	}
 }
 
+func TestClassifyFileFloorBoundary(t *testing.T) {
+	// Strict-less-than check with the adaptive floor means files whose
+	// trend is exactly at the floor are NOT declining; files strictly
+	// below it are. This pins the comparison semantics so a future
+	// refactor doesn't silently flip < to <=.
+	bands := classifyBands{
+		OldAgeDays:     100,
+		DecliningTrend: adaptiveDecliningTrendFloor, // 0.01
+	}
+	// All cases share old age + concentrated ownership + non-cold churn
+	// so the trend predicate drives the label.
+	cases := []struct {
+		name  string
+		trend float64
+		want  string
+	}{
+		{"trend 0 (dormant, earlier-only) → declining", 0.0, "legacy-hotspot"},
+		{"trend 0.001 below floor → declining", 0.001, "legacy-hotspot"},
+		{"trend exactly at floor 0.01 → NOT declining", 0.01, "silo"},
+		{"trend 0.011 above floor → NOT declining", 0.011, "silo"},
+		{"trend 1.0 flat → NOT declining", 1.0, "silo"},
+	}
+	for _, c := range cases {
+		got := classifyFile(100, 50, 1, 200, c.trend, bands)
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
 	// Degenerate trend case: every file's history fits entirely inside the
 	// trend window (earlier bucket is empty), so churnTrend returns the
