@@ -42,11 +42,11 @@ gitcortex extract --repo . \
   --ignore "*_generated.go"
 ```
 
-Patterns match against the file path as emitted by `git log --raw` (forward-slash, repo-relative). Directory patterns like `vendor/*` exclude anything under that prefix. File-name patterns like `*.pb.go` match at any depth.
+Patterns match against the file path as emitted by `git log --raw` (forward-slash, repo-relative). Directory patterns like `vendor/*` are **repo-root prefixes** — they exclude everything under `vendor/` at the top of the tree, but **not** nested occurrences like `pkg/vendor/foo.go` or `services/auth/vendor/bar.go`. For those you need explicit entries such as `--ignore "pkg/vendor/*"`. File-name patterns like `*.pb.go` and `package-lock.json` match at any depth via extract's basename match, so one entry covers every occurrence.
 
 Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
 
-**You don't need to get this right on the first try.** When `stats` runs on an un-filtered dataset and likely vendor/generated paths account for ≥10% of repo churn, it prints a warning to stderr with the matched buckets and a copy-pasteable `--ignore` invocation. Running the suggestion and re-extracting is the fastest path from raw repo to usable stats.
+**You don't need to get this right on the first try.** When `stats` runs on an un-filtered dataset and likely vendor/generated paths account for ≥10% of repo churn, it prints a warning to stderr with the matched buckets and a copy-pasteable `--ignore` invocation. The warning enumerates the exact nested prefixes it found (e.g. `wp-includes/js/dist/*`, `services/auth/vendor/*`), so monorepos and subproject-heavy layouts get the specific entries they need without guessing. Running the suggestion and re-extracting is the fastest path from raw repo to usable stats.
 
 > Both commit-level (`Summary.TotalAdditions/Deletions`) and file-level aggregations recompute from the filtered set, so all totals stay consistent after `--ignore` — the extract step recalculates commit additions/deletions as the sum of non-ignored file records before writing them to JSONL.
 
