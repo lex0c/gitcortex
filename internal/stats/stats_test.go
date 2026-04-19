@@ -272,7 +272,7 @@ func TestAllSortsDeterministicUnderTies(t *testing.T) {
 		{"TopContributors", func() []string { return identify(TopContributors(ds, 0)) }},
 		{"DirectoryStats", func() []string { return identify(DirectoryStats(ds, 0)) }},
 		{"TopCommits", func() []string { return identify(TopCommits(ds, 0)) }},
-		{"DevProfiles", func() []string { return identify(DevProfiles(ds, "")) }},
+		{"DevProfiles", func() []string { return identify(DevProfiles(ds, "", 0)) }},
 	}
 
 	for _, c := range cases {
@@ -311,7 +311,7 @@ func TestDevProfilesCollaboratorsSharedLines(t *testing.T) {
 			"carol@x": {Email: "carol@x", Name: "C", Commits: 1, ActiveDays: 1, FilesTouched: 2},
 		},
 	}
-	profiles := DevProfiles(ds, "alice@x")
+	profiles := DevProfiles(ds, "alice@x", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
@@ -446,14 +446,14 @@ func TestDevProfilesInnerSortsDeterministic(t *testing.T) {
 		},
 	}
 
-	// Run DevProfiles(ds, "alice@x") 20 times; all three inner slices must
+	// Run DevProfiles(ds, "alice@x", 0) 20 times; all three inner slices must
 	// be identical across iterations.
-	first := DevProfiles(ds, "alice@x")
+	first := DevProfiles(ds, "alice@x", 0)
 	if len(first) != 1 {
 		t.Fatalf("expected 1 profile, got %d", len(first))
 	}
 	for i := 0; i < 20; i++ {
-		next := DevProfiles(ds, "alice@x")[0]
+		next := DevProfiles(ds, "alice@x", 0)[0]
 		for k, f := range next.TopFiles {
 			if f.Path != first[0].TopFiles[k].Path {
 				t.Fatalf("TopFiles iter %d: [%d] got %q, first %q", i, k, f.Path, first[0].TopFiles[k].Path)
@@ -1738,7 +1738,7 @@ func TestTopCommitsWithMissingContributor(t *testing.T) {
 
 func TestDevProfiles(t *testing.T) {
 	ds := makeDataset()
-	profiles := DevProfiles(ds, "")
+	profiles := DevProfiles(ds, "", 0)
 	if len(profiles) != 2 {
 		t.Fatalf("len = %d, want 2", len(profiles))
 	}
@@ -1764,7 +1764,7 @@ func TestDevProfiles(t *testing.T) {
 
 func TestDevProfilesFilterByEmail(t *testing.T) {
 	ds := makeDataset()
-	profiles := DevProfiles(ds, "bob@test.com")
+	profiles := DevProfiles(ds, "bob@test.com", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("len = %d, want 1", len(profiles))
 	}
@@ -1794,7 +1794,7 @@ func TestDevProfilesContribType(t *testing.T) {
 			},
 			files: map[string]*fileEntry{},
 		}
-		profiles := DevProfiles(ds, "")
+		profiles := DevProfiles(ds, "", 0)
 		if len(profiles) == 0 {
 			t.Fatal("no profiles")
 		}
@@ -2312,7 +2312,7 @@ func TestStreamLoadFullPipeline(t *testing.T) {
 	}
 
 	// Dev profiles
-	profiles := DevProfiles(ds, "alice@x.com")
+	profiles := DevProfiles(ds, "alice@x.com", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
@@ -2488,7 +2488,7 @@ func TestDevProfilesSpecialization(t *testing.T) {
 		ds.files[path] = &fileEntry{commits: 1, devLines: map[string]int64{"broad@x": 10}, devCommits: map[string]int{"broad@x": 1}, monthChurn: map[string]int64{}}
 	}
 
-	profiles := DevProfiles(ds, "")
+	profiles := DevProfiles(ds, "", 0)
 	get := func(email string) float64 {
 		for _, p := range profiles {
 			if p.Email == email {
@@ -2545,7 +2545,7 @@ func TestDevProfilesSpecializationRootFilesBucket(t *testing.T) {
 			"LICENSE":   {commits: 1, devLines: map[string]int64{"root@x": 5}, devCommits: map[string]int{"root@x": 1}, monthChurn: map[string]int64{}},
 		},
 	}
-	profiles := DevProfiles(ds, "")
+	profiles := DevProfiles(ds, "", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
@@ -2581,7 +2581,7 @@ func TestDevProfilesSpecializationEdgeCases(t *testing.T) {
 		},
 		files: map[string]*fileEntry{},
 	}
-	profiles := DevProfiles(ds, "")
+	profiles := DevProfiles(ds, "", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
@@ -2600,7 +2600,7 @@ func TestDevProfilesSpecializationEdgeCases(t *testing.T) {
 			"auth/login.go": {commits: 1, devLines: map[string]int64{"solo@x": 10}, devCommits: map[string]int{"solo@x": 1}, monthChurn: map[string]int64{}},
 		},
 	}
-	profiles = DevProfiles(ds2, "")
+	profiles = DevProfiles(ds2, "", 0)
 	if len(profiles) != 1 {
 		t.Fatalf("profiles = %d", len(profiles))
 	}
@@ -2672,7 +2672,7 @@ func BenchmarkDevProfilesAll(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = DevProfiles(ds, "")
+		_ = DevProfiles(ds, "", 0)
 	}
 }
 
@@ -2684,6 +2684,6 @@ func BenchmarkDevProfilesFilterEmail(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = DevProfiles(ds, "dev-0042@x")
+		_ = DevProfiles(ds, "dev-0042@x", 0)
 	}
 }

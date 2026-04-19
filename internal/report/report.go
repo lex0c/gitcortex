@@ -307,16 +307,13 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 
 	now := time.Now().Format("2006-01-02 15:04")
 
-	// Compute ChurnRisk once unbounded so we can render label-distribution
-	// chips over the full population before slicing to topN for the table.
-	// Without this, a user reading only the table would see "20 of 20 are
-	// legacy-hotspot" with no way to tell whether the repo has 20 or 20,000.
-	allChurnRisk := stats.ChurnRisk(ds, 0)
-	labelCounts := churnRiskLabelCounts(allChurnRisk)
-	displayChurnRisk := allChurnRisk
-	if topN > 0 && len(displayChurnRisk) > topN {
-		displayChurnRisk = displayChurnRisk[:topN]
-	}
+	// Compute label distribution for the Churn Risk chip strip without
+	// materializing a full result slice. The display table still takes
+	// the truncated ChurnRisk(ds, topN) call below — only the chip
+	// counts needed the whole-dataset view, and we can get those from
+	// a dedicated counter that never builds per-file structs.
+	labelCountsMap := stats.ChurnRiskLabelCounts(ds)
+	labelCounts := buildLabelCountList(labelCountsMap)
 
 	data := ReportData{
 		GeneratedAt:          now,
@@ -331,12 +328,12 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		MaxActivityCommits:   maxActCommits,
 		BusFactor:            stats.BusFactor(ds, topN),
 		Coupling:             stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:            displayChurnRisk,
+		ChurnRisk:            stats.ChurnRisk(ds, topN),
 		ChurnRiskLabelCounts: labelCounts,
 		Patterns:             patterns,
 		TopCommits:           stats.TopCommits(ds, topN),
 		DevNetwork:           stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
-		Profiles:             stats.DevProfiles(ds, ""),
+		Profiles:             stats.DevProfiles(ds, "", topN),
 		Pareto:               ComputePareto(ds),
 		PatternGrid:          grid,
 		MaxPattern:           maxP,
@@ -349,11 +346,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 // Risk distribution strip. Ordering matches the table below: legacy-
 // hotspot first (most actionable), cold last. Labels with zero files
 // are omitted so the strip doesn't show empty chips on small repos.
-func churnRiskLabelCounts(all []stats.ChurnRiskResult) []LabelCount {
-	counts := make(map[string]int)
-	for _, cr := range all {
-		counts[cr.Label]++
-	}
+func buildLabelCountList(counts map[string]int) []LabelCount {
 	order := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
 	var result []LabelCount
 	for i, lbl := range order {
@@ -597,7 +590,7 @@ type ProfileReportData struct {
 }
 
 func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) error {
-	profiles := stats.DevProfiles(ds, email)
+	profiles := stats.DevProfiles(ds, email, 0)
 	if len(profiles) == 0 {
 		return fmt.Errorf("developer %s not found", email)
 	}

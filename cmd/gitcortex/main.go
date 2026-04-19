@@ -311,7 +311,7 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			label = sf.email
 		}
 		fmt.Fprintf(os.Stderr, "\n=== Profile: %s ===\n", label)
-		if err := f.PrintProfiles(stats.DevProfiles(ds, sf.email)); err != nil {
+		if err := f.PrintProfiles(stats.DevProfiles(ds, sf.email, 0)); err != nil {
 			return err
 		}
 	}
@@ -370,7 +370,7 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 		report["dev_network"] = stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)
 	}
 	if sf.stat == "profile" {
-		report["profiles"] = stats.DevProfiles(ds, sf.email)
+		report["profiles"] = stats.DevProfiles(ds, sf.email, 0)
 	}
 	if showAll || sf.stat == "pareto" {
 		report["pareto"] = reportpkg.ComputePareto(ds)

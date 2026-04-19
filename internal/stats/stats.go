@@ -754,6 +754,93 @@ func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64,
 	return "silo" // old + concentrated + stable/growing → knowledge bottleneck
 }
 
+// ChurnRiskLabelCounts returns the distribution of churn-risk labels
+// over all classified files, without materializing the full result
+// slice. Used by the HTML report's label-distribution chip strip,
+// which only needs counts per label — not path strings, percentiles,
+// or other per-file fields.
+//
+// Memory cost: O(N_files) for the ages/trends slices (temporary; freed
+// after bands are computed) plus O(labels) for the counts map.
+// Compare to ChurnRisk(ds, 0) which holds O(N_files) full structs with
+// ~200 bytes each — hundreds of MB on Chromium-scale, enough to push
+// the main report into OOM territory.
+func ChurnRiskLabelCounts(ds *Dataset) map[string]int {
+	// Cold threshold — same median-based rule as ChurnRisk.
+	churns := make([]float64, 0, len(ds.files))
+	for _, fe := range ds.files {
+		if fe.recentChurn > 0 {
+			churns = append(churns, fe.recentChurn)
+		}
+	}
+	sort.Float64s(churns)
+	lowChurn := 0.0
+	if len(churns) > 0 {
+		median := churns[len(churns)/2]
+		lowChurn = median * classifyColdChurnRatio
+	}
+
+	// Pass 1: collect ages + trends so bands can be calibrated from the
+	// whole-dataset distribution. We drop the per-file values after
+	// computing bands — only the thresholds are needed downstream.
+	type perFile struct {
+		fe      *fileEntry
+		ageDays int
+		trend   float64
+	}
+	items := make([]perFile, 0, len(ds.files))
+	ages := make([]int, 0, len(ds.files))
+	trends := make([]float64, 0, len(ds.files))
+	for _, fe := range ds.files {
+		ageDays := 0
+		if !fe.firstChange.IsZero() && !ds.Latest.IsZero() {
+			ageDays = int(ds.Latest.Sub(fe.firstChange).Hours() / 24)
+		}
+		trend := churnTrend(fe.monthChurn, ds.Earliest, ds.Latest)
+		items = append(items, perFile{fe: fe, ageDays: ageDays, trend: trend})
+		ages = append(ages, ageDays)
+		trends = append(trends, trend)
+	}
+	bands := computeBands(ages, trends)
+
+	// Pass 2: classify each file, accumulate counts. No ChurnRiskResult
+	// structs are allocated.
+	counts := make(map[string]int)
+	for _, it := range items {
+		fe := it.fe
+
+		// Bus factor (80% threshold) — same as ChurnRisk and BusFactor.
+		var totalLines int64
+		for _, lines := range fe.devLines {
+			totalLines += lines
+		}
+		bf := 0
+		if totalLines > 0 {
+			lines := make([]int64, 0, len(fe.devLines))
+			for _, l := range fe.devLines {
+				lines = append(lines, l)
+			}
+			sort.Slice(lines, func(i, j int) bool { return lines[i] > lines[j] })
+			threshold := float64(totalLines) * Pct80Threshold
+			var cum int64
+			for _, l := range lines {
+				cum += l
+				bf++
+				if float64(cum) >= threshold {
+					break
+				}
+			}
+		}
+		if bf < 1 {
+			bf = 1
+		}
+
+		label := classifyFile(fe.recentChurn, lowChurn, bf, it.ageDays, it.trend, bands)
+		counts[label]++
+	}
+	return counts
+}
+
 func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 	// Compute median recentChurn as the "cold" threshold.
 	churns := make([]float64, 0, len(ds.files))
@@ -1002,7 +1089,54 @@ type DevFileContrib struct {
 }
 
 // DevProfiles returns a profile for each developer (or a specific one if filterEmail is set).
-func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
+// DevProfiles builds per-developer profile structs. Pass n > 0 to
+// limit output to the top-N contributors by commit count — the cap is
+// applied at map-building time so intermediate structures (devFiles,
+// collaborator pairs, work grid, monthly activity) are only built for
+// the top-N developers. On repos with thousands of contributors this
+// prevents hundreds of megabytes of per-dev data from being
+// constructed when the consumer only renders a top-N view (e.g. the
+// main HTML report). Pass n <= 0 for no cap (full dev set, matching
+// the pre-optimization behaviour — the CLI stats command wants this).
+// filterEmail is the stronger filter: when set, only that one profile
+// is built and n is ignored.
+func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
+	// Determine the target set of emails. Three modes:
+	//   1. filterEmail != ""  → single dev, n is irrelevant
+	//   2. n > 0              → top-N by commits (desc), email asc tiebreak
+	//   3. otherwise           → every dev (nil set, no filter in loops)
+	var targetEmails map[string]struct{}
+	if filterEmail != "" {
+		targetEmails = map[string]struct{}{filterEmail: {}}
+	} else if n > 0 && n < len(ds.contributors) {
+		type es struct {
+			email   string
+			commits int
+		}
+		ranked := make([]es, 0, len(ds.contributors))
+		for email, cs := range ds.contributors {
+			ranked = append(ranked, es{email, cs.Commits})
+		}
+		sort.Slice(ranked, func(i, j int) bool {
+			if ranked[i].commits != ranked[j].commits {
+				return ranked[i].commits > ranked[j].commits
+			}
+			return ranked[i].email < ranked[j].email
+		})
+		targetEmails = make(map[string]struct{}, n)
+		for i := 0; i < n; i++ {
+			targetEmails[ranked[i].email] = struct{}{}
+		}
+	}
+
+	inTarget := func(email string) bool {
+		if targetEmails == nil {
+			return true
+		}
+		_, ok := targetEmails[email]
+		return ok
+	}
+
 	// Per-dev file contributions: count commits per file from devLines
 	type fileAcc struct {
 		commits int
@@ -1011,7 +1145,7 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 	devFiles := make(map[string]map[string]*fileAcc)
 	for path, fe := range ds.files {
 		for email, lines := range fe.devLines {
-			if filterEmail != "" && email != filterEmail {
+			if !inTarget(email) {
 				continue
 			}
 			if devFiles[email] == nil {
@@ -1045,7 +1179,10 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 			devs = append(devs, email)
 		}
 		// Undirected pair accumulation: write to both a→b and b→a so each
-		// dev's map contains everyone they share the file with.
+		// dev's map contains everyone they share the file with. When
+		// targetEmails is set we only write entries keyed on a target
+		// dev — we never build a collaborator map for a non-target dev
+		// whose profile we are not going to render.
 		for i := 0; i < len(devs); i++ {
 			a := devs[i]
 			la := fe.devLines[a]
@@ -1056,26 +1193,30 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 				if lb < overlap {
 					overlap = lb
 				}
-				if allCollabs[a] == nil {
-					allCollabs[a] = make(map[string]*collabAcc)
+				if inTarget(a) {
+					if allCollabs[a] == nil {
+						allCollabs[a] = make(map[string]*collabAcc)
+					}
+					accA := allCollabs[a][b]
+					if accA == nil {
+						accA = &collabAcc{}
+						allCollabs[a][b] = accA
+					}
+					accA.files++
+					accA.lines += overlap
 				}
-				accA := allCollabs[a][b]
-				if accA == nil {
-					accA = &collabAcc{}
-					allCollabs[a][b] = accA
+				if inTarget(b) {
+					if allCollabs[b] == nil {
+						allCollabs[b] = make(map[string]*collabAcc)
+					}
+					accB := allCollabs[b][a]
+					if accB == nil {
+						accB = &collabAcc{}
+						allCollabs[b][a] = accB
+					}
+					accB.files++
+					accB.lines += overlap
 				}
-				accA.files++
-				accA.lines += overlap
-				if allCollabs[b] == nil {
-					allCollabs[b] = make(map[string]*collabAcc)
-				}
-				accB := allCollabs[b][a]
-				if accB == nil {
-					accB = &collabAcc{}
-					allCollabs[b][a] = accB
-				}
-				accB.files++
-				accB.lines += overlap
 			}
 		}
 	}
@@ -1086,7 +1227,7 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 	dayIdx := [7]int{6, 0, 1, 2, 3, 4, 5} // Sunday=6, Monday=0, ...
 
 	for _, cm := range ds.commits {
-		if filterEmail != "" && cm.email != filterEmail {
+		if !inTarget(cm.email) {
 			continue
 		}
 		if cm.date.IsZero() {
@@ -1118,7 +1259,7 @@ func DevProfiles(ds *Dataset, filterEmail string) []DevProfile {
 
 	var profiles []DevProfile
 	for email, cs := range ds.contributors {
-		if filterEmail != "" && email != filterEmail {
+		if !inTarget(email) {
 			continue
 		}
 

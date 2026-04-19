@@ -393,18 +393,15 @@ func TestHumanize(t *testing.T) {
 	}
 }
 
-func TestChurnRiskLabelCounts(t *testing.T) {
-	all := []stats.ChurnRiskResult{
-		{Label: "active"},
-		{Label: "active"},
-		{Label: "legacy-hotspot"},
-		{Label: "cold"},
-		{Label: "silo"},
-		{Label: "active-core"},
-		{Label: "active-core"},
-		{Label: "active-core"},
+func TestBuildLabelCountList(t *testing.T) {
+	counts := map[string]int{
+		"active":         2,
+		"legacy-hotspot": 1,
+		"cold":           1,
+		"silo":           1,
+		"active-core":    3,
 	}
-	got := churnRiskLabelCounts(all)
+	got := buildLabelCountList(counts)
 
 	wantOrder := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
 	if len(got) != len(wantOrder) {
@@ -417,26 +414,20 @@ func TestChurnRiskLabelCounts(t *testing.T) {
 		if got[i].Priority != i {
 			t.Errorf("entry %d: priority=%d, want %d", i, got[i].Priority, i)
 		}
-	}
-	want := map[string]int{
-		"legacy-hotspot": 1, "silo": 1, "active-core": 3, "active": 2, "cold": 1,
-	}
-	for _, lc := range got {
-		if lc.Count != want[lc.Label] {
-			t.Errorf("%s count = %d, want %d", lc.Label, lc.Count, want[lc.Label])
+		if got[i].Count != counts[lbl] {
+			t.Errorf("%s count = %d, want %d", lbl, got[i].Count, counts[lbl])
 		}
 	}
 }
 
-func TestChurnRiskLabelCountsOmitsEmpty(t *testing.T) {
+func TestBuildLabelCountListOmitsEmpty(t *testing.T) {
 	// Small repo where only two label buckets have entries — the strip
 	// skips empties so it doesn't render "0 silo" chips.
-	all := []stats.ChurnRiskResult{
-		{Label: "active"},
-		{Label: "active-core"},
-		{Label: "active-core"},
+	counts := map[string]int{
+		"active":      1,
+		"active-core": 2,
 	}
-	got := churnRiskLabelCounts(all)
+	got := buildLabelCountList(counts)
 	if len(got) != 2 {
 		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
 	}

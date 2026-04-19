@@ -12,21 +12,28 @@ emission, checkpointing). Smaller repos run without `--ignore`
 filters; Chromium runs with a monorepo filter set applied (see the
 Chromium section for details).
 
-| Repository | Commits | Bare size | Extract time | JSONL |
-|---|---|---|---|---|
-| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.05s** | 803 lines / 245 KB |
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 10 MB | **0.99s** | 23k lines / 6.5 MB |
-| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **24.0s** | 95k lines / 30 MB |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **46.3s** | 298k lines / 96 MB |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **2m 4.1s** | 943k lines / 314 MB |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **13m 26.9s** | 6.1M lines / 1.9 GB |
-| [Chromium](https://chromium.googlesource.com/chromium/src) † | 1,738,421 | 61 GB | **1h 55m 52s** | 12.3M lines / 4.4 GB |
+| Repository | Commits | Bare size | Extract | Stats (JSON) | Report (HTML) | JSONL |
+|---|---|---|---|---|---|---|
+| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.05s** | 0.012s | 0.022s | 803 lines / 245 KB |
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 10 MB | **0.99s** | 0.19s | 0.27s | 23k lines / 6.5 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **24.0s** | 1.02s | 1.07s | 95k lines / 30 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **46.3s** | 2.90s | 3.03s | 298k lines / 96 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **2m 4.1s** | 12.4s | 15.5s | 943k lines / 314 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **13m 26.9s** | 1m 7.7s | 1m 9.8s | 6.1M lines / 1.9 GB |
+| [Chromium](https://chromium.googlesource.com/chromium/src) † | 1,738,421 | 61 GB | **1h 55m 52s** | OOM ‡ | OOM ‡ | 12.3M lines / 4.4 GB |
 
 † Chromium was extracted with `--ignore 'third_party/*' --ignore 'out/*'
 --ignore 'node_modules/*' --ignore '*.min.js' --ignore '*.min.css'
 --ignore 'package-lock.json' --ignore 'yarn.lock' --ignore '*.pb.go'
 --ignore '*_generated.*'`. Without filters the JSONL would be
 substantially larger and the extract slower.
+
+‡ `stats` and `report` on Chromium's 4.4 GB JSONL exceed the memory
+available on a 15 GB machine (~6 GB of free RAM after OS/browser use).
+The resident working set for analysis at this scale is dominated by
+per-file accumulators (notably the `monthChurn` map used for trend
+classification) that scale as O(files × months_active). Reducing this
+is tracked as future work — see the "Memory limits" section below.
 
 ## Throughput: records/second, not commits/second
 
@@ -119,6 +126,49 @@ round-trips for blobs that persist across consecutive commits
 
 Memory cost: ~7 MB for the 50k-entry cache regardless of repository
 size.
+
+## Memory limits
+
+Extract streams the commit history and keeps a small buffer in RAM
+(peak ~25 MB on Chromium). The bottleneck for memory is **analysis**:
+`stats` and `report` build an in-memory `Dataset` with per-file and
+per-dev accumulators that scale with the number of classified files
+and the active span of each.
+
+Post-v2.3.0 optimizations reduce two of the hot spots:
+
+- **ChurnRiskLabelCounts avoids materializing full result structs**
+  for the HTML chip strip. Earlier versions called
+  `stats.ChurnRisk(ds, 0)` to get per-label counts, which held one
+  ~200-byte struct per classified file in memory. On Linux-class
+  repos this was hundreds of MB of transient allocation.
+- **DevProfiles respects the `--top` cap when invoked by the HTML
+  report**. Without this, the report built full per-dev maps
+  (files, collaborators, work grid, monthly activity) for every
+  contributor — 38k on Linux, pushing RSS past 6 GB and triggering
+  the kernel OOM-killer silently. Capping at top-N before building
+  those structures keeps the heavy work proportional to the output.
+
+Together these changes made the Linux report finish cleanly in
+~1m 10s on a machine where it previously died at 0 bytes. **Chromium
+remains out of reach** for `stats` and `report` on a 15 GB machine.
+The dominant remaining hog is `fileEntry.monthChurn` — a per-month
+activity map on every file, used only to compute the trend dimension
+of the Churn Risk classification. Scaling `O(files × months_active)`,
+it reaches several GB on a 1.7M-file repo with a 15+ year history.
+
+Cutting this further would require either:
+- Computing trend lazily (per file, on demand) without storing all
+  month buckets up-front;
+- Switching `monthChurn` to a compact fixed-size array (e.g., 12
+  quarterly buckets) with lower resolution;
+- Or a different trend formulation that doesn't require per-month
+  granularity at all.
+
+None of these are trivial and all change classification semantics
+slightly. For now, the practical cap on `stats`/`report` is roughly
+the Linux-scale repo — ~1.5M commits, a few GB of JSONL, a few
+hundred MB of `Dataset` in memory. Chromium is the exception.
 
 ## Practical guidance
 
