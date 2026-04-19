@@ -13,22 +13,22 @@ import (
 const (
 	nullHash = "0000000000000000000000000000000000000000"
 
-	// blobCacheCapacity is the LRU size for BlobSizeResolver's across-
+	// blobCacheMaxEntries is the LRU size for BlobSizeResolver's across-
 	// commit cache. Git content-addresses blobs by hash, so size for a
 	// given hash is permanent — caching is semantically safe. A single
 	// file persists across many consecutive commits in real history;
 	// without a cache, every commit queries cat-file for hashes we
-	// already resolved moments earlier. 50k entries ≈ 6MB RAM, enough
+	// already resolved moments earlier. 50k entries ≈ 7MB RAM, enough
 	// to hold the "hot" working set on large repos like Chromium.
-	blobCacheCapacity = 50_000
+	blobCacheMaxEntries = 50_000
 )
 
 // blobCache is a simple LRU of hash → blob size. Not thread-safe; the
 // resolver is called from a single extract goroutine.
 type blobCache struct {
-	cap int
-	m   map[string]*list.Element
-	ll  *list.List
+	capacity int
+	m        map[string]*list.Element
+	ll       *list.List
 }
 
 type blobCacheEntry struct {
@@ -36,16 +36,16 @@ type blobCacheEntry struct {
 	size int64
 }
 
-func newBlobCache(cap int) *blobCache {
+func newBlobCache(capacity int) *blobCache {
 	return &blobCache{
-		cap: cap,
-		m:   make(map[string]*list.Element, cap),
-		ll:  list.New(),
+		capacity: capacity,
+		m:        make(map[string]*list.Element, capacity),
+		ll:       list.New(),
 	}
 }
 
 func (c *blobCache) get(hash string) (int64, bool) {
-	if c == nil || c.cap == 0 {
+	if c == nil || c.capacity == 0 {
 		return 0, false
 	}
 	if e, ok := c.m[hash]; ok {
@@ -56,7 +56,7 @@ func (c *blobCache) get(hash string) (int64, bool) {
 }
 
 func (c *blobCache) put(hash string, size int64) {
-	if c == nil || c.cap == 0 {
+	if c == nil || c.capacity == 0 {
 		return
 	}
 	if e, ok := c.m[hash]; ok {
@@ -66,7 +66,7 @@ func (c *blobCache) put(hash string, size int64) {
 	}
 	e := c.ll.PushFront(&blobCacheEntry{hash: hash, size: size})
 	c.m[hash] = e
-	if c.ll.Len() > c.cap {
+	if c.ll.Len() > c.capacity {
 		oldest := c.ll.Back()
 		c.ll.Remove(oldest)
 		delete(c.m, oldest.Value.(*blobCacheEntry).hash)
@@ -110,7 +110,7 @@ func NewBlobSizeResolver(ctx context.Context, repo string) (*BlobSizeResolver, e
 		stdin:  stdin,
 		reader: scanner,
 		cancel: cancel,
-		cache:  newBlobCache(blobCacheCapacity),
+		cache:  newBlobCache(blobCacheMaxEntries),
 	}, nil
 }
 
