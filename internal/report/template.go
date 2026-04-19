@@ -36,12 +36,72 @@ tr:last-child td { border-bottom: none; }
 .mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
 .truncate { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
+.exec-summary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px 20px; margin-bottom: 20px; }
+.exec-summary h2 { border: none; margin: 0 0 4px; padding: 0; }
+.exec-bullets { list-style: none; padding: 0; margin-top: 10px; }
+.bullet { display: flex; gap: 10px; padding: 8px 12px; border-radius: 4px; margin-bottom: 4px; border-left: 4px solid transparent; background: #f6f8fa; }
+.bullet-critical { border-left-color: #cf222e; background: #ffebe9; }
+.bullet-warning  { border-left-color: #bf8700; background: #fff8c5; }
+.bullet-info     { border-left-color: #0969da; background: #ddf4ff; }
+.bullet-ok       { border-left-color: #2da44e; background: #dafbe1; }
+.bullet .emoji { font-size: 16px; flex-shrink: 0; }
+.bullet .text  { font-size: 13px; line-height: 1.5; }
+.glossary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
+.glossary summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
+.glossary[open] summary { margin-bottom: 8px; }
+.glossary dl { font-size: 12px; color: #24292f; margin: 0; }
+.glossary dt { font-weight: 600; margin-top: 8px; }
+.glossary dt:first-child { margin-top: 0; }
+.glossary dd { color: #656d76; margin: 2px 0 0; }
 </style>
 </head>
 <body>
 
 <h1>{{.RepoName}} report</h1>
 <p class="subtitle">{{.Summary.FirstCommitDate}} to {{.Summary.LastCommitDate}}</p>
+
+{{if .ExecSummary.Bullets}}
+<section class="exec-summary">
+  <h2>At a glance</h2>
+  <p class="hint" style="margin:0;">Triage view over the stats below — use the sections that follow for supporting detail.</p>
+  <ul class="exec-bullets">
+    {{range .ExecSummary.Bullets}}
+    <li class="bullet bullet-{{.Severity}}">
+      <span class="emoji">{{.Emoji}}</span>
+      <span class="text">{{.Text}}</span>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
+<details class="glossary">
+  <summary>Glossary — what do these terms mean?</summary>
+  <dl>
+    <dt>Bus factor</dt>
+    <dd>How many developers would need to leave before critical knowledge is lost. A file with bus factor 1 has a single owner — losing that person means losing the context.</dd>
+    <dt>Churn</dt>
+    <dd>Total lines added plus lines removed. High churn files are heavily modified — often where bugs accumulate.</dd>
+    <dt>Recent churn</dt>
+    <dd>Churn weighted so recent changes count more. Default half-life is 90 days (a change from a year ago is worth ~⅛ of a change today).</dd>
+    <dt>Legacy-hotspot</dt>
+    <dd>An old file with concentrated ownership and declining activity — deprecated code still being touched. Usually the most urgent refactor target.</dd>
+    <dt>Silo</dt>
+    <dd>Old, concentrated, and still stable or growing — a knowledge bottleneck. Plan transfer before the owner moves on.</dd>
+    <dt>Active-core</dt>
+    <dd>Newer code with a single main author. Often fine during early development; revisit if it ages without spreading ownership.</dd>
+    <dt>Coupling</dt>
+    <dd>How often two files change in the same commit. 100% means every change to the less-active file touches the other too. Expected for test-plus-code pairs; unexpected coupling reveals hidden dependencies.</dd>
+    <dt>Pareto concentration</dt>
+    <dd>Fraction of items holding 80% of activity. "Extremely concentrated" means ≤10% of files or developers carry 80% of churn — either a critical core or a dangerous bottleneck, depending on context.</dd>
+    <dt>Specialization (Herfindahl index)</dt>
+    <dd>0 = the developer works across many directories; 1 = all their files are in one directory. Measures where files live on disk, not domain expertise.</dd>
+    <dt>Pace</dt>
+    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution.</dd>
+    <dt>Weekend %</dt>
+    <dd>Fraction of commits on Saturday or Sunday. High values often signal overtime, an internationally distributed team, or off-hours deploy cadence — context tells which.</dd>
+  </dl>
+</details>
 
 <div class="cards">
   <div class="card"><div class="label">Commits</div><div class="value" title="{{thousands .Summary.TotalCommits}}">{{humanize .Summary.TotalCommits}}</div></div>

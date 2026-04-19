@@ -36,12 +36,39 @@ tr:last-child td { border-bottom: none; }
 .mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
 .truncate { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
+.glossary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
+.glossary summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
+.glossary[open] summary { margin-bottom: 8px; }
+.glossary dl { font-size: 12px; color: #24292f; margin: 0; }
+.glossary dt { font-weight: 600; margin-top: 8px; }
+.glossary dt:first-child { margin-top: 0; }
+.glossary dd { color: #656d76; margin: 2px 0 0; }
 </style>
 </head>
 <body>
 
 <h1>{{.Profile.Name}} <span style="font-size:16px; font-weight:normal; color:#656d76;">· {{.RepoName}}</span></h1>
 <p class="subtitle">{{.Profile.Email}} · {{.Profile.FirstDate}} to {{.Profile.LastDate}}</p>
+
+<details class="glossary">
+  <summary>Glossary — what do these terms mean?</summary>
+  <dl>
+    <dt>Scope</dt>
+    <dd>The top directories this developer touches, by share of files. Indicates where their work lives in the codebase.</dd>
+    <dt>Specialization (Herfindahl index)</dt>
+    <dd>0 = the developer works across many directories; 1 = all their files are in one directory. Measures where files live on disk, not domain expertise.</dd>
+    <dt>Contribution type</dt>
+    <dd><b>Growth</b> when additions far exceed deletions (new features), <b>refactor</b> when deletions dominate (cleanups, rewrites), <b>balanced</b> otherwise.</dd>
+    <dt>Pace</dt>
+    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution.</dd>
+    <dt>Weekend %</dt>
+    <dd>Fraction of this developer's commits on Saturday or Sunday — often signals overtime or a non-Monday-through-Friday schedule.</dd>
+    <dt>Collaboration (shared files / shared lines)</dt>
+    <dd>Developers who touch the same files. <b>Shared lines</b> = Σ min(linesA, linesB) across shared files — a conservative overlap measure that discounts trivial one-line touches.</dd>
+    <dt>Churn</dt>
+    <dd>Total lines added plus lines removed. High churn on a few files suggests deep ownership and potential knowledge concentration.</dd>
+  </dl>
+</details>
 
 <div class="cards">
   <div class="card"><div class="label">Commits</div><div class="value" title="{{thousands .Profile.Commits}}">{{humanize .Profile.Commits}}</div></div>

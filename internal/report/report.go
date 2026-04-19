@@ -41,6 +41,22 @@ type ReportData struct {
 	Pareto         ParetoData
 	PatternGrid    [7][24]int
 	MaxPattern     int
+	ExecSummary    ExecutiveSummary
+}
+
+// ExecutiveSummary is a narrative header generated from the stats so a
+// non-technical reader (manager, CTO) gets a triage view before drilling
+// into the tables below. Every bullet is derived from fields already
+// populated elsewhere in ReportData — this struct only snapshots them in a
+// render-ready form.
+type ExecutiveSummary struct {
+	Bullets []SummaryBullet
+}
+
+type SummaryBullet struct {
+	Emoji    string
+	Text     template.HTML // pre-formatted with <b> emphasis on key numbers
+	Severity string        // critical | warning | info | ok — drives left-border color
 }
 
 type ParetoData struct {
@@ -271,6 +287,141 @@ func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, 
 	return yearLabels, grid, maxCommits
 }
 
+// BuildExecutiveSummary builds the at-a-glance bullets shown at the top of
+// the HTML report. allChurnRisk and allBusFactor must be the full,
+// untruncated slices — passing data.ChurnRisk/data.BusFactor (which are
+// capped by topN for display) would make the bullet counts drift with the
+// user's --top flag instead of reflecting the repo's real state.
+func BuildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResult, allBusFactor []stats.BusFactorResult) ExecutiveSummary {
+	var bullets []SummaryBullet
+
+	// Scope — always first, sets context for everything that follows.
+	if data.Summary.TotalCommits > 0 {
+		text := fmt.Sprintf(
+			"<b>%s</b> commits from <b>%s</b> developers between <b>%s</b> and <b>%s</b>.",
+			thousands(data.Summary.TotalCommits),
+			thousands(data.Summary.TotalDevs),
+			data.Summary.FirstCommitDate,
+			data.Summary.LastCommitDate,
+		)
+		bullets = append(bullets, SummaryBullet{
+			Emoji: "📌", Text: template.HTML(text), Severity: "info",
+		})
+	}
+
+	// Files concentration — always shown; severity tracks the Pareto label.
+	if data.Pareto.TotalFiles > 0 {
+		sev := "info"
+		if strings.Contains(data.Pareto.FilesLabel, "extremely") {
+			sev = "warning"
+		}
+		text := fmt.Sprintf(
+			"<b>%s</b> of <b>%s</b> files concentrate 80%% of churn — <b>%s</b>.",
+			thousands(data.Pareto.TopChurnFiles),
+			thousands(data.Pareto.TotalFiles),
+			data.Pareto.FilesLabel,
+		)
+		bullets = append(bullets, SummaryBullet{
+			Emoji: data.Pareto.FilesMarker, Text: template.HTML(text), Severity: sev,
+		})
+	}
+
+	// Count the label buckets once; both legacy-hotspot and silo need them.
+	// Uses the full, untruncated slice — counts must not depend on the
+	// display topN, which is a presentation choice.
+	var legacyCount, siloCount int
+	for _, cr := range allChurnRisk {
+		switch cr.Label {
+		case "legacy-hotspot":
+			legacyCount++
+		case "silo":
+			siloCount++
+		}
+	}
+	if legacyCount > 0 {
+		text := fmt.Sprintf(
+			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Prioritize for review.",
+			thousands(legacyCount), pluralFile(legacyCount),
+		)
+		bullets = append(bullets, SummaryBullet{
+			Emoji: "🔴", Text: template.HTML(text), Severity: "critical",
+		})
+	}
+	if siloCount > 0 {
+		text := fmt.Sprintf(
+			"<b>%s</b> %s classified as <b>silo</b> — old and concentrated but still active. Plan knowledge transfer.",
+			thousands(siloCount), pluralFile(siloCount),
+		)
+		bullets = append(bullets, SummaryBullet{
+			Emoji: "🟡", Text: template.HTML(text), Severity: "warning",
+		})
+	}
+
+	// Bus-factor-1 files: count of single-owner knowledge risks. Full
+	// slice, not data.BusFactor — see allChurnRisk note above.
+	var bf1Count int
+	for _, bf := range allBusFactor {
+		if bf.BusFactor == 1 {
+			bf1Count++
+		}
+	}
+	if bf1Count > 0 {
+		owned := "are single-owner — lose those developers and you lose the context."
+		if bf1Count == 1 {
+			owned = "is single-owner — lose that developer and you lose the context."
+		}
+		text := fmt.Sprintf(
+			"<b>%s</b> %s with <b>bus factor = 1</b> %s",
+			thousands(bf1Count), pluralFile(bf1Count), owned,
+		)
+		bullets = append(bullets, SummaryBullet{
+			Emoji: "⚠️", Text: template.HTML(text), Severity: "warning",
+		})
+	}
+
+	// Weekend work ratio, repo-wide. Flag only when high enough to be
+	// interesting — sub-20% is noise that depends on team timezone mix.
+	var weekdayTotal, weekendTotal int
+	for d := 0; d < 7; d++ {
+		for h := 0; h < 24; h++ {
+			c := data.PatternGrid[d][h]
+			if d == 5 || d == 6 { // PatternGrid rows: 0=Mon … 5=Sat, 6=Sun.
+				weekendTotal += c
+			} else {
+				weekdayTotal += c
+			}
+		}
+	}
+	if total := weekdayTotal + weekendTotal; total > 0 {
+		pct := float64(weekendTotal) / float64(total) * 100
+		if pct >= 20 {
+			sev := "info"
+			if pct >= 30 {
+				sev = "warning"
+			}
+			text := fmt.Sprintf(
+				"<b>%.0f%%</b> of commits land on weekends — possible overtime, globally distributed team, or off-hours release cadence.",
+				pct,
+			)
+			bullets = append(bullets, SummaryBullet{
+				Emoji: "🗓️", Text: template.HTML(text), Severity: sev,
+			})
+		}
+	}
+
+	// Positive signal when all three risk buckets are clean. Prevents the
+	// summary from reading alarmist on healthy repos.
+	if legacyCount == 0 && siloCount == 0 && bf1Count == 0 {
+		bullets = append(bullets, SummaryBullet{
+			Emoji:    "✅",
+			Text:     template.HTML("No legacy-hotspots, silos, or bus-factor-1 files detected."),
+			Severity: "ok",
+		})
+	}
+
+	return ExecutiveSummary{Bullets: bullets}
+}
+
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
 	patterns := stats.WorkingPatterns(ds)
 	var grid [7][24]int
@@ -292,6 +443,23 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 
 	now := time.Now().Format("2006-01-02 15:04")
 
+	// Compute unbounded ChurnRisk and BusFactor once. The executive summary
+	// needs the full distribution (counts must not depend on display topN);
+	// the HTML tables only need the top slice. Slicing at render time is
+	// cheaper than running the computations twice.
+	allChurnRisk := stats.ChurnRisk(ds, 0)
+	allBusFactor := stats.BusFactor(ds, 0)
+	displayChurnRisk := allChurnRisk
+	displayBusFactor := allBusFactor
+	if topN > 0 {
+		if len(displayChurnRisk) > topN {
+			displayChurnRisk = displayChurnRisk[:topN]
+		}
+		if len(displayBusFactor) > topN {
+			displayBusFactor = displayBusFactor[:topN]
+		}
+	}
+
 	data := ReportData{
 		GeneratedAt:        now,
 		RepoName:           repoName,
@@ -303,9 +471,9 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		ActivityYears:      actYears,
 		ActivityGrid:       actGrid,
 		MaxActivityCommits: maxActCommits,
-		BusFactor:          stats.BusFactor(ds, topN),
+		BusFactor:          displayBusFactor,
 		Coupling:           stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:          stats.ChurnRisk(ds, topN),
+		ChurnRisk:          displayChurnRisk,
 		Patterns:           patterns,
 		TopCommits:         stats.TopCommits(ds, topN),
 		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
@@ -314,6 +482,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		PatternGrid:        grid,
 		MaxPattern:         maxP,
 	}
+	data.ExecSummary = BuildExecutiveSummary(&data, allChurnRisk, allBusFactor)
 
 	return tmpl.Execute(w, data)
 }
@@ -359,6 +528,15 @@ func toInt64(v float64) int64 {
 
 func plusInt(a, b int) int {
 	return a + b
+}
+
+// pluralFile picks the right noun for a count. Used in the executive
+// summary, where "1 files" reads as a bug to anyone paying attention.
+func pluralFile(n int) string {
+	if n == 1 {
+		return "file"
+	}
+	return "files"
 }
 
 func pctRatio(del, add int64) float64 {

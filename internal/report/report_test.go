@@ -393,6 +393,149 @@ func TestHumanize(t *testing.T) {
 	}
 }
 
+func TestBuildExecutiveSummary(t *testing.T) {
+	baseData := func() *ReportData {
+		return &ReportData{
+			Summary: stats.Summary{
+				TotalCommits:    1000,
+				TotalDevs:       10,
+				FirstCommitDate: "2024-01-01",
+				LastCommitDate:  "2024-12-31",
+			},
+			Pareto: ParetoData{
+				TopChurnFiles: 50,
+				TotalFiles:    500,
+				FilesLabel:    "well distributed",
+				FilesMarker:   "🟢",
+			},
+		}
+	}
+
+	t.Run("healthy repo emits positive ok bullet", func(t *testing.T) {
+		data := baseData()
+		es := BuildExecutiveSummary(data, nil, nil)
+		// scope, concentration, ok = 3 bullets
+		if len(es.Bullets) != 3 {
+			t.Fatalf("got %d bullets, want 3: %+v", len(es.Bullets), es.Bullets)
+		}
+		if es.Bullets[2].Severity != "ok" {
+			t.Errorf("last bullet severity = %q, want ok", es.Bullets[2].Severity)
+		}
+	})
+
+	t.Run("legacy-hotspot count comes from full slice, not truncated", func(t *testing.T) {
+		data := baseData()
+		// Display slice would be truncated to top 3 of churn; the full slice
+		// has 5 legacy-hotspots. The bullet must report 5, not 3.
+		data.ChurnRisk = make([]stats.ChurnRiskResult, 3)
+		full := []stats.ChurnRiskResult{
+			{Label: "legacy-hotspot"},
+			{Label: "legacy-hotspot"},
+			{Label: "legacy-hotspot"},
+			{Label: "legacy-hotspot"},
+			{Label: "legacy-hotspot"},
+			{Label: "active"},
+		}
+		es := BuildExecutiveSummary(data, full, nil)
+		var got string
+		for _, b := range es.Bullets {
+			if b.Severity == "critical" {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>5</b>") {
+			t.Errorf("expected critical bullet to mention 5 files, got %q", got)
+		}
+	})
+
+	t.Run("singular vs plural grammar", func(t *testing.T) {
+		data := baseData()
+		full := []stats.ChurnRiskResult{{Label: "silo"}}
+		es := BuildExecutiveSummary(data, full, nil)
+		var got string
+		for _, b := range es.Bullets {
+			if b.Severity == "warning" {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>1</b> file classified") {
+			t.Errorf("singular grammar broken, got %q", got)
+		}
+
+		full = []stats.ChurnRiskResult{{Label: "silo"}, {Label: "silo"}}
+		es = BuildExecutiveSummary(data, full, nil)
+		for _, b := range es.Bullets {
+			if b.Severity == "warning" {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>2</b> files classified") {
+			t.Errorf("plural grammar broken, got %q", got)
+		}
+	})
+
+	t.Run("extremely concentrated Pareto bumps severity to warning", func(t *testing.T) {
+		data := baseData()
+		data.Pareto.FilesLabel = "extremely concentrated"
+		data.Pareto.FilesMarker = "🔴"
+		es := BuildExecutiveSummary(data, nil, nil)
+		// second bullet is the concentration one
+		if es.Bullets[1].Severity != "warning" {
+			t.Errorf("concentration severity = %q, want warning", es.Bullets[1].Severity)
+		}
+	})
+
+	t.Run("weekend ratio flags only when >= 20%", func(t *testing.T) {
+		data := baseData()
+		// 19% weekend — should NOT flag
+		for d := 0; d < 5; d++ {
+			data.PatternGrid[d][10] = 81
+		}
+		for d := 5; d < 7; d++ {
+			data.PatternGrid[d][10] = 19 / 2 // approx
+		}
+		data.PatternGrid[5][10] = 10
+		data.PatternGrid[6][10] = 9
+		es := BuildExecutiveSummary(data, nil, nil)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "weekend") {
+				t.Errorf("19%% weekend should not flag, got bullet: %q", b.Text)
+			}
+		}
+
+		// 30% weekend — should flag as warning
+		data.PatternGrid = [7][24]int{}
+		data.PatternGrid[0][10] = 70
+		data.PatternGrid[5][10] = 30
+		es = BuildExecutiveSummary(data, nil, nil)
+		var found bool
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "weekends") {
+				found = true
+				if b.Severity != "warning" {
+					t.Errorf("30%% weekend severity = %q, want warning", b.Severity)
+				}
+			}
+		}
+		if !found {
+			t.Error("30%% weekend should emit a bullet")
+		}
+	})
+
+	t.Run("empty dataset emits no legacy/silo/bf1 bullets", func(t *testing.T) {
+		data := &ReportData{
+			Summary: stats.Summary{TotalCommits: 0},
+			Pareto:  ParetoData{TotalFiles: 0},
+		}
+		es := BuildExecutiveSummary(data, nil, nil)
+		// Zero TotalCommits and zero TotalFiles skip scope + concentration.
+		// Only the "all clean" positive bullet should remain.
+		if len(es.Bullets) != 1 || es.Bullets[0].Severity != "ok" {
+			t.Errorf("empty dataset bullets = %+v", es.Bullets)
+		}
+	})
+}
+
 func TestThousands(t *testing.T) {
 	cases := []struct {
 		in   interface{}
