@@ -44,12 +44,12 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <p class="subtitle">{{.Summary.FirstCommitDate}} to {{.Summary.LastCommitDate}}</p>
 
 <div class="cards">
-  <div class="card"><div class="label">Commits</div><div class="value">{{.Summary.TotalCommits}}</div></div>
-  <div class="card"><div class="label">Developers</div><div class="value">{{.Summary.TotalDevs}}</div></div>
-  <div class="card"><div class="label">Files</div><div class="value">{{.Summary.TotalFiles}}</div></div>
-  <div class="card"><div class="label">Additions</div><div class="value">{{.Summary.TotalAdditions}}</div></div>
-  <div class="card"><div class="label">Deletions</div><div class="value">{{.Summary.TotalDeletions}}</div></div>
-  <div class="card"><div class="label">Merges</div><div class="value">{{.Summary.MergeCommits}}</div></div>
+  <div class="card"><div class="label">Commits</div><div class="value" title="{{thousands .Summary.TotalCommits}}">{{humanize .Summary.TotalCommits}}</div></div>
+  <div class="card"><div class="label">Developers</div><div class="value" title="{{thousands .Summary.TotalDevs}}">{{humanize .Summary.TotalDevs}}</div></div>
+  <div class="card"><div class="label">Files</div><div class="value" title="{{thousands .Summary.TotalFiles}}">{{humanize .Summary.TotalFiles}}</div></div>
+  <div class="card"><div class="label">Additions</div><div class="value" title="{{thousands .Summary.TotalAdditions}}">{{humanize .Summary.TotalAdditions}}</div></div>
+  <div class="card"><div class="label">Deletions</div><div class="value" title="{{thousands .Summary.TotalDeletions}}">{{humanize .Summary.TotalDeletions}}</div></div>
+  <div class="card"><div class="label">Merges</div><div class="value" title="{{thousands .Summary.MergeCommits}}">{{humanize .Summary.MergeCommits}}</div></div>
 </div>
 
 <h2>Concentration</h2>
@@ -58,29 +58,29 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
     <span style="font-size:20px;">{{.Pareto.FilesMarker}}</span>
     <div>
-      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnFiles}} files concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalFiles}} total files — {{.Pareto.FilesLabel}}</div>
+      <div style="font-size:14px; font-weight:600;">{{thousands .Pareto.TopChurnFiles}} files concentrate 80% of all churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{thousands .Pareto.TotalFiles}} total files — {{.Pareto.FilesLabel}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
     <span style="font-size:20px;">{{.Pareto.DevsCommitsMarker}}</span>
     <div>
-      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopCommitDevs}} devs produce 80% of all commits</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{.Pareto.DevsCommitsLabel}}</div>
+      <div style="font-size:14px; font-weight:600;">{{thousands .Pareto.TopCommitDevs}} devs produce 80% of all commits</div>
+      <div style="font-size:12px; color:#656d76;">out of {{thousands .Pareto.TotalDevs}} total devs — {{.Pareto.DevsCommitsLabel}}</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
     <span style="font-size:20px;">{{.Pareto.DevsChurnMarker}}</span>
     <div>
-      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDevs}} devs produce 80% of all line churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDevs}} total devs — {{.Pareto.DevsChurnLabel}}. Compare to the commits card: divergence reveals bots (commits ≫ churn) or feature owners (churn ≫ commits).</div>
+      <div style="font-size:14px; font-weight:600;">{{thousands .Pareto.TopChurnDevs}} devs produce 80% of all line churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{thousands .Pareto.TotalDevs}} total devs — {{.Pareto.DevsChurnLabel}}. Compare to the commits card: divergence reveals bots (commits ≫ churn) or feature owners (churn ≫ commits).</div>
     </div>
   </div>
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
     <span style="font-size:20px;">{{.Pareto.DirsMarker}}</span>
     <div>
-      <div style="font-size:14px; font-weight:600;">{{.Pareto.TopChurnDirs}} directories concentrate 80% of all churn</div>
-      <div style="font-size:12px; color:#656d76;">out of {{.Pareto.TotalDirs}} total directories — {{.Pareto.DirsLabel}}</div>
+      <div style="font-size:14px; font-weight:600;">{{thousands .Pareto.TopChurnDirs}} directories concentrate 80% of all churn</div>
+      <div style="font-size:12px; color:#656d76;">out of {{thousands .Pareto.TotalDirs}} total directories — {{.Pareto.DirsLabel}}</div>
     </div>
   </div>
 </div>
@@ -114,9 +114,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .ActivityRaw}}
 <tr>
   <td class="mono">{{.Period}}</td>
-  <td>{{.Commits}}</td>
-  <td>{{.Additions}}</td>
-  <td>{{.Deletions}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>{{thousands .Additions}}</td>
+  <td>{{thousands .Deletions}}</td>
   <td class="mono">{{if gt .Additions 0}}{{printf "%.2f" (pctRatio .Deletions .Additions)}}{{else}}—{{end}}</td>
 </tr>
 {{end}}
@@ -134,10 +134,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <tr>
   <td>{{.Name}}</td>
   <td class="mono" style="font-size:11px">{{.Email}}</td>
-  <td>{{.Commits}}</td>
+  <td>{{thousands .Commits}}</td>
   <td style="width:20%"><div class="bar-container"><div class="bar bar-commits" style="width: {{pctInt .Commits $maxContrib}}%"></div></div></td>
-  <td>{{.Additions}}</td>
-  <td>{{.Deletions}}</td>
+  <td>{{thousands .Additions}}</td>
+  <td>{{thousands .Deletions}}</td>
 </tr>
 {{end}}
 </table>
@@ -152,8 +152,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .Hotspots}}
 <tr>
   <td class="mono truncate">{{.Path}}</td>
-  <td>{{.Commits}}</td>
-  <td>{{.Churn}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>{{thousands .Churn}}</td>
   <td style="width:25%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pct .Churn $maxChurn}}%"></div></div></td>
   <td>{{.UniqueDevs}}</td>
 </tr>
@@ -169,9 +169,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .Directories}}
 <tr>
   <td class="mono">{{.Dir}}</td>
-  <td>{{.FileTouches}}</td>
-  <td>{{.Churn}}</td>
-  <td>{{.Files}}</td>
+  <td>{{thousands .FileTouches}}</td>
+  <td>{{thousands .Churn}}</td>
+  <td>{{thousands .Files}}</td>
   <td>{{.UniqueDevs}}</td>
   <td>{{.BusFactor}}</td>
 </tr>
@@ -224,7 +224,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <tr>
   <td class="mono truncate">{{.FileA}}</td>
   <td class="mono truncate">{{.FileB}}</td>
-  <td>{{.CoChanges}}</td>
+  <td>{{thousands .CoChanges}}</td>
   <td><div class="bar-container"><div class="bar bar-commits" style="width: {{.CouplingPct}}%"></div><span class="bar-value">{{printf "%.0f" .CouplingPct}}%</span></div></td>
 </tr>
 {{end}}
@@ -257,8 +257,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td class="mono">{{slice .SHA 0 12}}</td>
   <td>{{.AuthorName}}</td>
   <td class="mono">{{.Date}}</td>
-  <td>{{.LinesChanged}}</td>
-  <td>{{.FilesChanged}}</td>
+  <td>{{thousands .LinesChanged}}</td>
+  <td>{{thousands .FilesChanged}}</td>
   {{if .Message}}<td class="truncate">{{.Message}}</td>{{end}}
 </tr>
 {{end}}
@@ -274,8 +274,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <tr>
   <td class="mono" style="font-size:11px">{{.DevA}}</td>
   <td class="mono" style="font-size:11px">{{.DevB}}</td>
-  <td>{{.SharedFiles}}</td>
-  <td>{{.SharedLines}}</td>
+  <td>{{thousands .SharedFiles}}</td>
+  <td>{{thousands .SharedLines}}</td>
   <td><div class="bar-container"><div class="bar bar-score" style="width: {{.Weight}}%"></div><span class="bar-value">{{printf "%.1f" .Weight}}%</span></div></td>
 </tr>
 {{end}}
@@ -288,7 +288,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .Profiles}}
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
   <div style="font-size:16px; font-weight:600;">{{.Name}} <span class="mono" style="font-size:12px; color:#656d76;">&lt;{{.Email}}&gt;</span></div>
-  <div style="margin:6px 0 12px; font-size:13px; color:#656d76;">{{.FirstDate}} to {{.LastDate}} · {{.ActiveDays}} active days · {{.Commits}} commits</div>
+  <div style="margin:6px 0 12px; font-size:13px; color:#656d76;">{{.FirstDate}} to {{.LastDate}} · {{thousands .ActiveDays}} active days · {{thousands .Commits}} commits</div>
 
   <div style="display:grid; grid-template-columns:110px 1fr; gap:4px 12px; font-size:13px; margin-bottom:12px;">
     <span style="color:#656d76;">Scope</span>
@@ -298,13 +298,13 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span>{{printf "%.3f" .Specialization}} <span style="color:#656d76;">({{if lt .Specialization 0.15}}broad generalist{{else if lt .Specialization 0.35}}balanced{{else if lt .Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}})</span></span>
 
     <span style="color:#656d76;">Contribution</span>
-    <span>{{if eq .ContribType "growth"}}<span style="color:#2da44e;">{{.ContribType}}</span>{{else if eq .ContribType "refactor"}}<span style="color:#cf222e;">{{.ContribType}}</span>{{else}}<span style="color:#bf8700;">{{.ContribType}}</span>{{end}} <span style="color:#656d76;">(ratio {{printf "%.2f" .ContribRatio}} · +{{.Additions}} −{{.Deletions}})</span></span>
+    <span>{{if eq .ContribType "growth"}}<span style="color:#2da44e;">{{.ContribType}}</span>{{else if eq .ContribType "refactor"}}<span style="color:#cf222e;">{{.ContribType}}</span>{{else}}<span style="color:#bf8700;">{{.ContribType}}</span>{{end}} <span style="color:#656d76;">(ratio {{printf "%.2f" .ContribRatio}} · +{{thousands .Additions}} −{{thousands .Deletions}})</span></span>
 
     <span style="color:#656d76;">Pace</span>
     <span>{{printf "%.1f" .Pace}} commits/active day</span>
 
     <span style="color:#656d76;">Collaboration</span>
-    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{$c.SharedFiles}} files, {{$c.SharedLines}} lines){{end}}{{else}}solo contributor{{end}}</span>
+    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{thousands $c.SharedFiles}} files, {{thousands $c.SharedLines}} lines){{end}}{{else}}solo contributor{{end}}</span>
 
     <span style="color:#656d76;">Weekend</span>
     <span>{{printf "%.1f" .WeekendPct}}%</span>
@@ -316,8 +316,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     {{range .TopFiles}}
     <div class="mono" style="display:flex; gap:8px;">
       <span class="truncate" style="min-width:300px;">{{.Path}}</span>
-      <span style="color:#656d76;">{{.Commits}} commits</span>
-      <span style="color:#656d76;">{{.Churn}} churn</span>
+      <span style="color:#656d76;">{{thousands .Commits}} commits</span>
+      <span style="color:#656d76;">{{thousands .Churn}} churn</span>
     </div>
     {{end}}
   </div>

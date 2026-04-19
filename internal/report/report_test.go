@@ -366,3 +366,57 @@ func TestBuildActivityGrid_NonMonthlyCollapsesOrDrops(t *testing.T) {
 		t.Errorf("weekly periods should be dropped (invalid month parse), got years=%v", years)
 	}
 }
+
+func TestHumanize(t *testing.T) {
+	cases := []struct {
+		in   interface{}
+		want string
+	}{
+		{int64(0), "0"},
+		{int64(42), "42"},
+		{int64(999), "999"},
+		{int64(1000), "1k"},
+		{int64(1200), "1.2k"},
+		{int64(42844), "42.8k"},
+		{int64(1_000_000), "1M"},
+		{int64(1_280_000), "1.3M"},
+		{int64(1_500_000_000), "1.5B"},
+		{int64(-42844), "-42.8k"},
+		// Ensure plain int (template default for int-typed fields) works too.
+		{42, "42"},
+		{42844, "42.8k"},
+	}
+	for _, c := range cases {
+		if got := humanize(c.in); got != c.want {
+			t.Errorf("humanize(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestThousands(t *testing.T) {
+	cases := []struct {
+		in   interface{}
+		want string
+	}{
+		{int64(0), "0"},
+		{int(42), "42"},
+		{int64(999), "999"},
+		{int64(1000), "1,000"},
+		{int64(42844), "42,844"},
+		{int64(1_000_000), "1,000,000"},
+		{int64(1_438_634), "1,438,634"},
+		{int64(-42844), "-42,844"},
+		{int(100), "100"},
+		{int64(12345), "12,345"},
+		// Floats fall through to fmt's default rendering rather than silently
+		// truncating — protects against surprise if a float field is ever
+		// piped into the helper by mistake.
+		{3.7, "3.7"},
+		{float32(42.5), "42.5"},
+	}
+	for _, c := range cases {
+		if got := thousands(c.in); got != c.want {
+			t.Errorf("thousands(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

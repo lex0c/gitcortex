@@ -44,10 +44,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <p class="subtitle">{{.Profile.Email}} · {{.Profile.FirstDate}} to {{.Profile.LastDate}}</p>
 
 <div class="cards">
-  <div class="card"><div class="label">Commits</div><div class="value">{{.Profile.Commits}}</div></div>
-  <div class="card"><div class="label">Lines Changed</div><div class="value">{{.Profile.LinesChanged}}</div></div>
-  <div class="card"><div class="label">Files Touched</div><div class="value">{{.Profile.FilesTouched}}</div></div>
-  <div class="card"><div class="label">Active Days</div><div class="value">{{.Profile.ActiveDays}}</div></div>
+  <div class="card"><div class="label">Commits</div><div class="value" title="{{thousands .Profile.Commits}}">{{humanize .Profile.Commits}}</div></div>
+  <div class="card"><div class="label">Lines Changed</div><div class="value" title="{{thousands .Profile.LinesChanged}}">{{humanize .Profile.LinesChanged}}</div></div>
+  <div class="card"><div class="label">Files Touched</div><div class="value" title="{{thousands .Profile.FilesTouched}}">{{humanize .Profile.FilesTouched}}</div></div>
+  <div class="card"><div class="label">Active Days</div><div class="value" title="{{thousands .Profile.ActiveDays}}">{{humanize .Profile.ActiveDays}}</div></div>
   <div class="card"><div class="label">Pace</div><div class="value">{{printf "%.1f" .Profile.Pace}}</div><div class="detail">commits/active day</div></div>
   <div class="card"><div class="label">Weekend</div><div class="value">{{printf "%.1f" .Profile.WeekendPct}}%</div></div>
 </div>
@@ -70,7 +70,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   </div>
   <div>
     {{if eq .Profile.ContribType "growth"}}<span style="color:#2da44e; font-weight:600;">growth</span>{{else if eq .Profile.ContribType "refactor"}}<span style="color:#cf222e; font-weight:600;">refactor</span>{{else}}<span style="color:#bf8700; font-weight:600;">balanced</span>{{end}}
-    <span style="color:#656d76;">(ratio {{printf "%.2f" .Profile.ContribRatio}} · +{{.Profile.Additions}} −{{.Profile.Deletions}})</span>
+    <span style="color:#656d76;">(ratio {{printf "%.2f" .Profile.ContribRatio}} · +{{thousands .Profile.Additions}} −{{thousands .Profile.Deletions}})</span>
   </div>
 </div>
 
@@ -82,7 +82,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     {{range .Profile.Collaborators}}
     <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; background:#fff; border:1px solid #d0d7de; border-radius:16px; font-size:11px;">
       <span class="mono">{{.Email}}</span>
-      <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;" title="{{.SharedFiles}} files / {{.SharedLines}} lines">{{.SharedFiles}}f · {{.SharedLines}}l</span>
+      <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;" title="{{.SharedFiles}} files / {{.SharedLines}} lines">{{.SharedFiles}} files · {{humanize .SharedLines}} lines</span>
     </span>
     {{end}}
   </div>
@@ -98,8 +98,8 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .Profile.TopFiles}}
 <tr>
   <td class="mono truncate">{{.Path}}</td>
-  <td>{{.Commits}}</td>
-  <td>{{.Churn}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>{{thousands .Churn}}</td>
   <td style="width:30%"><div style="display:flex;"><div class="bar bar-churn" style="width:{{pct .Churn $maxChurn}}%"></div></div></td>
 </tr>
 {{end}}
@@ -135,9 +135,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .Profile.MonthlyActivity}}
 <tr>
   <td class="mono">{{.Period}}</td>
-  <td>{{.Commits}}</td>
-  <td>{{.Additions}}</td>
-  <td>{{.Deletions}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>{{thousands .Additions}}</td>
+  <td>{{thousands .Deletions}}</td>
   <td class="mono">{{if gt .Additions 0}}{{printf "%.2f" (pctRatio .Deletions .Additions)}}{{else}}—{{end}}</td>
 </tr>
 {{end}}

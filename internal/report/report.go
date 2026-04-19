@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/lex0c/gitcortex/internal/stats"
@@ -399,6 +400,115 @@ var funcMap = template.FuncMap{
 	"pctRatio":  pctRatio,
 	"plusInt":   plusInt,
 	"derefInt":  derefInt,
+	"humanize":  humanize,
+	"thousands": thousands,
+}
+
+// asInt64 coerces common integer template values to int64. Templates pass a
+// mix of int and int64 depending on the stats struct field — keeping the
+// helpers polymorphic avoids sprinkling `(int64 .Field)` casts through the
+// templates. Floats are intentionally rejected: silent truncation would
+// turn `34.5` into "34" in a tooltip with no visible warning. Unknown and
+// float inputs fall back to fmt's default rendering at the call sites,
+// which preserves the value rather than hiding precision loss.
+func asInt64(n interface{}) (int64, bool) {
+	switch x := n.(type) {
+	case int:
+		return int64(x), true
+	case int8:
+		return int64(x), true
+	case int16:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	case int64:
+		return x, true
+	case uint:
+		return int64(x), true
+	case uint8:
+		return int64(x), true
+	case uint16:
+		return int64(x), true
+	case uint32:
+		return int64(x), true
+	case uint64:
+		return int64(x), true
+	}
+	return 0, false
+}
+
+// humanize formats a count with a k/M/B suffix for compact display in
+// narrow HTML surfaces (summary cards, badges). Trailing ".0" is dropped so
+// round values read as "1k" rather than "1.0k". The exact integer should
+// still be surfaced in a tooltip so no precision is lost.
+//
+// Edge cases worth knowing: the %.1f formatter uses round-half-to-even, so
+// 1_250_000 → "1.2M" (not "1.3M"). Boundaries are strict powers of 1000, so
+// 999_999 renders as "1000k" rather than promoting to "1M" — unlikely in
+// practice but documented here to avoid surprise.
+func humanize(n interface{}) string {
+	v, ok := asInt64(n)
+	if !ok {
+		return fmt.Sprintf("%v", n)
+	}
+	abs := v
+	if abs < 0 {
+		abs = -abs
+	}
+	if abs < 1000 {
+		return fmt.Sprintf("%d", v)
+	}
+	var val float64
+	var suffix string
+	switch {
+	case abs < 1_000_000:
+		val = float64(v) / 1000
+		suffix = "k"
+	case abs < 1_000_000_000:
+		val = float64(v) / 1_000_000
+		suffix = "M"
+	default:
+		val = float64(v) / 1_000_000_000
+		suffix = "B"
+	}
+	s := fmt.Sprintf("%.1f", val)
+	s = strings.TrimSuffix(s, ".0")
+	return s + suffix
+}
+
+// thousands formats an integer with comma thousand separators for use in
+// table cells where comparison and exact value matter (42844 → "42,844").
+// Negative numbers and zero pass through; non-numeric input falls back to
+// fmt's default rendering.
+func thousands(n interface{}) string {
+	v, ok := asInt64(n)
+	if !ok {
+		return fmt.Sprintf("%v", n)
+	}
+	if v == 0 {
+		return "0"
+	}
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	// Build groups of 3 digits from the right.
+	s := fmt.Sprintf("%d", v)
+	var out strings.Builder
+	if neg {
+		out.WriteByte('-')
+	}
+	// Insert a comma before every group of 3 digits past the first.
+	first := len(s) % 3
+	if first == 0 {
+		first = 3
+	}
+	out.WriteString(s[:first])
+	for i := first; i < len(s); i += 3 {
+		out.WriteByte(',')
+		out.WriteString(s[i : i+3])
+	}
+	return out.String()
 }
 
 // derefInt returns the value behind an *int, or 0 if nil. Template-side
