@@ -2,6 +2,7 @@ package git
 
 import (
 	"bufio"
+	"container/list"
 	"context"
 	"fmt"
 	"io"
@@ -9,13 +10,75 @@ import (
 	"strings"
 )
 
-const nullHash = "0000000000000000000000000000000000000000"
+const (
+	nullHash = "0000000000000000000000000000000000000000"
+
+	// blobCacheCapacity is the LRU size for BlobSizeResolver's across-
+	// commit cache. Git content-addresses blobs by hash, so size for a
+	// given hash is permanent — caching is semantically safe. A single
+	// file persists across many consecutive commits in real history;
+	// without a cache, every commit queries cat-file for hashes we
+	// already resolved moments earlier. 50k entries ≈ 6MB RAM, enough
+	// to hold the "hot" working set on large repos like Chromium.
+	blobCacheCapacity = 50_000
+)
+
+// blobCache is a simple LRU of hash → blob size. Not thread-safe; the
+// resolver is called from a single extract goroutine.
+type blobCache struct {
+	cap int
+	m   map[string]*list.Element
+	ll  *list.List
+}
+
+type blobCacheEntry struct {
+	hash string
+	size int64
+}
+
+func newBlobCache(cap int) *blobCache {
+	return &blobCache{
+		cap: cap,
+		m:   make(map[string]*list.Element, cap),
+		ll:  list.New(),
+	}
+}
+
+func (c *blobCache) get(hash string) (int64, bool) {
+	if c == nil || c.cap == 0 {
+		return 0, false
+	}
+	if e, ok := c.m[hash]; ok {
+		c.ll.MoveToFront(e)
+		return e.Value.(*blobCacheEntry).size, true
+	}
+	return 0, false
+}
+
+func (c *blobCache) put(hash string, size int64) {
+	if c == nil || c.cap == 0 {
+		return
+	}
+	if e, ok := c.m[hash]; ok {
+		c.ll.MoveToFront(e)
+		e.Value.(*blobCacheEntry).size = size
+		return
+	}
+	e := c.ll.PushFront(&blobCacheEntry{hash: hash, size: size})
+	c.m[hash] = e
+	if c.ll.Len() > c.cap {
+		oldest := c.ll.Back()
+		c.ll.Remove(oldest)
+		delete(c.m, oldest.Value.(*blobCacheEntry).hash)
+	}
+}
 
 type BlobSizeResolver struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	reader *bufio.Scanner
 	cancel context.CancelFunc
+	cache  *blobCache
 }
 
 func NewBlobSizeResolver(ctx context.Context, repo string) (*BlobSizeResolver, error) {
@@ -47,22 +110,32 @@ func NewBlobSizeResolver(ctx context.Context, repo string) (*BlobSizeResolver, e
 		stdin:  stdin,
 		reader: scanner,
 		cancel: cancel,
+		cache:  newBlobCache(blobCacheCapacity),
 	}, nil
 }
 
 func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error) {
+	sizes := make(map[string]int64, len(entries)*2)
 	needed := make(map[string]struct{})
 	for _, e := range entries {
 		if e.OldHash != nullHash && e.OldHash != "" {
-			needed[e.OldHash] = struct{}{}
+			if size, ok := r.cache.get(e.OldHash); ok {
+				sizes[e.OldHash] = size
+			} else {
+				needed[e.OldHash] = struct{}{}
+			}
 		}
 		if e.NewHash != nullHash && e.NewHash != "" {
-			needed[e.NewHash] = struct{}{}
+			if size, ok := r.cache.get(e.NewHash); ok {
+				sizes[e.NewHash] = size
+			} else {
+				needed[e.NewHash] = struct{}{}
+			}
 		}
 	}
 
 	if len(needed) == 0 {
-		return map[string]int64{}, nil
+		return sizes, nil
 	}
 
 	// Write hashes in a goroutine to avoid deadlock: if we write all hashes
@@ -80,7 +153,6 @@ func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error)
 		writeErr <- nil
 	}()
 
-	sizes := make(map[string]int64, len(needed))
 	for i := 0; i < len(needed); i++ {
 		if !r.reader.Scan() {
 			if err := r.reader.Err(); err != nil {
@@ -99,6 +171,7 @@ func (r *BlobSizeResolver) Resolve(entries []RawEntry) (map[string]int64, error)
 			continue
 		}
 		sizes[parts[0]] = size
+		r.cache.put(parts[0], size)
 	}
 
 	if err := <-writeErr; err != nil {
