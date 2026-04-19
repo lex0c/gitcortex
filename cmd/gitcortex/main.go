@@ -334,10 +334,19 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 		}
 	}
 	if sf.stat == "structure" {
-		fmt.Fprintf(os.Stderr, "\n=== Repo Structure (depth %d) ===\n", sf.treeDepth)
 		root := reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth)
-		if err := reportpkg.RenderTreeText(os.Stdout, root); err != nil {
-			return err
+		if sf.format == "csv" {
+			// CSV path: no header banner on stderr — downstream parsers
+			// sometimes tail stderr onto stdout, and a stray "=== ... ==="
+			// breaks the single-table contract.
+			if err := reportpkg.RenderTreeCSV(os.Stdout, root); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "\n=== Repo Structure (depth %d) ===\n", sf.treeDepth)
+			if err := reportpkg.RenderTreeText(os.Stdout, root); err != nil {
+				return err
+			}
 		}
 	}
 

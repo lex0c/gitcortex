@@ -80,6 +80,59 @@ func TestBuildRepoTreePrunesAndFlagsTruncation(t *testing.T) {
 	}
 }
 
+func TestRenderTreeCSVEmitsHeaderAndPreorderRows(t *testing.T) {
+	hotspots := []stats.FileStat{
+		{Path: "cmd/main.go", Commits: 7, Churn: 42},
+		{Path: "README.md", Commits: 3, Churn: 5},
+	}
+	root := BuildRepoTree(hotspots, 0)
+
+	var buf bytes.Buffer
+	if err := RenderTreeCSV(&buf, root); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+
+	// Header + root + cmd + main.go + README.md = 5 rows.
+	if len(lines) != 5 {
+		t.Fatalf("got %d rows, want 5:\n%s", len(lines), buf.String())
+	}
+	wantHeader := "path,type,depth,commits,churn,files,truncated"
+	if lines[0] != wantHeader {
+		t.Errorf("header = %q, want %q", lines[0], wantHeader)
+	}
+	// Root: path resolved to ".", dir, aggregate.
+	if !strings.HasPrefix(lines[1], ".,dir,0,0,47,2,false") {
+		t.Errorf("root row = %q, want prefix .,dir,0,0,47,2,false", lines[1])
+	}
+	// Dir row for cmd/: commits should be 0 (not aggregated from children).
+	foundCmdDir := false
+	for _, ln := range lines[2:] {
+		if strings.HasPrefix(ln, "cmd,dir,") {
+			foundCmdDir = true
+			if !strings.Contains(ln, ",0,42,1,false") {
+				t.Errorf("cmd dir row = %q, want commits=0 churn=42 files=1", ln)
+			}
+		}
+	}
+	if !foundCmdDir {
+		t.Errorf("missing cmd dir row:\n%s", buf.String())
+	}
+	// File row for cmd/main.go: full path, commits preserved.
+	foundLeaf := false
+	for _, ln := range lines[2:] {
+		if strings.HasPrefix(ln, "cmd/main.go,file,") {
+			foundLeaf = true
+			if !strings.Contains(ln, ",7,42,0,false") {
+				t.Errorf("main.go row = %q, want commits=7 churn=42 files=0", ln)
+			}
+		}
+	}
+	if !foundLeaf {
+		t.Errorf("missing cmd/main.go row:\n%s", buf.String())
+	}
+}
+
 func TestRenderTreeTextProducesBoxPrefixes(t *testing.T) {
 	hotspots := []stats.FileStat{
 		{Path: "cmd/main.go", Commits: 1, Churn: 10},

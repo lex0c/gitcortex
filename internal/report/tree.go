@@ -1,9 +1,11 @@
 package report
 
 import (
+	"encoding/csv"
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lex0c/gitcortex/internal/stats"
@@ -181,4 +183,53 @@ func formatNodeLabel(n *TreeNode) string {
 		return fmt.Sprintf("%s/  (%d files, %s churn)", n.Name, n.Files, humanize(n.Churn))
 	}
 	return fmt.Sprintf("%s  (%d commits, %s churn)", n.Name, n.Commits, humanize(n.Churn))
+}
+
+// RenderTreeCSV emits the tree as a flat CSV, one row per node in DFS
+// preorder so the traversal order matches the text renderer. Honors the
+// "single clean table per --stat" contract: downstream tools can read
+// the same columns whether the user asked for `--stat structure` or
+// another stat. Commits is 0 for dir rows (see TreeNode doc — per-file
+// commit sums would double-count), so consumers wanting a directory-
+// level "activity" signal should use Churn or Files instead.
+func RenderTreeCSV(w io.Writer, root *TreeNode) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"path", "type", "depth", "commits", "churn", "files", "truncated"}); err != nil {
+		return err
+	}
+	if err := writeTreeCSVRow(cw, root); err != nil {
+		return err
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+func writeTreeCSVRow(cw *csv.Writer, n *TreeNode) error {
+	kind := "file"
+	if n.IsDir {
+		kind = "dir"
+	}
+	// The root node's Path is empty by construction; emit "." so
+	// consumers don't get a blank cell as the first row.
+	path := n.Path
+	if path == "" {
+		path = n.Name
+	}
+	if err := cw.Write([]string{
+		path,
+		kind,
+		strconv.Itoa(n.Depth),
+		strconv.Itoa(n.Commits),
+		strconv.FormatInt(n.Churn, 10),
+		strconv.Itoa(n.Files),
+		strconv.FormatBool(n.Truncated),
+	}); err != nil {
+		return err
+	}
+	for _, c := range n.Children {
+		if err := writeTreeCSVRow(cw, c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
