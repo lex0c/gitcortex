@@ -228,7 +228,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
-<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see METRICS.md).{{end}}</p>
+<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see <a href="https://github.com/lex0c/gitcortex/blob/main/docs/METRICS.md#churn-risk" target="_blank" rel="noopener noreferrer" style="color:#0969da;">METRICS.md</a>).{{end}}</p>
 {{if .ChurnRiskLabelCounts}}
 <div class="churn-chips">
   {{range .ChurnRiskLabelCounts}}
