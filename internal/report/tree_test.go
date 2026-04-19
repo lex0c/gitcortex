@@ -194,6 +194,107 @@ func TestBuildRepoTreeDirCommitsZero(t *testing.T) {
 	}
 }
 
+// Regression: the --format csv path once silently wrote a Unicode tree.
+// Assert RenderTreeForFormat routes each format to the correct writer
+// by peeking at the first bytes of output — CSV starts with the header
+// row, text starts with the root label. Cheap and stable.
+func TestRenderTreeForFormatDispatches(t *testing.T) {
+	hotspots := []stats.FileStat{{Path: "cmd/main.go", Commits: 1, Churn: 10}}
+	root := BuildRepoTree(hotspots, 0)
+
+	cases := []struct {
+		format   string
+		wantHead string
+	}{
+		{"csv", "path,type,depth,commits,churn,files,truncated\n"},
+		{"table", ".\n"},     // text renderer starts with root name
+		{"", ".\n"},          // empty format falls through to default (text)
+		{"garbage", ".\n"},   // unknown format falls through to default (text)
+	}
+	for _, c := range cases {
+		t.Run(c.format, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := RenderTreeForFormat(&buf, root, c.format); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(buf.String(), c.wantHead) {
+				t.Errorf("format=%q: output did not start with %q; got:\n%s",
+					c.format, c.wantHead, buf.String())
+			}
+		})
+	}
+}
+
+// Truncation markers: the text renderer must surface the "subtree
+// hidden" hint with the correct flag name, and the CSV row for a
+// truncated dir must carry truncated=true. Both are user-visible and
+// neither was previously asserted.
+func TestTruncationMarkersInRenderers(t *testing.T) {
+	hotspots := []stats.FileStat{{Path: "a/b/c.go", Commits: 1, Churn: 10}}
+	root := BuildRepoTree(hotspots, 2)
+
+	var txt bytes.Buffer
+	if err := RenderTreeText(&txt, root); err != nil {
+		t.Fatal(err)
+	}
+	// Must reference the actual flag, not the --depth typo.
+	if !strings.Contains(txt.String(), "subtree hidden, use --tree-depth to expand") {
+		t.Errorf("text render missing truncation hint with correct flag:\n%s", txt.String())
+	}
+
+	var cs bytes.Buffer
+	if err := RenderTreeCSV(&cs, root); err != nil {
+		t.Fatal(err)
+	}
+	// The dir row at depth 2 (b/) is the truncated one; it must set
+	// truncated=true in the last column.
+	found := false
+	for _, line := range strings.Split(cs.String(), "\n") {
+		if strings.HasPrefix(line, "a/b,dir,") && strings.HasSuffix(line, ",true") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("CSV missing truncated=true on a/b dir row:\n%s", cs.String())
+	}
+}
+
+// HTML cap: CapChildrenPerDir should retain the top-N and set
+// HiddenChildren on the overflow, preserving churn-desc order from the
+// prior sort. CLI callers that never invoke it must not see counts
+// change.
+func TestCapChildrenPerDir(t *testing.T) {
+	// 5 siblings, cap at 2.
+	var hotspots []stats.FileStat
+	for i, name := range []string{"a.go", "b.go", "c.go", "d.go", "e.go"} {
+		hotspots = append(hotspots, stats.FileStat{
+			Path:    "dir/" + name,
+			Commits: 1,
+			Churn:   int64(100 - i*10), // a=100, b=90, c=80, d=70, e=60
+		})
+	}
+	root := BuildRepoTree(hotspots, 0)
+	dir := root.Children[0]
+	if dir.Name != "dir" || len(dir.Children) != 5 {
+		t.Fatalf("expected dir with 5 children, got %s with %d", dir.Name, len(dir.Children))
+	}
+
+	CapChildrenPerDir(root, 2)
+	if dir.HiddenChildren != 3 {
+		t.Errorf("HiddenChildren = %d, want 3", dir.HiddenChildren)
+	}
+	if len(dir.Children) != 2 {
+		t.Fatalf("capped children = %d, want 2", len(dir.Children))
+	}
+	// Top two must be the highest-churn survivors (a.go, b.go) in that
+	// order — the cap is a prefix trim on the already-sorted slice.
+	if dir.Children[0].Name != "a.go" || dir.Children[1].Name != "b.go" {
+		t.Errorf("top-2 after cap = [%s, %s], want [a.go, b.go]",
+			dir.Children[0].Name, dir.Children[1].Name)
+	}
+}
+
 // Regression: file and directory can share a name across history
 // (path deleted, then recreated as a directory). Each must get its own
 // node rather than the second path corrupting the first.

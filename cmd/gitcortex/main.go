@@ -335,18 +335,18 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 	}
 	if sf.stat == "structure" {
 		root := reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth)
-		if sf.format == "csv" {
-			// CSV path: no header banner on stderr — downstream parsers
-			// sometimes tail stderr onto stdout, and a stray "=== ... ==="
-			// breaks the single-table contract.
-			if err := reportpkg.RenderTreeCSV(os.Stdout, root); err != nil {
-				return err
+		// CSV skips the stderr banner — downstream parsers sometimes
+		// tail stderr onto stdout, and a stray "=== ... ===" would
+		// break the single-table contract.
+		if sf.format != "csv" {
+			depthLabel := "unlimited"
+			if sf.treeDepth > 0 {
+				depthLabel = fmt.Sprintf("%d", sf.treeDepth)
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "\n=== Repo Structure (depth %d) ===\n", sf.treeDepth)
-			if err := reportpkg.RenderTreeText(os.Stdout, root); err != nil {
-				return err
-			}
+			fmt.Fprintf(os.Stderr, "\n=== Repo Structure (depth %s) ===\n", depthLabel)
+		}
+		if err := reportpkg.RenderTreeForFormat(os.Stdout, root, sf.format); err != nil {
+			return err
 		}
 	}
 

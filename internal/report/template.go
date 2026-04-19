@@ -44,14 +44,14 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 .chip-active { background: #2da44e; color: #fff; }
 .chip-cold { background: #eaeef2; color: #656d76; }
 .chip-note { font-size: 11px; color: #656d76; font-style: italic; margin-left: 4px; }
-.glossary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
-.glossary + .glossary { margin-top: -16px; }
-.glossary summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
-.glossary[open] summary { margin-bottom: 8px; }
-.glossary dl { font-size: 12px; color: #24292f; margin: 0; }
-.glossary dt { font-weight: 600; margin-top: 8px; }
-.glossary dt:first-child { margin-top: 0; }
-.glossary dd { color: #656d76; margin: 2px 0 0; }
+.accordion { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
+.accordion + .accordion { margin-top: -16px; }
+.accordion summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
+.accordion[open] summary { margin-bottom: 8px; }
+.accordion dl { font-size: 12px; color: #24292f; margin: 0; }
+.accordion dt { font-weight: 600; margin-top: 8px; }
+.accordion dt:first-child { margin-top: 0; }
+.accordion dd { color: #656d76; margin: 2px 0 0; }
 </style>
 </head>
 <body>
@@ -59,7 +59,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <h1>{{.RepoName}} report</h1>
 <p class="subtitle">{{.Summary.FirstCommitDate}} to {{.Summary.LastCommitDate}}</p>
 
-<details class="glossary">
+<details class="accordion">
   <summary>Glossary — what do these terms mean?</summary>
   <p style="font-size:12px; color:#24292f; margin:0 0 10px; line-height:1.5;">gitcortex is a <b>repository behavior analyzer</b>, not a code analyzer. These metrics describe what people and processes did in git — who touched what, when, and with whom — not the quality of the source code itself. A file classified as <b>silo</b> or <b>legacy-hotspot</b> reveals a human or process pattern; it is not a judgment on the code (a well-written library maintained by one person will classify as silo regardless of how good it is). Labels point at where to look, not what to conclude.</p>
   <dl>
@@ -93,7 +93,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </details>
 
 {{if .Structure}}{{if .Structure.Children}}
-<details class="glossary">
+<details class="accordion">
   <summary>Repo Structure — architecture at a glance</summary>
   <p style="font-size:12px; color:#656d76; margin:8px 0 10px; line-height:1.5;">Directories sorted by total churn within each level; files listed after. Counts reflect history, so deleted files still appear (they shaped the codebase). Tree capped at the top 3 levels; deeper subtrees collapsed to keep the report readable.</p>
   <div class="tree mono" style="font-size:12px; line-height:1.6;">
@@ -411,6 +411,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
       <span>📄 {{.Name}}</span> <span style="color:#656d76;">({{thousands .Commits}} commits · {{humanize .Churn}} churn)</span>
     {{end}}
   </li>
+  {{end}}
+  {{if gt .HiddenChildren 0}}
+  <li style="padding:1px 0; color:#656d76; font-style:italic;">… {{thousands .HiddenChildren}} more hidden (ranked by churn)</li>
   {{end}}
 </ul>
 {{end}}

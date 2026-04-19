@@ -38,12 +38,37 @@ type TreeNode struct {
 	// limit. CLI/HTML surfaces show an ellipsis marker so the reader
 	// knows there's more below.
 	Truncated bool
+	// HiddenChildren counts children dropped by a per-dir render cap
+	// (applied for the HTML surface so wide directories don't blow up
+	// the page). CLI does not cap. Zero when no cap was applied.
+	HiddenChildren int
+
+	// childIndex is an O(1) lookup for BuildRepoTree. Unexported so it
+	// doesn't show up in JSON. Cleared after build to release memory
+	// (the Children slice is the durable view; the map is scaffolding).
+	childIndex map[childKey]*TreeNode `json:"-"`
+}
+
+// childKey disambiguates file/dir with the same name across history
+// (delete-file then mkdir). Both coexist as siblings under the same
+// parent and the index keeps them addressable.
+type childKey struct {
+	name  string
+	isDir bool
 }
 
 // BuildRepoTree builds a repo structure tree from the hotspots slice.
 // maxDepth limits how many levels are expanded (root counts as 0);
-// 0 = no limit. Nodes whose subtree is pruned are marked Truncated so
-// renderers can signal "... N more" to the reader.
+// 0 = no limit. Nodes whose subtree would extend past maxDepth are
+// marked Truncated and their aggregate counts still reflect everything
+// underneath, so renderers can signal "... N more" without losing the
+// totals.
+//
+// Complexity: O(F × D) where F is the number of hotspots and D is the
+// average path depth. A per-node map index (childIndex) keeps child
+// lookup at O(1); without it, wide flat directories degrade the build
+// to quadratic. Pruning happens during descent (not as a post-pass), so
+// nodes past the cap are never allocated.
 func BuildRepoTree(hotspots []stats.FileStat, maxDepth int) *TreeNode {
 	root := &TreeNode{Name: ".", Path: "", IsDir: true}
 
@@ -58,20 +83,33 @@ func BuildRepoTree(hotspots []stats.FileStat, maxDepth int) *TreeNode {
 
 		for i, part := range parts {
 			isLeaf := i == len(parts)-1
-			child := findChild(cur, part, !isLeaf)
+			currentDepth := i + 1
+
+			// Depth cap: stop creating deeper nodes, but leave the
+			// aggregates already applied on ancestors intact. cur here
+			// is the node at exactly maxDepth; mark it Truncated so
+			// renderers can show "subtree hidden".
+			if maxDepth > 0 && currentDepth > maxDepth {
+				cur.Truncated = true
+				break
+			}
+
+			child := cur.getChild(part, !isLeaf)
 			if child == nil {
 				child = &TreeNode{
 					Name:  part,
 					Path:  strings.Join(parts[:i+1], "/"),
 					IsDir: !isLeaf,
-					Depth: i + 1,
+					Depth: currentDepth,
 				}
-				cur.Children = append(cur.Children, child)
+				cur.putChild(child)
 			}
 			if isLeaf {
-				// Leaf: accumulate so rename-induced duplicates within a
-				// single Dataset (same canonical path emitted twice under
-				// pathological rename chains) don't silently overwrite.
+				// Defense-in-depth: FileHotspots iterates a map keyed
+				// by path, so no duplicates reach this loop in
+				// practice. If dupes ever did arrive, ancestor .Files
+				// would also over-count — this += is not sufficient on
+				// its own, just a cheap safety net.
 				child.Commits += h.Commits
 				child.Churn += h.Churn
 			} else {
@@ -85,26 +123,58 @@ func BuildRepoTree(hotspots []stats.FileStat, maxDepth int) *TreeNode {
 	}
 
 	sortTree(root)
-	if maxDepth > 0 {
-		pruneDepth(root, maxDepth)
-	}
+	clearChildIndex(root)
 	return root
 }
 
-// findChild returns the existing sibling that matches both name AND
-// directory-ness. A path history where the same name refers to a file in
-// one commit and a directory in another (delete-file then mkdir) would
-// otherwise corrupt the tree: the file node would grow dir children, or
-// the dir node would get leaf values overwritten. Matching on the pair
-// lets both coexist as sibling nodes; rare in practice, silent-wrong if
-// unhandled.
-func findChild(n *TreeNode, name string, wantDir bool) *TreeNode {
-	for _, c := range n.Children {
-		if c.Name == name && c.IsDir == wantDir {
-			return c
-		}
+// getChild / putChild keep child lookup O(1) during BuildRepoTree. The
+// map is pure build-time scaffolding; clearChildIndex drops it so the
+// tree kept in ReportData is exactly the exported fields.
+func (n *TreeNode) getChild(name string, isDir bool) *TreeNode {
+	if n.childIndex == nil {
+		return nil
 	}
-	return nil
+	return n.childIndex[childKey{name, isDir}]
+}
+
+func (n *TreeNode) putChild(c *TreeNode) {
+	if n.childIndex == nil {
+		n.childIndex = make(map[childKey]*TreeNode)
+	}
+	n.childIndex[childKey{c.Name, c.IsDir}] = c
+	n.Children = append(n.Children, c)
+}
+
+func clearChildIndex(n *TreeNode) {
+	n.childIndex = nil
+	for _, c := range n.Children {
+		clearChildIndex(c)
+	}
+}
+
+// CapChildrenPerDir keeps the top `limit` children of each directory
+// and records how many were dropped in HiddenChildren so the renderer
+// can show "… N more hidden". Applied only to the HTML surface — a
+// chromium-scale dir at depth 2 can have thousands of leaves, and the
+// tree section was meant to tame "too much output" not reintroduce it.
+// The CLI intentionally skips this cap because a piped tree is expected
+// to be exhaustive within the --tree-depth limit.
+//
+// Children are already sorted (dirs first, churn desc within kind), so
+// the top N favours structure over noise: at a wide dir with dozens of
+// subdirs and hundreds of files, the dirs remain visible and the tail
+// of thin files collapses into the counter.
+func CapChildrenPerDir(n *TreeNode, limit int) {
+	if limit <= 0 {
+		return
+	}
+	if len(n.Children) > limit {
+		n.HiddenChildren = len(n.Children) - limit
+		n.Children = n.Children[:limit]
+	}
+	for _, c := range n.Children {
+		CapChildrenPerDir(c, limit)
+	}
 }
 
 // sortTree orders children deterministically: directories first (so the
@@ -123,20 +193,6 @@ func sortTree(n *TreeNode) {
 	})
 	for _, c := range n.Children {
 		sortTree(c)
-	}
-}
-
-// pruneDepth drops children past maxDepth levels below root. The node at
-// the cut line keeps its aggregate counts but is marked Truncated so the
-// renderer can emit "... N more" instead of silently hiding data.
-func pruneDepth(n *TreeNode, maxDepth int) {
-	if n.Depth >= maxDepth && len(n.Children) > 0 {
-		n.Truncated = true
-		n.Children = nil
-		return
-	}
-	for _, c := range n.Children {
-		pruneDepth(c, maxDepth)
 	}
 }
 
@@ -202,6 +258,23 @@ func RenderTreeCSV(w io.Writer, root *TreeNode) error {
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// RenderTreeForFormat dispatches tree rendering to the writer matching
+// the CLI's --format. Centralizing the switch here means the earlier
+// bug ("--format csv silently wrote a Unicode tree") can't recur: every
+// CLI caller goes through this function, and the table-driven test in
+// tree_test.go asserts one writer per format. Unknown formats fall
+// through to the text renderer for backward compatibility with users
+// who pipe into their own tooling and pass through unrelated --format
+// values (e.g. "table").
+func RenderTreeForFormat(w io.Writer, root *TreeNode, format string) error {
+	switch format {
+	case "csv":
+		return RenderTreeCSV(w, root)
+	default:
+		return RenderTreeText(w, root)
+	}
 }
 
 func writeTreeCSVRow(cw *csv.Writer, n *TreeNode) error {

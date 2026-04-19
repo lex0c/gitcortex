@@ -61,6 +61,13 @@ type ReportData struct {
 // on kernel-scale repos. CLI users can override via --tree-depth.
 const htmlTreeDepth = 3
 
+// htmlTreeMaxChildrenPerDir keeps wide directories (e.g. repos with
+// hundreds of sibling files at one level) from ballooning the HTML.
+// Children are pre-sorted dirs-first then churn-desc, so the top 50
+// preserves the architectural shape and pushes long tails into a
+// "… N more" counter. CLI does not apply this cap.
+const htmlTreeMaxChildrenPerDir = 50
+
 // LabelCount pairs a Churn Risk label with its total count and sort
 // priority, so the template can render chips in the same label order
 // used by the table below.
@@ -351,6 +358,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		MaxPattern:           maxP,
 		Structure:            BuildRepoTree(stats.FileHotspots(ds, 0), htmlTreeDepth),
 	}
+	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 
 	return tmpl.Execute(w, data)
 }
