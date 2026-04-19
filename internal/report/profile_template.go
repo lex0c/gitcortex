@@ -61,9 +61,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <dt>Contribution type</dt>
     <dd><b>Growth</b> when additions far exceed deletions (new features), <b>refactor</b> when deletions dominate (cleanups, rewrites), <b>balanced</b> otherwise.</dd>
     <dt>Pace</dt>
-    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution.</dd>
+    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution. Beware bursts: 100 commits spread across 2 days with silence for the rest of the month shows pace=50, which reads steady but isn't.</dd>
     <dt>Weekend %</dt>
-    <dd>Fraction of this developer's commits on Saturday or Sunday — often signals overtime or a non-Monday-through-Friday schedule.</dd>
+    <dd>Fraction of this developer's commits on Saturday or Sunday — often signals overtime or a non-Monday-through-Friday schedule. The weekday is derived from the author's local timezone as recorded by git, so a commit from Australia at Friday 23:00 UTC counts as Saturday.</dd>
     <dt>Collaboration (shared files / shared lines)</dt>
     <dd>Developers who touch the same files. <b>Shared lines</b> = Σ min(linesA, linesB) across shared files — a conservative overlap measure that discounts trivial one-line touches.</dd>
     <dt>Churn</dt>

@@ -67,7 +67,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <dt>Churn</dt>
     <dd>Total lines added plus lines removed. High churn files are heavily modified — often where bugs accumulate.</dd>
     <dt>Recent churn</dt>
-    <dd>Churn weighted so recent changes count more. Default half-life is 90 days (a change from a year ago is worth ~⅛ of a change today).</dd>
+    <dd>Churn weighted so recent changes count more. Default half-life is 90 days — a change loses half its weight every 90 days, so a change from a year ago (≈4 half-lives) is worth ~1/16 of a change today.</dd>
     <dt>Legacy-hotspot</dt>
     <dd>An old file with concentrated ownership and declining activity — deprecated code still being touched. Usually the most urgent refactor target.</dd>
     <dt>Silo</dt>
@@ -85,9 +85,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <dt>Specialization (Herfindahl index)</dt>
     <dd>0 = the developer works across many directories; 1 = all their files are in one directory. Measures where files live on disk, not domain expertise.</dd>
     <dt>Pace</dt>
-    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution.</dd>
+    <dd>Commits per active day. High pace can mean productive small-PR flow or noisy commit habits; low pace can mean large reviewed patches or part-time contribution. Beware bursts: 100 commits spread across 2 days with silence for the rest of the month shows pace=50, which reads steady but isn't.</dd>
     <dt>Weekend %</dt>
-    <dd>Fraction of commits on Saturday or Sunday. High values often signal overtime, an internationally distributed team, or off-hours deploy cadence — context tells which.</dd>
+    <dd>Fraction of commits on Saturday or Sunday. The weekday is derived from the author's local timezone as recorded by git, so a commit from Australia at Friday 23:00 UTC counts as Saturday. High values often signal overtime, an internationally distributed team, or off-hours deploy cadence — context tells which.</dd>
   </dl>
 </details>
 
