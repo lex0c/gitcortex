@@ -164,7 +164,7 @@ func renderChildren(w io.Writer, n *TreeNode, prefix string) error {
 			return err
 		}
 		if c.Truncated {
-			if _, err := fmt.Fprintf(w, "%s%s... (subtree hidden, use --depth to expand)\n", prefix, next); err != nil {
+			if _, err := fmt.Fprintf(w, "%s%s... (subtree hidden, use --tree-depth to expand)\n", prefix, next); err != nil {
 				return err
 			}
 			continue
