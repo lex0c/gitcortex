@@ -254,6 +254,20 @@ Two dev lenses are surfaced because commit count alone is a flawed proxy for con
 
 **How to interpret**: "20 files concentrate 80% of all churn" describes where change lands — it can indicate a healthy core module under active development, or a bottleneck if combined with low bus factor. Cross-reference with the Churn Risk section before drawing conclusions.
 
+## Repo Structure
+
+A `tree(1)`-style view of the repository's directory layout, built from paths seen in history (`FileHotspots`), not from the filesystem at HEAD. Deleted files are included — the view answers "what shaped the codebase", not "what is present today".
+
+**Aggregation**:
+- File nodes: `Commits` and `Churn` are the per-file values.
+- Directory nodes: `Churn` and `Files` sum over all descendants; `Commits` is intentionally left at zero. Per-file commit counts do not sum to a distinct commit count — one commit that touches three files would add to three children. `Files` is the distinct descendant count.
+
+**Ordering**: within each level, directories come first (architectural shape reads top-down), then files. Ties are broken by churn descending, then name ascending.
+
+**Truncation**: the CLI caps depth at `--tree-depth` (default 3, 0 = unlimited). The HTML report additionally caps children at 50 per directory to keep the page under ~1MB on kernel-scale repos; the tail is collapsed into a `… N more hidden (ranked by churn)` counter.
+
+**When to use**: before drilling into hotspots or churn-risk, skim the structure to locate the modules those files live in. The tree is navigational context; ranked tables are where judgment happens.
+
 ## Data Flow
 
 ```

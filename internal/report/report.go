@@ -47,7 +47,26 @@ type ReportData struct {
 	// hotspot" from "there are 48 legacy-hotspots in total". Populated
 	// alongside ChurnRisk in Generate().
 	ChurnRiskLabelCounts []LabelCount
+
+	// Structure holds a pruned repo-structure tree rendered as a
+	// collapsible architecture view. Truncated to htmlTreeDepth levels
+	// so mature repos (linux-scale) don't blow up the HTML. nil when
+	// the dataset has no files.
+	Structure *TreeNode
 }
+
+// htmlTreeDepth caps the repo-structure tree baked into the HTML report.
+// Three levels resolves top-level modules and their immediate children,
+// enough to read the architecture at a glance without drowning the page
+// on kernel-scale repos. CLI users can override via --tree-depth.
+const htmlTreeDepth = 3
+
+// htmlTreeMaxChildrenPerDir keeps wide directories (e.g. repos with
+// hundreds of sibling files at one level) from ballooning the HTML.
+// Children are pre-sorted dirs-first then churn-desc, so the top 50
+// preserves the architectural shape and pushes long tails into a
+// "… N more" counter. CLI does not apply this cap.
+const htmlTreeMaxChildrenPerDir = 50
 
 // LabelCount pairs a Churn Risk label with its total count and sort
 // priority, so the template can render chips in the same label order
@@ -337,7 +356,9 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		Pareto:               ComputePareto(ds),
 		PatternGrid:          grid,
 		MaxPattern:           maxP,
+		Structure:            BuildRepoTree(stats.FileHotspots(ds, 0), htmlTreeDepth),
 	}
+	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 
 	return tmpl.Execute(w, data)
 }
