@@ -3,3 +3,4 @@ git_data.jsonl
 git_state
 validation/
 report.html
+.claude/
