@@ -287,43 +287,39 @@ func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, 
 	return yearLabels, grid, maxCommits
 }
 
-// BuildExecutiveSummary builds the at-a-glance bullets shown at the top of
+// buildExecutiveSummary builds the at-a-glance bullets shown at the top of
 // the HTML report. allChurnRisk and allBusFactor must be the full,
 // untruncated slices — passing data.ChurnRisk/data.BusFactor (which are
 // capped by topN for display) would make the bullet counts drift with the
 // user's --top flag instead of reflecting the repo's real state.
-func BuildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResult, allBusFactor []stats.BusFactorResult) ExecutiveSummary {
+func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResult, allBusFactor []stats.BusFactorResult) ExecutiveSummary {
 	var bullets []SummaryBullet
 
 	// Scope — always first, sets context for everything that follows.
 	if data.Summary.TotalCommits > 0 {
-		text := fmt.Sprintf(
+		bullets = append(bullets, bullet("info", "📌",
 			"<b>%s</b> commits from <b>%s</b> developers between <b>%s</b> and <b>%s</b>.",
 			thousands(data.Summary.TotalCommits),
 			thousands(data.Summary.TotalDevs),
 			data.Summary.FirstCommitDate,
 			data.Summary.LastCommitDate,
-		)
-		bullets = append(bullets, SummaryBullet{
-			Emoji: "📌", Text: template.HTML(text), Severity: "info",
-		})
+		))
 	}
 
-	// Files concentration — always shown; severity tracks the Pareto label.
-	if data.Pareto.TotalFiles > 0 {
+	// Files concentration — shown only when there's churn to concentrate.
+	// Without the TopChurnFiles guard, merges-only repos would render a
+	// nonsensical "0 of N files concentrate 80% of churn — no data" bullet.
+	if data.Pareto.TotalFiles > 0 && data.Pareto.TopChurnFiles > 0 {
 		sev := "info"
 		if strings.Contains(data.Pareto.FilesLabel, "extremely") {
 			sev = "warning"
 		}
-		text := fmt.Sprintf(
+		bullets = append(bullets, bullet(sev, data.Pareto.FilesMarker,
 			"<b>%s</b> of <b>%s</b> files concentrate 80%% of churn — <b>%s</b>.",
 			thousands(data.Pareto.TopChurnFiles),
 			thousands(data.Pareto.TotalFiles),
 			data.Pareto.FilesLabel,
-		)
-		bullets = append(bullets, SummaryBullet{
-			Emoji: data.Pareto.FilesMarker, Text: template.HTML(text), Severity: sev,
-		})
+		))
 	}
 
 	// Count the label buckets once; both legacy-hotspot and silo need them.
@@ -339,22 +335,16 @@ func BuildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 		}
 	}
 	if legacyCount > 0 {
-		text := fmt.Sprintf(
+		bullets = append(bullets, bullet("critical", "🔴",
 			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Prioritize for review.",
 			thousands(legacyCount), pluralFile(legacyCount),
-		)
-		bullets = append(bullets, SummaryBullet{
-			Emoji: "🔴", Text: template.HTML(text), Severity: "critical",
-		})
+		))
 	}
 	if siloCount > 0 {
-		text := fmt.Sprintf(
+		bullets = append(bullets, bullet("warning", "🟡",
 			"<b>%s</b> %s classified as <b>silo</b> — old and concentrated but still active. Plan knowledge transfer.",
 			thousands(siloCount), pluralFile(siloCount),
-		)
-		bullets = append(bullets, SummaryBullet{
-			Emoji: "🟡", Text: template.HTML(text), Severity: "warning",
-		})
+		))
 	}
 
 	// Bus-factor-1 files: count of single-owner knowledge risks. Full
@@ -370,13 +360,10 @@ func BuildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 		if bf1Count == 1 {
 			owned = "is single-owner — lose that developer and you lose the context."
 		}
-		text := fmt.Sprintf(
+		bullets = append(bullets, bullet("warning", "⚠️",
 			"<b>%s</b> %s with <b>bus factor = 1</b> %s",
 			thousands(bf1Count), pluralFile(bf1Count), owned,
-		)
-		bullets = append(bullets, SummaryBullet{
-			Emoji: "⚠️", Text: template.HTML(text), Severity: "warning",
-		})
+		))
 	}
 
 	// Weekend work ratio, repo-wide. Flag only when high enough to be
@@ -399,27 +386,38 @@ func BuildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 			if pct >= 30 {
 				sev = "warning"
 			}
-			text := fmt.Sprintf(
+			bullets = append(bullets, bullet(sev, "🗓️",
 				"<b>%.0f%%</b> of commits land on weekends — possible overtime, globally distributed team, or off-hours release cadence.",
 				pct,
-			)
-			bullets = append(bullets, SummaryBullet{
-				Emoji: "🗓️", Text: template.HTML(text), Severity: sev,
-			})
+			))
 		}
 	}
 
-	// Positive signal when all three risk buckets are clean. Prevents the
-	// summary from reading alarmist on healthy repos.
-	if legacyCount == 0 && siloCount == 0 && bf1Count == 0 {
-		bullets = append(bullets, SummaryBullet{
-			Emoji:    "✅",
-			Text:     template.HTML("No legacy-hotspots, silos, or bus-factor-1 files detected."),
-			Severity: "ok",
-		})
+	// Positive signal when all three risk buckets are clean — but only when
+	// we actually have data to check. A truly empty JSONL produces zero
+	// counts too; emitting "✅ all clean" there would misleadingly imply
+	// the repo was inspected and cleared.
+	hasData := len(allChurnRisk) > 0 || len(allBusFactor) > 0
+	if hasData && legacyCount == 0 && siloCount == 0 && bf1Count == 0 {
+		bullets = append(bullets, bullet("ok", "✅",
+			"No legacy-hotspots, silos, or bus-factor-1 files detected.",
+		))
 	}
 
 	return ExecutiveSummary{Bullets: bullets}
+}
+
+// bullet is a thin constructor that centralizes the `template.HTML` cast
+// so the unsafe rendering happens in exactly one place. Every current
+// caller passes only numeric formatters (thousands/humanize) and
+// hardcoded labels — no repo-derived paths or developer identities. If a
+// future caller needs to interpolate such values, escape them first.
+func bullet(severity, emoji, format string, args ...interface{}) SummaryBullet {
+	return SummaryBullet{
+		Severity: severity,
+		Emoji:    emoji,
+		Text:     template.HTML(fmt.Sprintf(format, args...)),
+	}
 }
 
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
@@ -482,7 +480,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		PatternGrid:        grid,
 		MaxPattern:         maxP,
 	}
-	data.ExecSummary = BuildExecutiveSummary(&data, allChurnRisk, allBusFactor)
+	data.ExecSummary = buildExecutiveSummary(&data, allChurnRisk, allBusFactor)
 
 	return tmpl.Execute(w, data)
 }

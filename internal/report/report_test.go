@@ -411,9 +411,11 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 	}
 
-	t.Run("healthy repo emits positive ok bullet", func(t *testing.T) {
+	t.Run("healthy repo with data emits positive ok bullet", func(t *testing.T) {
 		data := baseData()
-		es := BuildExecutiveSummary(data, nil, nil)
+		// Supply a non-empty allBusFactor so hasData is true.
+		bf := []stats.BusFactorResult{{BusFactor: 3}}
+		es := buildExecutiveSummary(data, nil, bf)
 		// scope, concentration, ok = 3 bullets
 		if len(es.Bullets) != 3 {
 			t.Fatalf("got %d bullets, want 3: %+v", len(es.Bullets), es.Bullets)
@@ -436,7 +438,7 @@ func TestBuildExecutiveSummary(t *testing.T) {
 			{Label: "legacy-hotspot"},
 			{Label: "active"},
 		}
-		es := BuildExecutiveSummary(data, full, nil)
+		es := buildExecutiveSummary(data, full, nil)
 		var got string
 		for _, b := range es.Bullets {
 			if b.Severity == "critical" {
@@ -448,10 +450,10 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 	})
 
-	t.Run("singular vs plural grammar", func(t *testing.T) {
+	t.Run("singular vs plural grammar for silo bullet", func(t *testing.T) {
 		data := baseData()
 		full := []stats.ChurnRiskResult{{Label: "silo"}}
-		es := BuildExecutiveSummary(data, full, nil)
+		es := buildExecutiveSummary(data, full, nil)
 		var got string
 		for _, b := range es.Bullets {
 			if b.Severity == "warning" {
@@ -463,7 +465,7 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 
 		full = []stats.ChurnRiskResult{{Label: "silo"}, {Label: "silo"}}
-		es = BuildExecutiveSummary(data, full, nil)
+		es = buildExecutiveSummary(data, full, nil)
 		for _, b := range es.Bullets {
 			if b.Severity == "warning" {
 				got = string(b.Text)
@@ -474,41 +476,84 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 	})
 
+	t.Run("singular vs plural grammar for bus factor bullet", func(t *testing.T) {
+		data := baseData()
+		single := []stats.BusFactorResult{{BusFactor: 1, Path: "a"}}
+		es := buildExecutiveSummary(data, nil, single)
+		var got string
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "bus factor") {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>1</b> file with <b>bus factor = 1</b> is single-owner") {
+			t.Errorf("bf=1 singular broken, got %q", got)
+		}
+
+		multi := []stats.BusFactorResult{
+			{BusFactor: 1, Path: "a"},
+			{BusFactor: 1, Path: "b"},
+		}
+		es = buildExecutiveSummary(data, nil, multi)
+		got = ""
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "bus factor") {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>2</b> files with <b>bus factor = 1</b> are single-owner") {
+			t.Errorf("bf=1 plural broken, got %q", got)
+		}
+	})
+
 	t.Run("extremely concentrated Pareto bumps severity to warning", func(t *testing.T) {
 		data := baseData()
 		data.Pareto.FilesLabel = "extremely concentrated"
 		data.Pareto.FilesMarker = "🔴"
-		es := BuildExecutiveSummary(data, nil, nil)
-		// second bullet is the concentration one
+		es := buildExecutiveSummary(data, nil, nil)
+		// second bullet is the concentration one (scope is first)
 		if es.Bullets[1].Severity != "warning" {
 			t.Errorf("concentration severity = %q, want warning", es.Bullets[1].Severity)
 		}
 	})
 
-	t.Run("weekend ratio flags only when >= 20%", func(t *testing.T) {
+	t.Run("weekend ratio thresholds", func(t *testing.T) {
+		// 19% weekend (81 weekday, 19 weekend) → should NOT flag.
 		data := baseData()
-		// 19% weekend — should NOT flag
-		for d := 0; d < 5; d++ {
-			data.PatternGrid[d][10] = 81
-		}
-		for d := 5; d < 7; d++ {
-			data.PatternGrid[d][10] = 19 / 2 // approx
-		}
-		data.PatternGrid[5][10] = 10
-		data.PatternGrid[6][10] = 9
-		es := BuildExecutiveSummary(data, nil, nil)
+		data.PatternGrid[0][10] = 81 // Mon
+		data.PatternGrid[5][10] = 10 // Sat
+		data.PatternGrid[6][10] = 9  // Sun — total weekend = 19, total = 100
+		es := buildExecutiveSummary(data, nil, nil)
 		for _, b := range es.Bullets {
 			if strings.Contains(string(b.Text), "weekend") {
 				t.Errorf("19%% weekend should not flag, got bullet: %q", b.Text)
 			}
 		}
 
-		// 30% weekend — should flag as warning
-		data.PatternGrid = [7][24]int{}
+		// 22% weekend (78 weekday, 22 weekend) → should flag as info.
+		data = baseData()
+		data.PatternGrid[0][10] = 78
+		data.PatternGrid[5][10] = 22
+		es = buildExecutiveSummary(data, nil, nil)
+		var found bool
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "weekends") {
+				found = true
+				if b.Severity != "info" {
+					t.Errorf("22%% weekend severity = %q, want info", b.Severity)
+				}
+			}
+		}
+		if !found {
+			t.Error("22%% weekend should emit a bullet")
+		}
+
+		// 30% weekend (70 weekday, 30 weekend) → should flag as warning.
+		data = baseData()
 		data.PatternGrid[0][10] = 70
 		data.PatternGrid[5][10] = 30
-		es = BuildExecutiveSummary(data, nil, nil)
-		var found bool
+		es = buildExecutiveSummary(data, nil, nil)
+		found = false
 		for _, b := range es.Bullets {
 			if strings.Contains(string(b.Text), "weekends") {
 				found = true
@@ -522,16 +567,34 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 	})
 
-	t.Run("empty dataset emits no legacy/silo/bf1 bullets", func(t *testing.T) {
+	t.Run("empty dataset suppresses the positive bullet", func(t *testing.T) {
+		// A truly empty dataset has no commits, no files, no risk results to
+		// inspect. The positive "✅ all clean" bullet must not render there
+		// — it would falsely imply the repo was checked and cleared.
 		data := &ReportData{
 			Summary: stats.Summary{TotalCommits: 0},
 			Pareto:  ParetoData{TotalFiles: 0},
 		}
-		es := BuildExecutiveSummary(data, nil, nil)
-		// Zero TotalCommits and zero TotalFiles skip scope + concentration.
-		// Only the "all clean" positive bullet should remain.
-		if len(es.Bullets) != 1 || es.Bullets[0].Severity != "ok" {
-			t.Errorf("empty dataset bullets = %+v", es.Bullets)
+		es := buildExecutiveSummary(data, nil, nil)
+		if len(es.Bullets) != 0 {
+			t.Errorf("empty dataset should emit 0 bullets, got: %+v", es.Bullets)
+		}
+	})
+
+	t.Run("merges-only repo skips the concentration bullet", func(t *testing.T) {
+		// Repo with files but zero churn (all commits are merges) has
+		// TopChurnFiles == 0. The old bullet wording "0 of N files
+		// concentrate 80% of churn — no data" was awkward; guard the
+		// bullet so it only emits when there's actual churn.
+		data := baseData()
+		data.Pareto.TopChurnFiles = 0
+		data.Pareto.FilesLabel = "no data"
+		data.Pareto.FilesMarker = "⚪"
+		es := buildExecutiveSummary(data, nil, nil)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "concentrate 80%") {
+				t.Errorf("concentration bullet should be suppressed, got %q", b.Text)
+			}
 		}
 	})
 }
