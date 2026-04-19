@@ -52,6 +52,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <details class="glossary">
   <summary>Glossary — what do these terms mean?</summary>
+  <p style="font-size:12px; color:#24292f; margin:0 0 10px; line-height:1.5;">gitcortex is a <b>repository behavior analyzer</b>, not a code analyzer. These metrics describe what this developer did in git — where they worked, with whom, at what pace — not the quality of the code they wrote. High pace and narrow scope are not verdicts; they are starting points for conversation.</p>
   <dl>
     <dt>Scope</dt>
     <dd>The top directories this developer touches, by share of files. Indicates where their work lives in the codebase.</dd>

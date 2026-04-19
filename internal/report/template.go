@@ -60,6 +60,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <details class="glossary">
   <summary>Glossary — what do these terms mean?</summary>
+  <p style="font-size:12px; color:#24292f; margin:0 0 10px; line-height:1.5;">gitcortex is a <b>repository behavior analyzer</b>, not a code analyzer. These metrics describe what people and processes did in git — who touched what, when, and with whom — not the quality of the source code itself. A file classified as <b>silo</b> or <b>legacy-hotspot</b> reveals a human or process pattern; it is not a judgment on the code (a well-written library maintained by one person will classify as silo regardless of how good it is). Labels point at where to look, not what to conclude.</p>
   <dl>
     <dt>Bus factor</dt>
     <dd>How many developers would need to leave before critical knowledge is lost. A file with bus factor 1 has a single owner — losing that person means losing the context.</dd>
