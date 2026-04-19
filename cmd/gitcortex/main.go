@@ -129,7 +129,7 @@ type statsFlags struct {
 func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringSliceVar(&sf.inputs, "input", []string{"git_data.jsonl"}, "Input JSONL file(s) from extract (repeatable for multi-repo)")
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
-	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show")
+	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show (0 = all)")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
 	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
@@ -443,7 +443,7 @@ func diffCmd() *cobra.Command {
 	cmd.Flags().StringVar(&vsFrom, "vs-from", "", "Comparison period start date")
 	cmd.Flags().StringVar(&vsTo, "vs-to", "", "Comparison period end date")
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table, csv, json")
-	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries")
+	cmd.Flags().IntVar(&topN, "top", 10, "Number of top entries (0 = all)")
 
 	return cmd
 }
@@ -749,7 +749,7 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&input, "input", "git_data.jsonl", "Input JSONL file")
 	cmd.Flags().StringVar(&output, "output", "report.html", "Output HTML file")
 	cmd.Flags().StringVar(&email, "email", "", "Generate profile report for a specific developer")
-	cmd.Flags().IntVar(&topN, "top", 20, "Number of top entries per section")
+	cmd.Flags().IntVar(&topN, "top", 20, "Number of top entries per section (0 = all)")
 	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling")
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling")
 	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay")

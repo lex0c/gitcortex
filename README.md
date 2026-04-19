@@ -176,6 +176,9 @@ gitcortex stats --input svc-auth.jsonl --input svc-payments.jsonl --input svc-ga
 gitcortex stats --input data.jsonl --stat hotspots --format csv > hotspots.csv
 gitcortex stats --input data.jsonl --format json > report.json
 
+# Full dataset (no truncation) — useful for scripting
+gitcortex stats --input data.jsonl --stat churn-risk --top 0 --format csv
+
 # Activity by week
 gitcortex stats --input data.jsonl --stat activity --granularity week
 
@@ -202,7 +205,9 @@ Available stats:
 | `top-commits` | Largest commits ranked by lines changed (includes message if extracted with `--include-commit-messages`) |
 | `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 
-Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`), `json` (unified object with all sections).
+Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`, header row on line 1), `json` (unified object with all sections).
+
+`--top 0` disables the truncation and returns every row — useful for piping into `awk`/`jq` or driving downstream scripts. CSV column order is stable and declared in the header, so `awk -F',' '$2 == "legacy-hotspot"'` on a `churn-risk` export filters by label without guessing the layout.
 
 See [`docs/METRICS.md`](docs/METRICS.md) for how each metric is calculated, including timezone handling (UTC for aggregation buckets, author-local for working patterns) and rename tracking (history merged across git-detected renames).
 
@@ -280,6 +285,8 @@ Sort order is **label priority** (legacy-hotspot → silo → active-core → ac
 **The `(age PXX, trend PYY)` suffix** reports where the file sits in this repo's distribution: `age P90` = older than 90% of tracked files, `trend P08` = declining more sharply than 92%. Classification thresholds are not absolute — they adapt to each dataset (P75 age and P25 trend, with a fallback to fixed constants for repos under 8 files). A `legacy-hotspot` with `(age P76, trend P24)` barely qualifies; one at `(age P98, trend P03)` is the real alarm. Distance from the boundary is now visible instead of hidden. See `docs/METRICS.md` for the adaptive-thresholds section.
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
+
+The HTML report precedes the Churn Risk table with a colored distribution strip — `48 legacy-hotspot · 1 silo · 2,330 active-core · 1,404 active · 4,585 cold` — counted over the full classified set. The truncated table below shows only the top N by label priority, so a reader glancing at "all 20 rows are legacy-hotspot" can still tell whether the repo has 20 legacy files or 20,000 before drawing a conclusion. To inspect the full list, use `--top 0 --format csv` from the CLI; label is column 2 of the CSV export.
 
 ### Working patterns
 
@@ -373,7 +380,7 @@ gitcortex report --input data.jsonl --output report.html --top 30
 gitcortex report --input data.jsonl --email alice@company.com --output alice.html
 ```
 
-Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk, bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. Typical size: 50-500KB depending on number of contributors.
+Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, legacy-hotspot, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
 
 > The HTML activity heatmap is always monthly (year × 12 months grid). For day/week/year buckets, use `gitcortex stats --stat activity --granularity <unit>`.
 
