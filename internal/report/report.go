@@ -41,22 +41,6 @@ type ReportData struct {
 	Pareto         ParetoData
 	PatternGrid    [7][24]int
 	MaxPattern     int
-	ExecSummary    ExecutiveSummary
-}
-
-// ExecutiveSummary is a narrative header generated from the stats so a
-// non-technical reader (manager, CTO) gets a triage view before drilling
-// into the tables below. Every bullet is derived from fields already
-// populated elsewhere in ReportData — this struct only snapshots them in a
-// render-ready form.
-type ExecutiveSummary struct {
-	Bullets []SummaryBullet
-}
-
-type SummaryBullet struct {
-	Emoji    string
-	Text     template.HTML // pre-formatted with <b> emphasis on key numbers
-	Severity string        // critical | warning | info | ok — drives left-border color
 }
 
 type ParetoData struct {
@@ -287,173 +271,6 @@ func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, 
 	return yearLabels, grid, maxCommits
 }
 
-// buildExecutiveSummary builds the at-a-glance bullets shown at the top of
-// the HTML report. allChurnRisk and allBusFactor must be the full,
-// untruncated slices — passing data.ChurnRisk/data.BusFactor (which are
-// capped by topN for display) would make the bullet counts drift with the
-// user's --top flag instead of reflecting the repo's real state.
-func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResult, allBusFactor []stats.BusFactorResult) ExecutiveSummary {
-	var bullets []SummaryBullet
-
-	// Scope — always first, sets context for everything that follows.
-	if data.Summary.TotalCommits > 0 {
-		bullets = append(bullets, bullet("info", "📌",
-			"<b>%s</b> %s from <b>%s</b> %s between <b>%s</b> and <b>%s</b>.",
-			thousands(data.Summary.TotalCommits),
-			pluralize(data.Summary.TotalCommits, "commit", "commits"),
-			thousands(data.Summary.TotalDevs),
-			pluralize(data.Summary.TotalDevs, "developer", "developers"),
-			data.Summary.FirstCommitDate,
-			data.Summary.LastCommitDate,
-		))
-	}
-
-	// Files concentration — shown only when there's churn to concentrate.
-	// Without the TopChurnFiles guard, merges-only repos would render a
-	// nonsensical "0 of N files concentrate 80% of churn — no data" bullet.
-	//
-	// Severity stays at "info": concentration in mature codebases is the
-	// baseline Pareto pattern, not a pathology. Whether a concentrated
-	// core is healthy or a bottleneck depends on context the summary
-	// can't know — the bullet describes the shape, the reader judges.
-	if data.Pareto.TotalFiles > 0 && data.Pareto.TopChurnFiles > 0 {
-		bullets = append(bullets, bullet("info", data.Pareto.FilesMarker,
-			"<b>%s</b> of <b>%s</b> files concentrate 80%% of churn — <b>%s</b>. May be a healthy core or a bottleneck — depends on context.",
-			thousands(data.Pareto.TopChurnFiles),
-			thousands(data.Pareto.TotalFiles),
-			data.Pareto.FilesLabel,
-		))
-	}
-
-	// Count label buckets for the legacy/silo bullets. These operate on
-	// the full untruncated slice so counts don't drift with display topN.
-	var legacyCount, siloCount int
-	for _, cr := range allChurnRisk {
-		switch cr.Label {
-		case "legacy-hotspot":
-			legacyCount++
-		case "silo":
-			siloCount++
-		}
-	}
-
-	// Solo repos need narrower narrative. The silo bullet and BF=1 ∩
-	// legacy-hotspot bullet both frame the situation in terms of
-	// ownership transfer and single-owner risk — both tautological when
-	// there is only one owner in the entire repo. The legacy-hotspot
-	// bullet still applies (it's about deprecation, not ownership) and
-	// stays on.
-	isSolo := data.Summary.TotalDevs <= 1
-
-	if legacyCount > 0 {
-		bullets = append(bullets, bullet("critical", "🔴",
-			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Worth investigating whether they are deprecated paths still being touched or genuinely load-bearing code.",
-			thousands(legacyCount), pluralize(legacyCount, "file", "files"),
-		))
-	}
-	if !isSolo && siloCount > 0 {
-		bullets = append(bullets, bullet("warning", "🟡",
-			"<b>%s</b> %s classified as <b>silo</b> — old, concentrated, still active. Candidates for knowledge transfer if the owner is load-bearing.",
-			thousands(siloCount), pluralize(siloCount, "file", "files"),
-		))
-	}
-
-	// Bus-factor-1 ∩ legacy-hotspot: the narrow, high-signal intersection
-	// where a file is simultaneously old, declining, and owned by exactly
-	// one person. The raw BF=1 count is dominated by one-off commits in
-	// mature repos (WordPress: 3k+, k8s: 29k+) and produced more noise
-	// than signal. This intersection consistently points at code that
-	// genuinely needs a human decision — except in solo repos, where
-	// "owned by a single person" is a tautology for every file.
-	var bf1Legacy int
-	if !isSolo {
-		bfOne := make(map[string]struct{}, len(allBusFactor))
-		for _, bf := range allBusFactor {
-			if bf.BusFactor == 1 {
-				bfOne[bf.Path] = struct{}{}
-			}
-		}
-		for _, cr := range allChurnRisk {
-			if cr.Label != "legacy-hotspot" {
-				continue
-			}
-			if _, ok := bfOne[cr.Path]; ok {
-				bf1Legacy++
-			}
-		}
-		if bf1Legacy > 0 {
-			bullets = append(bullets, bullet("critical", "🔴",
-				"<b>%s</b> of those %s also <b>bus factor = 1</b> — old, declining, and owned by a single person. The strongest single-owner signal in this report.",
-				thousands(bf1Legacy), map[bool]string{true: "is", false: "are"}[bf1Legacy == 1],
-			))
-		}
-	}
-
-	// Weekend work ratio, repo-wide. Flag only when high enough to be
-	// interesting — sub-20% is noise that depends on team timezone mix.
-	var weekdayTotal, weekendTotal int
-	for d := 0; d < 7; d++ {
-		for h := 0; h < 24; h++ {
-			c := data.PatternGrid[d][h]
-			if d == 5 || d == 6 { // PatternGrid rows: 0=Mon … 5=Sat, 6=Sun.
-				weekendTotal += c
-			} else {
-				weekdayTotal += c
-			}
-		}
-	}
-	if total := weekdayTotal + weekendTotal; total > 0 {
-		pct := float64(weekendTotal) / float64(total) * 100
-		if pct >= 20 {
-			sev := "info"
-			if pct >= 30 {
-				sev = "warning"
-			}
-			bullets = append(bullets, bullet(sev, "🗓️",
-				"<b>%.0f%%</b> of commits land on weekends — possible overtime, globally distributed team, or off-hours release cadence.",
-				pct,
-			))
-		}
-	}
-
-	// Positive signal when the narrow, high-signal buckets are clean —
-	// and only when we actually have data to check. A truly empty JSONL
-	// produces zero counts too; emitting "✅ all clean" there would
-	// misleadingly imply the repo was inspected and cleared.
-	//
-	// In solo repos, silo and BF=1 ∩ legacy-hotspot bullets are
-	// suppressed because their narratives (transfer, single-owner risk)
-	// don't apply — so the positive bullet there only needs to check
-	// legacyCount to honestly claim "clean".
-	hasData := len(allChurnRisk) > 0 || len(allBusFactor) > 0
-	if isSolo {
-		if hasData && legacyCount == 0 {
-			bullets = append(bullets, bullet("ok", "✅",
-				"No legacy-hotspots flagged.",
-			))
-		}
-	} else if hasData && legacyCount == 0 && siloCount == 0 && bf1Legacy == 0 {
-		bullets = append(bullets, bullet("ok", "✅",
-			"No legacy-hotspots, silos, or single-owner legacy files flagged.",
-		))
-	}
-
-	return ExecutiveSummary{Bullets: bullets}
-}
-
-// bullet is a thin constructor that centralizes the `template.HTML` cast
-// so the unsafe rendering happens in exactly one place. Every current
-// caller passes only numeric formatters (thousands/humanize) and
-// hardcoded labels — no repo-derived paths or developer identities. If a
-// future caller needs to interpolate such values, escape them first.
-func bullet(severity, emoji, format string, args ...interface{}) SummaryBullet {
-	return SummaryBullet{
-		Severity: severity,
-		Emoji:    emoji,
-		Text:     template.HTML(fmt.Sprintf(format, args...)),
-	}
-}
-
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
 	patterns := stats.WorkingPatterns(ds)
 	var grid [7][24]int
@@ -475,23 +292,6 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 
 	now := time.Now().Format("2006-01-02 15:04")
 
-	// Compute unbounded ChurnRisk and BusFactor once. The executive summary
-	// needs the full distribution (counts must not depend on display topN);
-	// the HTML tables only need the top slice. Slicing at render time is
-	// cheaper than running the computations twice.
-	allChurnRisk := stats.ChurnRisk(ds, 0)
-	allBusFactor := stats.BusFactor(ds, 0)
-	displayChurnRisk := allChurnRisk
-	displayBusFactor := allBusFactor
-	if topN > 0 {
-		if len(displayChurnRisk) > topN {
-			displayChurnRisk = displayChurnRisk[:topN]
-		}
-		if len(displayBusFactor) > topN {
-			displayBusFactor = displayBusFactor[:topN]
-		}
-	}
-
 	data := ReportData{
 		GeneratedAt:        now,
 		RepoName:           repoName,
@@ -503,9 +303,9 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		ActivityYears:      actYears,
 		ActivityGrid:       actGrid,
 		MaxActivityCommits: maxActCommits,
-		BusFactor:          displayBusFactor,
+		BusFactor:          stats.BusFactor(ds, topN),
 		Coupling:           stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:          displayChurnRisk,
+		ChurnRisk:          stats.ChurnRisk(ds, topN),
 		Patterns:           patterns,
 		TopCommits:         stats.TopCommits(ds, topN),
 		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
@@ -514,7 +314,6 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		PatternGrid:        grid,
 		MaxPattern:         maxP,
 	}
-	data.ExecSummary = buildExecutiveSummary(&data, allChurnRisk, allBusFactor)
 
 	return tmpl.Execute(w, data)
 }
@@ -560,17 +359,6 @@ func toInt64(v float64) int64 {
 
 func plusInt(a, b int) int {
 	return a + b
-}
-
-// pluralize picks the right noun form for a count. Used in the
-// executive summary, where "1 files" or "1 developers" reads as a bug
-// to anyone paying attention. Generalized beyond files because the
-// scope bullet pluralizes "commit" and "developer" too.
-func pluralize(n int, singular, plural string) string {
-	if n == 1 {
-		return singular
-	}
-	return plural
 }
 
 func pctRatio(del, add int64) float64 {

@@ -36,16 +36,6 @@ tr:last-child td { border-bottom: none; }
 .mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
 .truncate { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
-.exec-summary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px 20px; margin-bottom: 20px; }
-.exec-summary h2 { border: none; margin: 0 0 4px; padding: 0; }
-.exec-bullets { list-style: none; padding: 0; margin-top: 10px; }
-.bullet { display: flex; gap: 10px; padding: 8px 12px; border-radius: 4px; margin-bottom: 4px; border-left: 4px solid transparent; background: #f6f8fa; }
-.bullet-critical { border-left-color: #cf222e; background: #ffebe9; }
-.bullet-warning  { border-left-color: #bf8700; background: #fff8c5; }
-.bullet-info     { border-left-color: #0969da; background: #ddf4ff; }
-.bullet-ok       { border-left-color: #2da44e; background: #dafbe1; }
-.bullet .emoji { font-size: 16px; flex-shrink: 0; }
-.bullet .text  { font-size: 13px; line-height: 1.5; }
 .glossary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
 .glossary summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
 .glossary[open] summary { margin-bottom: 8px; }
@@ -59,21 +49,6 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <h1>{{.RepoName}} report</h1>
 <p class="subtitle">{{.Summary.FirstCommitDate}} to {{.Summary.LastCommitDate}}</p>
-
-{{if .ExecSummary.Bullets}}
-<section class="exec-summary">
-  <h2>At a glance</h2>
-  <p class="hint" style="margin:0;">Triage view over the stats below — use the sections that follow for supporting detail.</p>
-  <ul class="exec-bullets">
-    {{range .ExecSummary.Bullets}}
-    <li class="bullet bullet-{{.Severity}}">
-      <span class="emoji">{{.Emoji}}</span>
-      <span class="text">{{.Text}}</span>
-    </li>
-    {{end}}
-  </ul>
-</section>
-{{end}}
 
 <details class="glossary">
   <summary>Glossary — what do these terms mean?</summary>
