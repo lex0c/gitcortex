@@ -107,7 +107,7 @@ func isValidStat(s string) bool {
 	switch s {
 	case "summary", "contributors", "hotspots", "directories", "activity",
 		"busfactor", "coupling", "churn-risk", "working-patterns",
-		"dev-network", "profile", "top-commits", "pareto":
+		"dev-network", "profile", "top-commits", "pareto", "structure":
 		return true
 	}
 	return false
@@ -125,6 +125,7 @@ type statsFlags struct {
 	churnHalfLife      int
 	networkMinFiles    int
 	email              string
+	treeDepth          int
 }
 
 func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
@@ -132,13 +133,14 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show (0 = all)")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
 	cmd.Flags().IntVar(&sf.networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
 	cmd.Flags().StringVar(&sf.email, "email", "", "Filter by developer email (for profile stat)")
 	cmd.Flags().StringVar(&sf.since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
+	cmd.Flags().IntVar(&sf.treeDepth, "tree-depth", 3, "Max depth for --stat structure (0 = unlimited)")
 }
 
 func validateStatsFlags(sf *statsFlags) error {
@@ -149,7 +151,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure", sf.stat)
 	}
 	return nil
 }
@@ -331,6 +333,13 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if sf.stat == "structure" {
+		fmt.Fprintf(os.Stderr, "\n=== Repo Structure (depth %d) ===\n", sf.treeDepth)
+		root := reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth)
+		if err := reportpkg.RenderTreeText(os.Stdout, root); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -377,6 +386,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "top-commits" {
 		report["top_commits"] = stats.TopCommits(ds, sf.topN)
+	}
+	if sf.stat == "structure" {
+		report["structure"] = reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth)
 	}
 
 	return f.PrintReport(report)
