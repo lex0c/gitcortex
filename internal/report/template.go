@@ -239,6 +239,27 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
+{{if .Extensions}}
+<h2>Extensions</h2>
+<p class="hint">File extensions ranked by <b>recent churn</b> — "where is the team spending effort now", not "what exists at HEAD". Cross-read with Directories: a repo with high <code>.yaml</code> recent churn concentrated in one dir is config-as-code; spread across many dirs is config sprawl. · {{docRef "extensions"}}</p>
+<table>
+<tr><th>Ext</th><th>Files</th><th>Churn</th><th>Recent Churn</th><th></th><th>Devs</th><th>First Seen</th><th>Last Seen</th></tr>
+{{$maxRecent := 0.0}}{{range .Extensions}}{{if gt .RecentChurn $maxRecent}}{{$maxRecent = .RecentChurn}}{{end}}{{end}}
+{{range .Extensions}}
+<tr>
+  <td class="mono">{{.Ext}}</td>
+  <td>{{thousands .Files}}</td>
+  <td>{{thousands .Churn}}</td>
+  <td>{{printf "%.1f" .RecentChurn}}</td>
+  <td style="width:20%"><div class="bar-container"><div class="bar bar-churn" style="width: {{printf "%.0f" (pct (int64 .RecentChurn) (int64 $maxRecent))}}%"></div></div></td>
+  <td>{{.UniqueDevs}}</td>
+  <td class="mono">{{.FirstSeen}}</td>
+  <td class="mono">{{.LastSeen}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
 <p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>

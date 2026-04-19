@@ -376,6 +376,144 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 	return result
 }
 
+// ExtensionStat rolls history up per file extension. The historical
+// lens is the point: "which extension is the team spending effort on"
+// answers a different question than "which extension exists in the
+// repo" — the latter is what cloc/tokei do from the filesystem.
+//
+// Ext is the normalized extension (leading dot, lowercased) — e.g.
+// ".go", ".yaml", ".gitignore". Files without a conventional extension
+// collapse into the bucket "(none)"; see extractExtension for the
+// policy (dotfiles kept verbatim, last-segment rule for the rest).
+//
+// RecentChurn is the decay-weighted aggregate from the same pipeline
+// as FileStat.RecentChurn (half-life set at Dataset load time), so a
+// dropped-yesterday extension won't outrank a still-active one just
+// because it accumulated more lifetime churn.
+type ExtensionStat struct {
+	Ext         string
+	Files       int
+	Churn       int64
+	RecentChurn float64
+	UniqueDevs  int
+	FirstSeen   string
+	LastSeen    string
+}
+
+// extractExtension returns the extension bucket for a path.
+// Policy:
+//   - Basename after the final "/" is the subject; directory prefix is
+//     ignored.
+//   - Single-dot dotfiles (".gitignore", ".env") keep their full name —
+//     they carry meaning as a group, and reducing them to "" would
+//     merge them with extension-less files (Makefile, LICENSE).
+//   - Multi-segment dotfiles (".env.local", ".eslintrc.json") report
+//     the last segment (".local", ".json"). Imperfect but keeps the
+//     rule "last segment after the final dot" consistent and explicit.
+//   - Files with no dot (or a trailing dot) collapse into "(none)".
+//   - Extensions are lowercased so ".PNG" and ".png" aggregate.
+func extractExtension(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		path = path[i+1:]
+	}
+	if path == "" {
+		return "(none)"
+	}
+	lastDot := strings.LastIndex(path, ".")
+	if lastDot <= 0 {
+		// No dot at all, or a name that begins with "." and has no
+		// second dot. Dotfiles get their full name (".gitignore" is a
+		// meaningful group); "." alone is degenerate and collapses
+		// like Makefile / LICENSE.
+		if len(path) > 1 && strings.HasPrefix(path, ".") {
+			return strings.ToLower(path)
+		}
+		return "(none)"
+	}
+	ext := path[lastDot:]
+	if ext == "." {
+		return "(none)" // trailing dot like "foo." — pathological but defined
+	}
+	return strings.ToLower(ext)
+}
+
+// ExtensionStats aggregates ds.files by extension bucket. Complexity
+// is O(F + E log E) where F is the number of tracked files and E is
+// the number of distinct extensions — trivial compared to the stats
+// that compute Herfindahl indices or per-commit coupling pairs.
+func ExtensionStats(ds *Dataset, n int) []ExtensionStat {
+	type extAcc struct {
+		files       int
+		churn       int64
+		recentChurn float64
+		devs        map[string]struct{}
+		first, last time.Time
+	}
+
+	buckets := make(map[string]*extAcc)
+	for path, fe := range ds.files {
+		ext := extractExtension(path)
+		b, ok := buckets[ext]
+		if !ok {
+			b = &extAcc{devs: make(map[string]struct{})}
+			buckets[ext] = b
+		}
+		b.files++
+		b.churn += fe.additions + fe.deletions
+		b.recentChurn += fe.recentChurn
+		for email := range fe.devLines {
+			b.devs[email] = struct{}{}
+		}
+		// Mirror-shape for first/last: only adopt non-zero inputs so
+		// we never stamp a zero-value time onto a previously-valid
+		// aggregate. Before/After both behave as expected across zero
+		// times but the explicit IsZero guard reads cleaner.
+		if !fe.firstChange.IsZero() && (b.first.IsZero() || fe.firstChange.Before(b.first)) {
+			b.first = fe.firstChange
+		}
+		if !fe.lastChange.IsZero() && fe.lastChange.After(b.last) {
+			b.last = fe.lastChange
+		}
+	}
+
+	result := make([]ExtensionStat, 0, len(buckets))
+	for ext, b := range buckets {
+		es := ExtensionStat{
+			Ext:         ext,
+			Files:       b.files,
+			Churn:       b.churn,
+			RecentChurn: math.Round(b.recentChurn*10) / 10,
+			UniqueDevs:  len(b.devs),
+		}
+		if !b.first.IsZero() {
+			es.FirstSeen = b.first.UTC().Format("2006-01-02")
+		}
+		if !b.last.IsZero() {
+			es.LastSeen = b.last.UTC().Format("2006-01-02")
+		}
+		result = append(result, es)
+	}
+
+	// Deterministic ordering under ties: recent churn desc, files desc,
+	// ext asc. Recent churn leads so that "where is effort landing now"
+	// is what the reader sees first; files breaks ties between similar
+	// recent-churn levels by established footprint.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RecentChurn != result[j].RecentChurn {
+			return result[i].RecentChurn > result[j].RecentChurn
+		}
+		if result[i].Files != result[j].Files {
+			return result[i].Files > result[j].Files
+		}
+		return result[i].Ext < result[j].Ext
+	})
+
+	if n > 0 && n < len(result) {
+		result = result[:n]
+	}
+	return result
+}
+
 func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 	buckets := make(map[string]*ActivityBucket)
 	var order []string

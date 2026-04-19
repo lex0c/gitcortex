@@ -105,8 +105,8 @@ func isValidGranularity(s string) bool {
 
 func isValidStat(s string) bool {
 	switch s {
-	case "summary", "contributors", "hotspots", "directories", "activity",
-		"busfactor", "coupling", "churn-risk", "working-patterns",
+	case "summary", "contributors", "hotspots", "directories", "extensions",
+		"activity", "busfactor", "coupling", "churn-risk", "working-patterns",
 		"dev-network", "profile", "top-commits", "pareto", "structure":
 		return true
 	}
@@ -133,7 +133,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show (0 = all)")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
@@ -151,7 +151,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure", sf.stat)
 	}
 	return nil
 }
@@ -271,6 +271,12 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if showAll || sf.stat == "extensions" {
+		fmt.Fprintf(os.Stderr, "\n=== Top %d Extensions ===\n", sf.topN)
+		if err := f.PrintExtensions(stats.ExtensionStats(ds, sf.topN)); err != nil {
+			return err
+		}
+	}
 	if showAll || sf.stat == "activity" {
 		fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", sf.granularity)
 		if err := f.PrintActivity(stats.ActivityOverTime(ds, sf.granularity)); err != nil {
@@ -368,6 +374,9 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	}
 	if showAll || sf.stat == "directories" {
 		report["directories"] = stats.DirectoryStats(ds, sf.topN)
+	}
+	if showAll || sf.stat == "extensions" {
+		report["extensions"] = stats.ExtensionStats(ds, sf.topN)
 	}
 	if showAll || sf.stat == "activity" {
 		report["activity"] = stats.ActivityOverTime(ds, sf.granularity)

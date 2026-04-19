@@ -26,6 +26,7 @@ type ReportData struct {
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
 	Directories  []stats.DirStat
+	Extensions   []stats.ExtensionStat
 	ActivityRaw    []stats.ActivityBucket
 	ActivityYears  []string
 	ActivityGrid   [][]ActivityCell // [year][month 0-11]
@@ -341,6 +342,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		Contributors:         stats.TopContributors(ds, topN),
 		Hotspots:             stats.FileHotspots(ds, topN),
 		Directories:          stats.DirectoryStats(ds, topN),
+		Extensions:           stats.ExtensionStats(ds, topN),
 		ActivityRaw:          actRaw,
 		ActivityYears:        actYears,
 		ActivityGrid:         actGrid,

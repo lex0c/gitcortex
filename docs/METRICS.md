@@ -254,6 +254,31 @@ Two dev lenses are surfaced because commit count alone is a flawed proxy for con
 
 **How to interpret**: "20 files concentrate 80% of all churn" describes where change lands — it can indicate a healthy core module under active development, or a bottleneck if combined with low bus factor. Cross-reference with the Churn Risk section before drawing conclusions.
 
+## Extensions
+
+File extensions aggregated from `ds.files`, ranked by **recent churn** (decay-weighted — see "Recent churn" below). The historical lens is the point: `cloc`/`tokei` answer "what languages exist on disk"; this answers "which extensions is the team spending effort on right now".
+
+**Extraction policy** (`extractExtension`):
+- Last path segment (after the final `/`).
+- Multi-dot names report the final segment: `foo.tar.gz` → `.gz`, `.eslintrc.json` → `.json`.
+- Single-dot dotfiles keep their full name: `.gitignore` → `.gitignore`, `.env` → `.env`. Merging these into "(none)" would erase a meaningful group.
+- No-dot names collapse into the `(none)` bucket: `Makefile`, `LICENSE`, `bin/run`.
+- Extensions lowercased so `.PNG` and `.png` aggregate.
+
+**Per-bucket fields**:
+- `files` — distinct file paths.
+- `churn` — lifetime additions + deletions.
+- `recent_churn` — decay-weighted aggregate (same half-life as other stats, set at load time). Leads the sort so a dormant extension with high lifetime churn won't displace an active one.
+- `unique_devs` — distinct emails that contributed any line.
+- `first_seen` / `last_seen` — min/max across the bucket's files (UTC date).
+
+**Reading signals**:
+- `.yaml` recent churn high + unique_devs low → config owned by one person; schedule handoff before they leave.
+- `.md` recent churn high → docs-heavy phase (release prep?) or churn-heavy README thrash.
+- Cross-read with Directories: `.yaml` concentrated in one dir is config-as-code; `.yaml` spread across many dirs is config sprawl.
+
+**What it does not do**: no language-family grouping (`.js`+`.ts`+`.tsx` stay distinct). Aggregate downstream if you need "frontend vs backend"; the tool does not prescribe the taxonomy. Generated-file buckets (`.lock`, `.pb.go`, `.min.js`) will dominate unless filtered via `--ignore` at extract time — the suspect-paths warning flags these.
+
 ## Repo Structure
 
 A `tree(1)`-style view of the repository's directory layout, built from paths seen in history (`FileHotspots`), not from the filesystem at HEAD. Deleted files are included — the view answers "what shaped the codebase", not "what is present today".
