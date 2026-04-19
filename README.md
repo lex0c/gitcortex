@@ -20,6 +20,8 @@ Benchmarked on open-source repositories. `extract` reads bare clones; `stats` an
 
 `extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
 
+See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks, including gitcortex extracting itself (189 commits, 45 ms) and Chromium at scale (1.7M commits, ~2 hours) — plus an analysis of what drives extract throughput on large monorepos.
+
 ## Vendor and generated code
 
 **This is the biggest practical distortion in every stat.** Line-count metrics treat a 50k-line `generated.pb.go` the same as a 50k-line hand-written module. Lock files like `package-lock.json` regenerate with every dependency bump. Vendored dependencies inflate churn whenever they're updated. OpenAPI specs, minified JS, `bindata.go`-style embeds — all common, all inflate churn and bus factor without reflecting real human contribution.
