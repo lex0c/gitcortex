@@ -631,6 +631,92 @@ t.Run("concentration bullet stays info regardless of label severity", func(t *te
 		}
 	})
 
+	t.Run("scope bullet uses singular grammar when counts are 1", func(t *testing.T) {
+		data := baseData()
+		data.Summary.TotalCommits = 1
+		data.Summary.TotalDevs = 1
+		es := buildExecutiveSummary(data, nil, nil)
+		scope := string(es.Bullets[0].Text)
+		if !strings.Contains(scope, "<b>1</b> commit ") {
+			t.Errorf("expected singular 'commit', got %q", scope)
+		}
+		if !strings.Contains(scope, "<b>1</b> developer ") {
+			t.Errorf("expected singular 'developer', got %q", scope)
+		}
+	})
+
+	t.Run("solo repo suppresses silo bullet", func(t *testing.T) {
+		// In a single-developer repo there is nobody to transfer
+		// knowledge to — the silo narrative is tautological and should
+		// not render.
+		data := baseData()
+		data.Summary.TotalDevs = 1
+		cr := []stats.ChurnRiskResult{{Path: "a", Label: "silo"}}
+		es := buildExecutiveSummary(data, cr, nil)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "classified as <b>silo</b>") {
+				t.Errorf("silo bullet should be suppressed in solo repo, got %q", b.Text)
+			}
+		}
+	})
+
+	t.Run("solo repo suppresses bf=1 intersection bullet", func(t *testing.T) {
+		// Every file has BF=1 when there is only one developer — the
+		// intersection is 100% and carries no signal. Skip the bullet.
+		data := baseData()
+		data.Summary.TotalDevs = 1
+		cr := []stats.ChurnRiskResult{{Path: "old.go", Label: "legacy-hotspot"}}
+		bf := []stats.BusFactorResult{{BusFactor: 1, Path: "old.go"}}
+		es := buildExecutiveSummary(data, cr, bf)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "single-owner signal") {
+				t.Errorf("bf=1 ∩ legacy bullet should be suppressed in solo repo, got %q", b.Text)
+			}
+		}
+	})
+
+	t.Run("solo repo still shows legacy-hotspot bullet", func(t *testing.T) {
+		// Legacy-hotspot narrative is about deprecation, not ownership,
+		// so it remains applicable in solo repos.
+		data := baseData()
+		data.Summary.TotalDevs = 1
+		cr := []stats.ChurnRiskResult{{Path: "old.go", Label: "legacy-hotspot"}}
+		es := buildExecutiveSummary(data, cr, nil)
+		var found bool
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "legacy-hotspot") {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("legacy-hotspot bullet should still render in solo repo")
+		}
+	})
+
+	t.Run("solo repo positive bullet ignores silo and bf=1 counts", func(t *testing.T) {
+		// Silo / BF=1 are suppressed in solo mode, so the positive "✅"
+		// bullet should only require legacyCount == 0 to fire.
+		data := baseData()
+		data.Summary.TotalDevs = 1
+		cr := []stats.ChurnRiskResult{
+			{Path: "a", Label: "silo"}, // would block positive in non-solo
+			{Path: "b", Label: "active"},
+		}
+		es := buildExecutiveSummary(data, cr, nil)
+		var found bool
+		for _, b := range es.Bullets {
+			if b.Severity == "ok" {
+				found = true
+				if !strings.Contains(string(b.Text), "No legacy-hotspots flagged") {
+					t.Errorf("solo positive bullet wording off: %q", b.Text)
+				}
+			}
+		}
+		if !found {
+			t.Error("solo repo with no legacy-hotspots should fire positive bullet")
+		}
+	})
+
 	t.Run("merges-only repo skips the concentration bullet", func(t *testing.T) {
 		// Repo with files but zero churn (all commits are merges) has
 		// TopChurnFiles == 0. The old bullet wording "0 of N files

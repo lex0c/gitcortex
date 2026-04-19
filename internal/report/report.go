@@ -298,9 +298,11 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 	// Scope — always first, sets context for everything that follows.
 	if data.Summary.TotalCommits > 0 {
 		bullets = append(bullets, bullet("info", "📌",
-			"<b>%s</b> commits from <b>%s</b> developers between <b>%s</b> and <b>%s</b>.",
+			"<b>%s</b> %s from <b>%s</b> %s between <b>%s</b> and <b>%s</b>.",
 			thousands(data.Summary.TotalCommits),
+			pluralize(data.Summary.TotalCommits, "commit", "commits"),
 			thousands(data.Summary.TotalDevs),
+			pluralize(data.Summary.TotalDevs, "developer", "developers"),
 			data.Summary.FirstCommitDate,
 			data.Summary.LastCommitDate,
 		))
@@ -334,16 +336,25 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 			siloCount++
 		}
 	}
+
+	// Solo repos need narrower narrative. The silo bullet and BF=1 ∩
+	// legacy-hotspot bullet both frame the situation in terms of
+	// ownership transfer and single-owner risk — both tautological when
+	// there is only one owner in the entire repo. The legacy-hotspot
+	// bullet still applies (it's about deprecation, not ownership) and
+	// stays on.
+	isSolo := data.Summary.TotalDevs <= 1
+
 	if legacyCount > 0 {
 		bullets = append(bullets, bullet("critical", "🔴",
 			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Worth investigating whether they are deprecated paths still being touched or genuinely load-bearing code.",
-			thousands(legacyCount), pluralFile(legacyCount),
+			thousands(legacyCount), pluralize(legacyCount, "file", "files"),
 		))
 	}
-	if siloCount > 0 {
+	if !isSolo && siloCount > 0 {
 		bullets = append(bullets, bullet("warning", "🟡",
 			"<b>%s</b> %s classified as <b>silo</b> — old, concentrated, still active. Candidates for knowledge transfer if the owner is load-bearing.",
-			thousands(siloCount), pluralFile(siloCount),
+			thousands(siloCount), pluralize(siloCount, "file", "files"),
 		))
 	}
 
@@ -352,27 +363,30 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 	// one person. The raw BF=1 count is dominated by one-off commits in
 	// mature repos (WordPress: 3k+, k8s: 29k+) and produced more noise
 	// than signal. This intersection consistently points at code that
-	// genuinely needs a human decision.
-	bfOne := make(map[string]struct{}, len(allBusFactor))
-	for _, bf := range allBusFactor {
-		if bf.BusFactor == 1 {
-			bfOne[bf.Path] = struct{}{}
-		}
-	}
+	// genuinely needs a human decision — except in solo repos, where
+	// "owned by a single person" is a tautology for every file.
 	var bf1Legacy int
-	for _, cr := range allChurnRisk {
-		if cr.Label != "legacy-hotspot" {
-			continue
+	if !isSolo {
+		bfOne := make(map[string]struct{}, len(allBusFactor))
+		for _, bf := range allBusFactor {
+			if bf.BusFactor == 1 {
+				bfOne[bf.Path] = struct{}{}
+			}
 		}
-		if _, ok := bfOne[cr.Path]; ok {
-			bf1Legacy++
+		for _, cr := range allChurnRisk {
+			if cr.Label != "legacy-hotspot" {
+				continue
+			}
+			if _, ok := bfOne[cr.Path]; ok {
+				bf1Legacy++
+			}
 		}
-	}
-	if bf1Legacy > 0 {
-		bullets = append(bullets, bullet("critical", "🔴",
-			"<b>%s</b> of those %s also <b>bus factor = 1</b> — old, declining, and owned by a single person. The strongest single-owner signal in this report.",
-			thousands(bf1Legacy), map[bool]string{true: "is", false: "are"}[bf1Legacy == 1],
-		))
+		if bf1Legacy > 0 {
+			bullets = append(bullets, bullet("critical", "🔴",
+				"<b>%s</b> of those %s also <b>bus factor = 1</b> — old, declining, and owned by a single person. The strongest single-owner signal in this report.",
+				thousands(bf1Legacy), map[bool]string{true: "is", false: "are"}[bf1Legacy == 1],
+			))
+		}
 	}
 
 	// Weekend work ratio, repo-wide. Flag only when high enough to be
@@ -406,8 +420,19 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 	// and only when we actually have data to check. A truly empty JSONL
 	// produces zero counts too; emitting "✅ all clean" there would
 	// misleadingly imply the repo was inspected and cleared.
+	//
+	// In solo repos, silo and BF=1 ∩ legacy-hotspot bullets are
+	// suppressed because their narratives (transfer, single-owner risk)
+	// don't apply — so the positive bullet there only needs to check
+	// legacyCount to honestly claim "clean".
 	hasData := len(allChurnRisk) > 0 || len(allBusFactor) > 0
-	if hasData && legacyCount == 0 && siloCount == 0 && bf1Legacy == 0 {
+	if isSolo {
+		if hasData && legacyCount == 0 {
+			bullets = append(bullets, bullet("ok", "✅",
+				"No legacy-hotspots flagged.",
+			))
+		}
+	} else if hasData && legacyCount == 0 && siloCount == 0 && bf1Legacy == 0 {
 		bullets = append(bullets, bullet("ok", "✅",
 			"No legacy-hotspots, silos, or single-owner legacy files flagged.",
 		))
@@ -537,13 +562,15 @@ func plusInt(a, b int) int {
 	return a + b
 }
 
-// pluralFile picks the right noun for a count. Used in the executive
-// summary, where "1 files" reads as a bug to anyone paying attention.
-func pluralFile(n int) string {
+// pluralize picks the right noun form for a count. Used in the
+// executive summary, where "1 files" or "1 developers" reads as a bug
+// to anyone paying attention. Generalized beyond files because the
+// scope bullet pluralizes "commit" and "developer" too.
+func pluralize(n int, singular, plural string) string {
 	if n == 1 {
-		return "file"
+		return singular
 	}
-	return "files"
+	return plural
 }
 
 func pctRatio(del, add int64) float64 {
