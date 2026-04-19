@@ -448,6 +448,20 @@ var funcMap = template.FuncMap{
 	"derefInt":  derefInt,
 	"humanize":  humanize,
 	"thousands": thousands,
+	"docRef":    docRef,
+}
+
+// docRef returns an anchor link to the Churn Risk / Bus Factor / etc.
+// section of METRICS.md on the public repo. Centralized so the URL
+// base (and security attributes) live in one place — if the repo ever
+// moves or the style changes, the template callsites don't need to
+// be touched. Callers pass literal anchor strings; no escaping is
+// applied because the helper is not exposed to user-controlled data.
+func docRef(anchor string) template.HTML {
+	return template.HTML(fmt.Sprintf(
+		`<a href="https://github.com/lex0c/gitcortex/blob/main/docs/METRICS.md#%s" target="_blank" rel="noopener noreferrer" style="color:#0969da;">docs</a>`,
+		anchor,
+	))
 }
 
 // asInt64 coerces common integer template values to int64. Templates pass a

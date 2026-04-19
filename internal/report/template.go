@@ -100,7 +100,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 
 <h2>Concentration</h2>
-<p class="hint">Pareto distribution across files, developers, and directories. Few items carrying 80% of activity means high concentration. Red and yellow markers deserve a closer look — concentration may signal a critical core module or a knowledge bottleneck, depending on context.</p>
+<p class="hint">Pareto distribution across files, developers, and directories. Few items carrying 80% of activity means high concentration. Red and yellow markers deserve a closer look — concentration may signal a critical core module or a knowledge bottleneck, depending on context. · {{docRef "pareto-concentration"}}</p>
 <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:24px;">
   <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:14px 16px; display:flex; align-items:center; gap:12px;">
     <span style="font-size:20px;">{{.Pareto.FilesMarker}}</span>
@@ -134,7 +134,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ActivityYears}}
 <h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
-<p class="hint">Monthly commit heatmap. Darker = more commits. Sudden drop-offs may mark team changes, re-orgs, or freezes; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers.</p>
+<p class="hint">Monthly commit heatmap. Darker = more commits. Sudden drop-offs may mark team changes, re-orgs, or freezes; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers. · {{docRef "activity"}}</p>
 {{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
 <div id="act-heatmap">
 <div style="display:grid; grid-template-columns:40px repeat(12, 1fr); gap:2px; margin-bottom:8px;">
@@ -173,7 +173,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Contributors}}
 <h2>Top Contributors</h2>
-<p class="hint">Ranked by commit count. High commit count with low lines may indicate small fixes; low count with high lines may indicate large features.</p>
+<p class="hint">Ranked by commit count. High commit count with low lines may indicate small fixes; low count with high lines may indicate large features. · {{docRef "contributors"}}</p>
 <table>
 <tr><th>Name</th><th>Email</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
 {{$maxContrib := 0}}{{range .Contributors}}{{if gt .Commits $maxContrib}}{{$maxContrib = .Commits}}{{end}}{{end}}
@@ -192,7 +192,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Hotspots}}
 <h2>File Hotspots</h2>
-<p class="hint">Most frequently changed files. High churn with few devs = knowledge silo. High churn with many devs = shared bottleneck.</p>
+<p class="hint">Most frequently changed files. High churn with few devs = knowledge silo. High churn with many devs = shared bottleneck. · {{docRef "hotspots"}}</p>
 <table>
 <tr><th>Path</th><th>Commits</th><th>Churn</th><th></th><th>Devs</th></tr>
 {{$maxChurn := int64 0}}{{range .Hotspots}}{{if gt .Churn $maxChurn}}{{$maxChurn = .Churn}}{{end}}{{end}}
@@ -210,7 +210,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Directories}}
 <h2>Directories</h2>
-<p class="hint">Module-level health. <b>File touches</b> is the sum of per-file commit counts (one commit touching N files contributes N), not distinct commits. Low bus factor = knowledge concentrated in few people.</p>
+<p class="hint">Module-level health. <b>File touches</b> is the sum of per-file commit counts (one commit touching N files contributes N), not distinct commits. Low bus factor = knowledge concentrated in few people. · {{docRef "directories"}}</p>
 <table>
 <tr><th>Directory</th><th>File Touches</th><th>Churn</th><th>Files</th><th>Devs</th><th>Bus Factor</th></tr>
 {{range .Directories}}
@@ -228,7 +228,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
-<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see <a href="https://github.com/lex0c/gitcortex/blob/main/docs/METRICS.md#churn-risk" target="_blank" rel="noopener noreferrer" style="color:#0969da;">METRICS.md</a>).{{end}}</p>
+<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
 {{if .ChurnRiskLabelCounts}}
 <div class="churn-chips">
   {{range .ChurnRiskLabelCounts}}
@@ -257,7 +257,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .BusFactor}}
 <h2>Bus Factor Risk</h2>
-<p class="hint">Files with fewest developers owning 80%+ of changes. Bus factor 1 = if that person leaves, nobody else knows the code.</p>
+<p class="hint">Files with fewest developers owning 80%+ of changes. Bus factor 1 = if that person leaves, nobody else knows the code. · {{docRef "bus-factor"}}</p>
 <table>
 <tr><th>Path</th><th>Bus Factor</th><th>Top Devs</th></tr>
 {{range .BusFactor}}
@@ -272,7 +272,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Coupling}}
 <h2>File Coupling</h2>
-<p class="hint">Files that always change together. Expected for test+code pairs. Unexpected coupling between unrelated modules signals hidden dependencies.</p>
+<p class="hint">Files that always change together. Expected for test+code pairs. Unexpected coupling between unrelated modules signals hidden dependencies. · {{docRef "coupling"}}</p>
 <table>
 <tr><th>File A</th><th>File B</th><th>Co-changes</th><th>Coupling</th></tr>
 {{range .Coupling}}
@@ -288,7 +288,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if gt .MaxPattern 0}}
 <h2>Working Patterns</h2>
-<p class="hint">Commit distribution by day and hour. Reveals team timezones, work-life balance, and off-hours work patterns.</p>
+<p class="hint">Commit distribution by day and hour. Reveals team timezones, work-life balance, and off-hours work patterns. · {{docRef "working-patterns"}}</p>
 <div class="heatmap">
   <div></div>
   {{range $h := seq 0 23}}<div class="hour-label">{{printf "%02d" $h}}</div>{{end}}
@@ -304,7 +304,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .TopCommits}}
 <h2>Top Commits</h2>
-<p class="hint">Largest commits by lines changed. Unusually large commits may be imports, generated code, or risky big-bang changes worth reviewing.</p>
+<p class="hint">Largest commits by lines changed. Unusually large commits may be imports, generated code, or risky big-bang changes worth reviewing. · {{docRef "top-commits"}}</p>
 <table>
 <tr><th>SHA</th><th>Author</th><th>Date</th><th>Lines</th><th>Files</th>{{if and (gt (len .TopCommits) 0) (index .TopCommits 0).Message}}<th>Message</th>{{end}}</tr>
 {{range .TopCommits}}
@@ -322,7 +322,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .DevNetwork}}
 <h2>Developer Network</h2>
-<p class="hint">Developers who modify the same files. <b>Shared lines</b> = Σ min(lines_A, lines_B) per file — measures real overlap, not trivial one-line touches. Sorted by shared lines.</p>
+<p class="hint">Developers who modify the same files. <b>Shared lines</b> = Σ min(lines_A, lines_B) per file — measures real overlap, not trivial one-line touches. Sorted by shared lines. · {{docRef "developer-network"}}</p>
 <table>
 <tr><th>Developer A</th><th>Developer B</th><th>Shared Files</th><th>Shared Lines</th><th>Weight</th></tr>
 {{range .DevNetwork}}
@@ -339,7 +339,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Profiles}}
 <h2>Developer Profiles</h2>
-<p class="hint">Per-developer view. Use to spot silos (narrow scope + few collaborators), knowledge concentration (high pace on few directories), and cultural patterns (weekend or refactor-heavy work).</p>
+<p class="hint">Per-developer view. Use to spot silos (narrow scope + few collaborators), knowledge concentration (high pace on few directories), and cultural patterns (weekend or refactor-heavy work). · {{docRef "profile"}}</p>
 {{range .Profiles}}
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
   <div style="font-size:16px; font-weight:600;">{{.Name}} <span class="mono" style="font-size:12px; color:#656d76;">&lt;{{.Email}}&gt;</span></div>

@@ -81,7 +81,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <div style="margin-bottom:16px;">
   <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Scope <span style="font-size:11px; color:#656d76; font-style:italic; margin-left:4px;">Specialization {{printf "%.3f" .Profile.Specialization}} — {{if lt .Profile.Specialization 0.15}}broad generalist{{else if lt .Profile.Specialization 0.35}}balanced{{else if lt .Profile.Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}}</span></div>
-  <div class="hint" style="margin-bottom:6px;">Where this developer works, by share of files touched per directory. The specialization number is the Herfindahl index over the full per-directory distribution: 1 = all files in a single directory, 1/N for a uniform spread across N directories (approaches 0 as N grows).</div>
+  <div class="hint" style="margin-bottom:6px;">Where this developer works, by share of files touched per directory. The specialization number is the Herfindahl index over the full per-directory distribution: 1 = all files in a single directory, 1/N for a uniform spread across N directories (approaches 0 as N grows). · {{docRef "profile"}}</div>
   <div style="display:flex; height:28px; border-radius:4px; overflow:hidden; gap:1px;">
     {{range $i, $s := .Profile.Scope}}<div style="flex:{{printf "%.0f" $s.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$s.Dir}} — {{$s.Files}} files ({{printf "%.0f" $s.Pct}}%)">{{if gt $s.Pct 8.0}}{{$s.Dir}} {{printf "%.0f" $s.Pct}}%{{end}}</div>{{end}}
   </div>
@@ -104,7 +104,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{if .Profile.Collaborators}}
 <div style="margin-bottom:16px;">
   <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Collaboration</div>
-  <div class="hint" style="margin-bottom:6px;">Developers who touch the same files as this developer. <b>files</b> = shared file count; <b>lines</b> = Σ min(linesA, linesB) across those files — the honest overlap signal that discounts trivial one-line touches. Sorted by shared lines.</div>
+  <div class="hint" style="margin-bottom:6px;">Developers who touch the same files as this developer. <b>files</b> = shared file count; <b>lines</b> = Σ min(linesA, linesB) across those files — the honest overlap signal that discounts trivial one-line touches. Sorted by shared lines. · {{docRef "developer-network"}}</div>
   <div style="display:flex; flex-wrap:wrap; gap:6px;">
     {{range .Profile.Collaborators}}
     <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 10px; background:#fff; border:1px solid #d0d7de; border-radius:16px; font-size:11px;">
@@ -118,7 +118,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .Profile.TopFiles}}
 <h2>Top Files</h2>
-<p class="hint">Files this developer changed most (churn = additions + deletions). High churn on few files suggests deep ownership and potential knowledge concentration.</p>
+<p class="hint">Files this developer changed most (churn = additions + deletions). High churn on few files suggests deep ownership and potential knowledge concentration. · {{docRef "hotspots"}}</p>
 <table>
 <tr><th>Path</th><th>Commits</th><th>Churn</th><th></th></tr>
 {{$maxChurn := int64 0}}{{range .Profile.TopFiles}}{{if gt .Churn $maxChurn}}{{$maxChurn = .Churn}}{{end}}{{end}}
@@ -135,7 +135,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ActivityYears}}
 <h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('prof-act-heatmap'),t=document.getElementById('prof-act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
-<p class="hint">Monthly commit heatmap. Darker = more commits. Gaps = inactive periods; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers.</p>
+<p class="hint">Monthly commit heatmap. Darker = more commits. Gaps = inactive periods; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers. · {{docRef "activity"}}</p>
 {{$max := .MaxActivityCommits}}{{$grid := .ActivityGrid}}
 <div id="prof-act-heatmap">
 <div style="display:grid; grid-template-columns:40px repeat(12, 1fr); gap:2px; margin-bottom:8px;">
@@ -174,7 +174,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if gt .MaxPattern 0}}
 <h2>Working Hours</h2>
-<p class="hint">Commit distribution by day and hour. Reveals timezone and work-life patterns.</p>
+<p class="hint">Commit distribution by day and hour. Reveals timezone and work-life patterns. · {{docRef "working-patterns"}}</p>
 {{$pgrid := .PatternGrid}}{{$pmax := .MaxPattern}}
 <div class="heatmap" style="grid-template-columns:35px repeat(24, 1fr);">
   <div></div>
