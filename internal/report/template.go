@@ -36,6 +36,14 @@ tr:last-child td { border-bottom: none; }
 .mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
 .truncate { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
+.churn-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.churn-chips .chip { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.chip-legacy-hotspot { background: #cf222e; color: #fff; }
+.chip-silo { background: #bf8700; color: #fff; }
+.chip-active-core { background: #0969da; color: #fff; }
+.chip-active { background: #2da44e; color: #fff; }
+.chip-cold { background: #eaeef2; color: #656d76; }
+.chip-note { font-size: 11px; color: #656d76; font-style: italic; margin-left: 4px; }
 .glossary { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 10px 16px; margin-bottom: 24px; }
 .glossary summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #24292f; }
 .glossary[open] summary { margin-bottom: 8px; }
@@ -221,6 +229,14 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
 <p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see METRICS.md).{{end}}</p>
+{{if .ChurnRiskLabelCounts}}
+<div class="churn-chips">
+  {{range .ChurnRiskLabelCounts}}
+  <span class="chip chip-{{.Label}}">{{thousands .Count}} {{.Label}}</span>
+  {{end}}
+  <span class="chip-note">Distribution across the full dataset — the table below shows the top {{len .ChurnRisk}} by label priority, then recent churn.</span>
+</div>
+{{end}}
 <table>
 <tr><th>Path</th><th>Label</th><th>Recent Churn</th><th></th><th>BF</th><th>Age</th><th>Trend</th><th>Last Change</th></tr>
 {{$maxChurn := 0.0}}{{range .ChurnRisk}}{{if gt .RecentChurn $maxChurn}}{{$maxChurn = .RecentChurn}}{{end}}{{end}}

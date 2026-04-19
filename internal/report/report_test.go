@@ -393,6 +393,58 @@ func TestHumanize(t *testing.T) {
 	}
 }
 
+func TestChurnRiskLabelCounts(t *testing.T) {
+	all := []stats.ChurnRiskResult{
+		{Label: "active"},
+		{Label: "active"},
+		{Label: "legacy-hotspot"},
+		{Label: "cold"},
+		{Label: "silo"},
+		{Label: "active-core"},
+		{Label: "active-core"},
+		{Label: "active-core"},
+	}
+	got := churnRiskLabelCounts(all)
+
+	wantOrder := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
+	if len(got) != len(wantOrder) {
+		t.Fatalf("got %d entries, want %d: %+v", len(got), len(wantOrder), got)
+	}
+	for i, lbl := range wantOrder {
+		if got[i].Label != lbl {
+			t.Errorf("entry %d: label=%q, want %q", i, got[i].Label, lbl)
+		}
+		if got[i].Priority != i {
+			t.Errorf("entry %d: priority=%d, want %d", i, got[i].Priority, i)
+		}
+	}
+	want := map[string]int{
+		"legacy-hotspot": 1, "silo": 1, "active-core": 3, "active": 2, "cold": 1,
+	}
+	for _, lc := range got {
+		if lc.Count != want[lc.Label] {
+			t.Errorf("%s count = %d, want %d", lc.Label, lc.Count, want[lc.Label])
+		}
+	}
+}
+
+func TestChurnRiskLabelCountsOmitsEmpty(t *testing.T) {
+	// Small repo where only two label buckets have entries — the strip
+	// skips empties so it doesn't render "0 silo" chips.
+	all := []stats.ChurnRiskResult{
+		{Label: "active"},
+		{Label: "active-core"},
+		{Label: "active-core"},
+	}
+	got := churnRiskLabelCounts(all)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
+	}
+	if got[0].Label != "active-core" || got[1].Label != "active" {
+		t.Errorf("order wrong: %+v", got)
+	}
+}
+
 func TestThousands(t *testing.T) {
 	cases := []struct {
 		in   interface{}

@@ -41,6 +41,21 @@ type ReportData struct {
 	Pareto         ParetoData
 	PatternGrid    [7][24]int
 	MaxPattern     int
+
+	// Label distribution for the Churn Risk section — counted over the
+	// full classified set so the reader can tell "top 20, all legacy-
+	// hotspot" from "there are 48 legacy-hotspots in total". Populated
+	// alongside ChurnRisk in Generate().
+	ChurnRiskLabelCounts []LabelCount
+}
+
+// LabelCount pairs a Churn Risk label with its total count and sort
+// priority, so the template can render chips in the same label order
+// used by the table below.
+type LabelCount struct {
+	Label    string
+	Count    int
+	Priority int
 }
 
 type ParetoData struct {
@@ -292,30 +307,61 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 
 	now := time.Now().Format("2006-01-02 15:04")
 
+	// Compute ChurnRisk once unbounded so we can render label-distribution
+	// chips over the full population before slicing to topN for the table.
+	// Without this, a user reading only the table would see "20 of 20 are
+	// legacy-hotspot" with no way to tell whether the repo has 20 or 20,000.
+	allChurnRisk := stats.ChurnRisk(ds, 0)
+	labelCounts := churnRiskLabelCounts(allChurnRisk)
+	displayChurnRisk := allChurnRisk
+	if topN > 0 && len(displayChurnRisk) > topN {
+		displayChurnRisk = displayChurnRisk[:topN]
+	}
+
 	data := ReportData{
-		GeneratedAt:        now,
-		RepoName:           repoName,
-		Summary:            stats.ComputeSummary(ds),
-		Contributors:       stats.TopContributors(ds, topN),
-		Hotspots:           stats.FileHotspots(ds, topN),
-		Directories:        stats.DirectoryStats(ds, topN),
-		ActivityRaw:        actRaw,
-		ActivityYears:      actYears,
-		ActivityGrid:       actGrid,
-		MaxActivityCommits: maxActCommits,
-		BusFactor:          stats.BusFactor(ds, topN),
-		Coupling:           stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:          stats.ChurnRisk(ds, topN),
-		Patterns:           patterns,
-		TopCommits:         stats.TopCommits(ds, topN),
-		DevNetwork:         stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
-		Profiles:           stats.DevProfiles(ds, ""),
-		Pareto:             ComputePareto(ds),
-		PatternGrid:        grid,
-		MaxPattern:         maxP,
+		GeneratedAt:          now,
+		RepoName:             repoName,
+		Summary:              stats.ComputeSummary(ds),
+		Contributors:         stats.TopContributors(ds, topN),
+		Hotspots:             stats.FileHotspots(ds, topN),
+		Directories:          stats.DirectoryStats(ds, topN),
+		ActivityRaw:          actRaw,
+		ActivityYears:        actYears,
+		ActivityGrid:         actGrid,
+		MaxActivityCommits:   maxActCommits,
+		BusFactor:            stats.BusFactor(ds, topN),
+		Coupling:             stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
+		ChurnRisk:            displayChurnRisk,
+		ChurnRiskLabelCounts: labelCounts,
+		Patterns:             patterns,
+		TopCommits:           stats.TopCommits(ds, topN),
+		DevNetwork:           stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
+		Profiles:             stats.DevProfiles(ds, ""),
+		Pareto:               ComputePareto(ds),
+		PatternGrid:          grid,
+		MaxPattern:           maxP,
 	}
 
 	return tmpl.Execute(w, data)
+}
+
+// churnRiskLabelCounts aggregates the per-label totals for the Churn
+// Risk distribution strip. Ordering matches the table below: legacy-
+// hotspot first (most actionable), cold last. Labels with zero files
+// are omitted so the strip doesn't show empty chips on small repos.
+func churnRiskLabelCounts(all []stats.ChurnRiskResult) []LabelCount {
+	counts := make(map[string]int)
+	for _, cr := range all {
+		counts[cr.Label]++
+	}
+	order := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
+	var result []LabelCount
+	for i, lbl := range order {
+		if n := counts[lbl]; n > 0 {
+			result = append(result, LabelCount{Label: lbl, Count: n, Priority: i})
+		}
+	}
+	return result
 }
 
 func pct(val, max int64) string {
