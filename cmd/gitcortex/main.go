@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -682,6 +683,22 @@ func absPath(p string) string {
 	return a
 }
 
+// fileURL formats a local path as a file:// URL suitable for ctrl-clicking
+// in modern terminal emulators (iTerm, kitty, Windows Terminal, recent
+// gnome-terminal). The absolute path is used so relative --output values
+// still produce a valid link; filepath.ToSlash handles Windows separators;
+// url.URL takes care of escaping spaces and special characters. If the
+// terminal doesn't linkify file://, the result is still a legible path —
+// no harm done in SSH/CI contexts where the link would not resolve.
+func fileURL(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	return u.String()
+}
+
 // --- Report ---
 
 func reportCmd() *cobra.Command {
@@ -735,12 +752,12 @@ func reportCmd() *cobra.Command {
 				if err := reportpkg.GenerateProfile(f, ds, repoName, email); err != nil {
 					return fmt.Errorf("generate profile: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, output)
+				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(output))
 			} else {
 				if err := reportpkg.Generate(f, ds, repoName, topN, sf); err != nil {
 					return fmt.Errorf("generate report: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", output, ds.CommitCount, ds.DevCount)
+				fmt.Fprintf(os.Stderr, "Report written to %s (%d commits, %d devs)\n", fileURL(output), ds.CommitCount, ds.DevCount)
 			}
 			return nil
 		},
