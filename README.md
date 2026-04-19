@@ -207,7 +207,14 @@ Available stats:
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`, header row on line 1), `json` (unified object with all sections).
 
-`--top 0` disables the truncation and returns every row — useful for piping into `awk`/`jq` or driving downstream scripts. CSV column order is stable and declared in the header, so `awk -F',' '$2 == "legacy-hotspot"'` on a `churn-risk` export filters by label without guessing the layout.
+`--top 0` disables the truncation and returns every row — useful for driving downstream scripts. Prefer `--format json` piped into `jq` for reliable filtering:
+
+```bash
+gitcortex stats --input data.jsonl --stat churn-risk --top 0 --format json \
+  | jq '.churn_risk[] | select(.Label == "legacy-hotspot")'
+```
+
+CSV output also carries a stable header on line 1, but paths containing commas (font filenames, generated assets) are standard-quoted — a naive `awk -F','` will mis-split on those rows. For CSV pipelines use a proper parser (`csvkit`, `mlr`) or stick with the JSON path above.
 
 See [`docs/METRICS.md`](docs/METRICS.md) for how each metric is calculated, including timezone handling (UTC for aggregation buckets, author-local for working patterns) and rename tracking (history merged across git-detected renames).
 
@@ -286,7 +293,7 @@ Sort order is **label priority** (legacy-hotspot → silo → active-core → ac
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
 
-The HTML report precedes the Churn Risk table with a colored distribution strip — `48 legacy-hotspot · 1 silo · 2,330 active-core · 1,404 active · 4,585 cold` — counted over the full classified set. The truncated table below shows only the top N by label priority, so a reader glancing at "all 20 rows are legacy-hotspot" can still tell whether the repo has 20 legacy files or 20,000 before drawing a conclusion. To inspect the full list, use `--top 0 --format csv` from the CLI; label is column 2 of the CSV export.
+The HTML report precedes the Churn Risk table with a colored distribution strip — `48 legacy-hotspot · 1 silo · 2,330 active-core · 1,404 active · 4,585 cold` — counted over the full classified set. The truncated table below shows only the top N by label priority, so a reader glancing at "all 20 rows are legacy-hotspot" can still tell whether the repo has 20 legacy files or 20,000 before drawing a conclusion. To inspect the full list, use `--top 0 --format json` from the CLI and filter with `jq`.
 
 ### Working patterns
 
