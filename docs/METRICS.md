@@ -110,7 +110,7 @@ Files ranked by recency-weighted churn, **classified into actionable labels** so
 
 ### Ranking
 
-Sort key: `recent_churn` descending (tiebreak: lower `bus_factor` first).
+Sort order: **label priority** first, then `recent_churn` descending within the same label, then lower `bus_factor` first, then path ascending. Label priority runs `legacy-hotspot` → `silo` → `active-core` → `active` → `cold`, so the named actionable classifications always lead the table. Sorting by `recent_churn` alone used to bury `legacy-hotspot` files behind very active code (declining trend is part of the classification, so recent churn is low by definition) — a user running `--top 20` on a mature repo would see unremarkable active files and zero flagged risks.
 
 `recent_churn` uses exponential decay:
 ```
@@ -305,7 +305,7 @@ Every ranking function has an explicit tiebreaker so the same input produces the
 | `directories` | file_touches | dir asc |
 | `busfactor` | bus_factor (asc) | path asc |
 | `coupling` | co_changes | coupling_pct |
-| `churn-risk` | recent_churn | bus_factor asc |
+| `churn-risk` | label priority (legacy-hotspot → silo → active-core → active → cold) | recent_churn desc, then bus_factor asc |
 | `top-commits` | lines_changed | sha asc |
 | `dev-network` | shared_lines | shared_files |
 | `profile` | commits | email asc |

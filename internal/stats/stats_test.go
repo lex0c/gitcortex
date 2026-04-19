@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -609,16 +610,63 @@ func TestChurnRisk(t *testing.T) {
 	if len(result) != 3 {
 		t.Fatalf("len = %d", len(result))
 	}
-	// Sorted by RecentChurn descending.
-	// main.go=100, util.go=50, readme.md=10.
+	// Within the same label bucket the secondary sort is RecentChurn
+	// descending. The fixture's three files land in the same label, so
+	// expected order is main.go (100) → util.go (50) → readme.md (10).
 	for i := 1; i < len(result); i++ {
-		if result[i-1].RecentChurn < result[i].RecentChurn {
-			t.Errorf("not sorted by RecentChurn desc at index %d: %.1f < %.1f",
+		if result[i-1].Label == result[i].Label &&
+			result[i-1].RecentChurn < result[i].RecentChurn {
+			t.Errorf("not sorted by RecentChurn desc within label at index %d: %.1f < %.1f",
 				i, result[i-1].RecentChurn, result[i].RecentChurn)
 		}
 	}
 	if result[0].Path != "main.go" {
 		t.Errorf("top file = %q, want main.go", result[0].Path)
+	}
+}
+
+func TestChurnRiskLabelPriority(t *testing.T) {
+	// Labels must sort in this actionability order regardless of
+	// RecentChurn — a legacy-hotspot with RC=50 outranks an active file
+	// with RC=50000. See the sort comment in stats.go.
+	want := []string{
+		"legacy-hotspot", "silo", "active-core", "active", "cold",
+	}
+	for i := 1; i < len(want); i++ {
+		if churnRiskLabelPriority(want[i-1]) >= churnRiskLabelPriority(want[i]) {
+			t.Errorf("priority(%q)=%d must be less than priority(%q)=%d",
+				want[i-1], churnRiskLabelPriority(want[i-1]),
+				want[i], churnRiskLabelPriority(want[i]))
+		}
+	}
+	// Unknown labels must sort after all known ones so the named risks
+	// always lead the table even if a new classifier is added upstream.
+	if churnRiskLabelPriority("future-label") <= churnRiskLabelPriority("cold") {
+		t.Errorf("unknown label should sort after cold")
+	}
+}
+
+func TestChurnRiskSortLegacyBeatsActiveDespiteHigherChurn(t *testing.T) {
+	// A legacy-hotspot with low RecentChurn must rank above an active
+	// file with huge RecentChurn — otherwise the top-N display hides the
+	// classified risks behind unremarkable active code (the WordPress bug
+	// that motivated the label-first sort).
+	results := []ChurnRiskResult{
+		{Path: "active.go", Label: "active", RecentChurn: 10000, BusFactor: 4},
+		{Path: "legacy.go", Label: "legacy-hotspot", RecentChurn: 50, BusFactor: 1},
+	}
+	sort.Slice(results, func(i, j int) bool {
+		pi, pj := churnRiskLabelPriority(results[i].Label), churnRiskLabelPriority(results[j].Label)
+		if pi != pj {
+			return pi < pj
+		}
+		if results[i].RecentChurn != results[j].RecentChurn {
+			return results[i].RecentChurn > results[j].RecentChurn
+		}
+		return results[i].Path < results[j].Path
+	})
+	if results[0].Path != "legacy.go" {
+		t.Errorf("legacy-hotspot must outrank active file, got top=%q", results[0].Path)
 	}
 }
 

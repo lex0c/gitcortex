@@ -275,7 +275,7 @@ advanced/Scripts/utils.sh              active-core (age P27, trend P94)         
 | `silo` | Old + concentrated + stable/growing. Knowledge bottleneck — plan transfer. |
 | `legacy-hotspot` | **Urgent.** Old + concentrated + declining. Deprecated paths still being touched. |
 
-Sort key is `recent_churn`; the label answers "is this activity a problem?". The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
+Sort order is **label priority** (legacy-hotspot → silo → active-core → active → cold), then `recent_churn` descending within the same label. The label answers "is this activity a problem?" and leads the table so the actionable classifications surface at the top — without this, a mature repo's `--top 20` would be dominated by unremarkable active files and the flagged risks would scroll off. The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
 
 **The `(age PXX, trend PYY)` suffix** reports where the file sits in this repo's distribution: `age P90` = older than 90% of tracked files, `trend P08` = declining more sharply than 92%. Classification thresholds are not absolute — they adapt to each dataset (P75 age and P25 trend, with a fallback to fixed constants for repos under 8 files). A `legacy-hotspot` with `(age P76, trend P24)` barely qualifies; one at `(age P98, trend P03)` is the real alarm. Distance from the boundary is now visible instead of hidden. See `docs/METRICS.md` for the adaptive-thresholds section.
 

@@ -713,6 +713,27 @@ func rankFloat(sorted []float64, v float64) int {
 	return lo * 100 / len(sorted)
 }
 
+// churnRiskLabelPriority returns a sort key for ChurnRisk labels where
+// lower values rise to the top. Order reflects actionability: named
+// risks (legacy-hotspot, silo) first, then young concentrated code
+// (active-core), then healthy active code, then cold. Any unrecognized
+// label sorts last so the primary labels always lead the table.
+func churnRiskLabelPriority(label string) int {
+	switch label {
+	case "legacy-hotspot":
+		return 0
+	case "silo":
+		return 1
+	case "active-core":
+		return 2
+	case "active":
+		return 3
+	case "cold":
+		return 4
+	}
+	return 5
+}
+
 // classifyFile assigns an actionable label based on churn, ownership, age,
 // and trend. Thresholds come from bands, which are either dataset-derived
 // percentiles or the fallback absolute constants.
@@ -836,10 +857,22 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 		})
 	}
 
-	// Primary sort: recent churn descending (attention = where the activity is).
-	// Tiebreak: lower bus factor first (more concentrated = more exposed).
-	// Final tiebreak on path asc for determinism when integer bus_factor ties.
+	// Primary sort: label priority — legacy-hotspot and silo are the
+	// actionable classifications (old + concentrated, with diverging
+	// trend). Sorting by RecentChurn alone buried them behind very
+	// active files, so a user running `--top 20` on a mature repo would
+	// see a long list of unremarkable active code and zero flagged
+	// classifications. Label-first puts the named risks where the eye
+	// lands first.
+	// Secondary: recent churn desc within the same label (attention
+	// within a class = where the activity is).
+	// Tertiary: lower bus factor first (more concentrated = more exposed).
+	// Final tiebreak: path asc for determinism.
 	sort.Slice(results, func(i, j int) bool {
+		pi, pj := churnRiskLabelPriority(results[i].Label), churnRiskLabelPriority(results[j].Label)
+		if pi != pj {
+			return pi < pj
+		}
 		if results[i].RecentChurn != results[j].RecentChurn {
 			return results[i].RecentChurn > results[j].RecentChurn
 		}
