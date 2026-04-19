@@ -670,6 +670,35 @@ func TestChurnRiskSortLegacyBeatsActiveDespiteHigherChurn(t *testing.T) {
 	}
 }
 
+func TestChurnRiskLabelCountsMatchesChurnRisk(t *testing.T) {
+	// Invariant: the light-weight ChurnRiskLabelCounts must agree with
+	// counting labels from the full ChurnRisk output. If someone later
+	// edits classifyFile, computeBands, the bus-factor rule, or the
+	// coldChurn threshold in only one of the two paths, this test
+	// catches the drift.
+	ds := makeDataset()
+
+	lightCounts := ChurnRiskLabelCounts(ds)
+
+	heavy := ChurnRisk(ds, 0)
+	heavyCounts := make(map[string]int)
+	for _, r := range heavy {
+		heavyCounts[r.Label]++
+	}
+
+	// Every label present in either map must have matching counts.
+	for label, want := range heavyCounts {
+		if got := lightCounts[label]; got != want {
+			t.Errorf("label %q: light=%d heavy=%d", label, got, want)
+		}
+	}
+	for label, got := range lightCounts {
+		if want := heavyCounts[label]; got != want {
+			t.Errorf("label %q: light=%d heavy=%d (light-only)", label, got, want)
+		}
+	}
+}
+
 func TestClassifyFile(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -1771,6 +1800,107 @@ func TestDevProfilesFilterByEmail(t *testing.T) {
 	if profiles[0].Email != "bob@test.com" {
 		t.Errorf("email = %q", profiles[0].Email)
 	}
+}
+
+func TestDevProfilesTopN(t *testing.T) {
+	// Five devs with descending commit counts; verify n > 0 returns
+	// exactly the top-N and excludes the rest.
+	ds := makeDatasetWithManyDevs()
+
+	got := DevProfiles(ds, "", 2)
+	if len(got) != 2 {
+		t.Fatalf("n=2: got %d profiles, want 2", len(got))
+	}
+	// Top-2 by commits must be dev5 (5 commits) and dev4 (4 commits).
+	want := []string{"dev5@x", "dev4@x"}
+	for i, email := range want {
+		if got[i].Email != email {
+			t.Errorf("profile[%d] = %q, want %q", i, got[i].Email, email)
+		}
+	}
+
+	// Excluded devs must not appear.
+	all := DevProfiles(ds, "", 0)
+	if len(all) != 5 {
+		t.Fatalf("n=0: got %d profiles, want 5 (all)", len(all))
+	}
+
+	// n greater than dev count behaves like n=0: return all.
+	overflow := DevProfiles(ds, "", 100)
+	if len(overflow) != 5 {
+		t.Fatalf("n=100 (> total): got %d, want 5", len(overflow))
+	}
+}
+
+func TestDevProfilesTopNPreservesOutsideCollaborators(t *testing.T) {
+	// A top-N dev's collaborator list must still include non-target
+	// devs they share files with. The early filter excludes non-target
+	// devs from getting their own profile but must not strip them from
+	// the target's collaborator map.
+	ds := makeDatasetWithManyDevs()
+
+	// dev5 is top-1 and shares "shared.go" with dev1 (non-target when n=1).
+	got := DevProfiles(ds, "", 1)
+	if len(got) != 1 || got[0].Email != "dev5@x" {
+		t.Fatalf("expected dev5 as sole profile, got %+v", got)
+	}
+	var found bool
+	for _, c := range got[0].Collaborators {
+		if c.Email == "dev1@x" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("dev5's collaborators must include non-target dev1; got %+v", got[0].Collaborators)
+	}
+}
+
+// makeDatasetWithManyDevs builds a fixture with five developers of
+// strictly decreasing commit counts: dev5=5, dev4=4, dev3=3, dev2=2,
+// dev1=1. One shared file across dev5 and dev1 exercises the
+// "non-target collaborator preserved" case.
+func makeDatasetWithManyDevs() *Dataset {
+	ds := &Dataset{
+		Earliest:     time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Latest:       time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		commits:      map[string]*commitEntry{},
+		contributors: map[string]*ContributorStat{},
+		files:        map[string]*fileEntry{},
+	}
+	for i := 5; i >= 1; i-- {
+		email := fmt.Sprintf("dev%d@x", i)
+		ds.contributors[email] = &ContributorStat{
+			Name: fmt.Sprintf("Dev %d", i), Email: email, Commits: i,
+		}
+		for c := 0; c < i; c++ {
+			sha := fmt.Sprintf("s%d-%d", i, c)
+			ds.commits[sha] = &commitEntry{
+				email: email,
+				date:  time.Date(2024, time.Month(1+i), 1+c, 10, 0, 0, 0, time.UTC),
+				add:   10, del: 2, files: 1,
+			}
+		}
+	}
+	// Shared file between dev5 (target at n=1) and dev1 (non-target).
+	ds.files["shared.go"] = &fileEntry{
+		commits:   2,
+		additions: 20, deletions: 4,
+		devLines:   map[string]int64{"dev5@x": 50, "dev1@x": 30},
+		devCommits: map[string]int{"dev5@x": 1, "dev1@x": 1},
+		recentChurn: 20.0,
+		lastChange:  time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	// A dev5-only file to give it some scope.
+	ds.files["main.go"] = &fileEntry{
+		commits:   1,
+		additions: 10,
+		devLines:   map[string]int64{"dev5@x": 10},
+		devCommits: map[string]int{"dev5@x": 1},
+		recentChurn: 10.0,
+		lastChange:  time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	return ds
 }
 
 func TestDevProfilesContribType(t *testing.T) {
