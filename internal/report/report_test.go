@@ -413,8 +413,9 @@ func TestBuildExecutiveSummary(t *testing.T) {
 
 	t.Run("healthy repo with data emits positive ok bullet", func(t *testing.T) {
 		data := baseData()
-		// Supply a non-empty allBusFactor so hasData is true.
-		bf := []stats.BusFactorResult{{BusFactor: 3}}
+		// Supply a non-empty allBusFactor so hasData is true; BusFactor > 1
+		// keeps it out of the single-owner bucket.
+		bf := []stats.BusFactorResult{{BusFactor: 3, Path: "a.go"}}
 		es := buildExecutiveSummary(data, nil, bf)
 		// scope, concentration, ok = 3 bullets
 		if len(es.Bullets) != 3 {
@@ -422,6 +423,78 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 		if es.Bullets[2].Severity != "ok" {
 			t.Errorf("last bullet severity = %q, want ok", es.Bullets[2].Severity)
+		}
+	})
+
+	t.Run("bf=1 bullet requires intersection with legacy-hotspot", func(t *testing.T) {
+		// Raw BF=1 count without legacy-hotspot overlap is noise-prone in
+		// mature repos; the bullet only fires for the rarer intersection.
+		data := baseData()
+		cr := []stats.ChurnRiskResult{
+			{Path: "active.go", Label: "active"},
+			{Path: "silo.go", Label: "silo"},
+		}
+		bf := []stats.BusFactorResult{
+			{BusFactor: 1, Path: "active.go"},
+			{BusFactor: 1, Path: "silo.go"},
+		}
+		es := buildExecutiveSummary(data, cr, bf)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "bus factor") {
+				t.Errorf("BF=1 with no legacy-hotspot should not fire, got %q", b.Text)
+			}
+		}
+	})
+
+	t.Run("bf=1 ∩ legacy-hotspot fires with grammar agreement", func(t *testing.T) {
+		data := baseData()
+		// Single intersecting file → singular "is".
+		cr := []stats.ChurnRiskResult{{Path: "old.go", Label: "legacy-hotspot"}}
+		bf := []stats.BusFactorResult{{BusFactor: 1, Path: "old.go"}}
+		es := buildExecutiveSummary(data, cr, bf)
+		var got string
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "single-owner signal") {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>1</b> of those is") {
+			t.Errorf("singular intersection broken, got %q", got)
+		}
+
+		// Two intersecting files → plural "are".
+		cr = []stats.ChurnRiskResult{
+			{Path: "old1.go", Label: "legacy-hotspot"},
+			{Path: "old2.go", Label: "legacy-hotspot"},
+		}
+		bf = []stats.BusFactorResult{
+			{BusFactor: 1, Path: "old1.go"},
+			{BusFactor: 1, Path: "old2.go"},
+		}
+		es = buildExecutiveSummary(data, cr, bf)
+		got = ""
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "single-owner signal") {
+				got = string(b.Text)
+			}
+		}
+		if !strings.Contains(got, "<b>2</b> of those are") {
+			t.Errorf("plural intersection broken, got %q", got)
+		}
+	})
+
+	t.Run("bf>1 legacy-hotspot files are not counted as intersection", func(t *testing.T) {
+		// A legacy-hotspot with bus factor 2+ has more than one owner and
+		// shouldn't light up the single-owner bullet, even though it's
+		// still a legacy-hotspot.
+		data := baseData()
+		cr := []stats.ChurnRiskResult{{Path: "old.go", Label: "legacy-hotspot"}}
+		bf := []stats.BusFactorResult{{BusFactor: 2, Path: "old.go"}}
+		es := buildExecutiveSummary(data, cr, bf)
+		for _, b := range es.Bullets {
+			if strings.Contains(string(b.Text), "single-owner signal") {
+				t.Errorf("BF=2 legacy-hotspot should not fire single-owner bullet, got %q", b.Text)
+			}
 		}
 	})
 
@@ -476,44 +549,21 @@ func TestBuildExecutiveSummary(t *testing.T) {
 		}
 	})
 
-	t.Run("singular vs plural grammar for bus factor bullet", func(t *testing.T) {
-		data := baseData()
-		single := []stats.BusFactorResult{{BusFactor: 1, Path: "a"}}
-		es := buildExecutiveSummary(data, nil, single)
-		var got string
-		for _, b := range es.Bullets {
-			if strings.Contains(string(b.Text), "bus factor") {
-				got = string(b.Text)
-			}
-		}
-		if !strings.Contains(got, "<b>1</b> file with <b>bus factor = 1</b> is single-owner") {
-			t.Errorf("bf=1 singular broken, got %q", got)
-		}
-
-		multi := []stats.BusFactorResult{
-			{BusFactor: 1, Path: "a"},
-			{BusFactor: 1, Path: "b"},
-		}
-		es = buildExecutiveSummary(data, nil, multi)
-		got = ""
-		for _, b := range es.Bullets {
-			if strings.Contains(string(b.Text), "bus factor") {
-				got = string(b.Text)
-			}
-		}
-		if !strings.Contains(got, "<b>2</b> files with <b>bus factor = 1</b> are single-owner") {
-			t.Errorf("bf=1 plural broken, got %q", got)
-		}
-	})
-
-	t.Run("extremely concentrated Pareto bumps severity to warning", func(t *testing.T) {
+t.Run("concentration bullet stays info regardless of label severity", func(t *testing.T) {
+		// Concentration is a descriptive signal, not a pathology: mature
+		// codebases follow Pareto by default. The bullet stays "info" even
+		// when the underlying label reads "extremely concentrated" — the
+		// text carries the caveat, severity doesn't escalate.
 		data := baseData()
 		data.Pareto.FilesLabel = "extremely concentrated"
 		data.Pareto.FilesMarker = "🔴"
 		es := buildExecutiveSummary(data, nil, nil)
 		// second bullet is the concentration one (scope is first)
-		if es.Bullets[1].Severity != "warning" {
-			t.Errorf("concentration severity = %q, want warning", es.Bullets[1].Severity)
+		if es.Bullets[1].Severity != "info" {
+			t.Errorf("concentration severity = %q, want info", es.Bullets[1].Severity)
+		}
+		if !strings.Contains(string(es.Bullets[1].Text), "healthy core or a bottleneck") {
+			t.Errorf("concentration bullet should carry the context caveat, got %q", es.Bullets[1].Text)
 		}
 	})
 

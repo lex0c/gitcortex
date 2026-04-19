@@ -309,22 +309,22 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 	// Files concentration — shown only when there's churn to concentrate.
 	// Without the TopChurnFiles guard, merges-only repos would render a
 	// nonsensical "0 of N files concentrate 80% of churn — no data" bullet.
+	//
+	// Severity stays at "info": concentration in mature codebases is the
+	// baseline Pareto pattern, not a pathology. Whether a concentrated
+	// core is healthy or a bottleneck depends on context the summary
+	// can't know — the bullet describes the shape, the reader judges.
 	if data.Pareto.TotalFiles > 0 && data.Pareto.TopChurnFiles > 0 {
-		sev := "info"
-		if strings.Contains(data.Pareto.FilesLabel, "extremely") {
-			sev = "warning"
-		}
-		bullets = append(bullets, bullet(sev, data.Pareto.FilesMarker,
-			"<b>%s</b> of <b>%s</b> files concentrate 80%% of churn — <b>%s</b>.",
+		bullets = append(bullets, bullet("info", data.Pareto.FilesMarker,
+			"<b>%s</b> of <b>%s</b> files concentrate 80%% of churn — <b>%s</b>. May be a healthy core or a bottleneck — depends on context.",
 			thousands(data.Pareto.TopChurnFiles),
 			thousands(data.Pareto.TotalFiles),
 			data.Pareto.FilesLabel,
 		))
 	}
 
-	// Count the label buckets once; both legacy-hotspot and silo need them.
-	// Uses the full, untruncated slice — counts must not depend on the
-	// display topN, which is a presentation choice.
+	// Count label buckets for the legacy/silo bullets. These operate on
+	// the full untruncated slice so counts don't drift with display topN.
 	var legacyCount, siloCount int
 	for _, cr := range allChurnRisk {
 		switch cr.Label {
@@ -336,33 +336,42 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 	}
 	if legacyCount > 0 {
 		bullets = append(bullets, bullet("critical", "🔴",
-			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Prioritize for review.",
+			"<b>%s</b> %s classified as <b>legacy-hotspot</b> — old code with concentrated ownership and declining activity. Worth investigating whether they are deprecated paths still being touched or genuinely load-bearing code.",
 			thousands(legacyCount), pluralFile(legacyCount),
 		))
 	}
 	if siloCount > 0 {
 		bullets = append(bullets, bullet("warning", "🟡",
-			"<b>%s</b> %s classified as <b>silo</b> — old and concentrated but still active. Plan knowledge transfer.",
+			"<b>%s</b> %s classified as <b>silo</b> — old, concentrated, still active. Candidates for knowledge transfer if the owner is load-bearing.",
 			thousands(siloCount), pluralFile(siloCount),
 		))
 	}
 
-	// Bus-factor-1 files: count of single-owner knowledge risks. Full
-	// slice, not data.BusFactor — see allChurnRisk note above.
-	var bf1Count int
+	// Bus-factor-1 ∩ legacy-hotspot: the narrow, high-signal intersection
+	// where a file is simultaneously old, declining, and owned by exactly
+	// one person. The raw BF=1 count is dominated by one-off commits in
+	// mature repos (WordPress: 3k+, k8s: 29k+) and produced more noise
+	// than signal. This intersection consistently points at code that
+	// genuinely needs a human decision.
+	bfOne := make(map[string]struct{}, len(allBusFactor))
 	for _, bf := range allBusFactor {
 		if bf.BusFactor == 1 {
-			bf1Count++
+			bfOne[bf.Path] = struct{}{}
 		}
 	}
-	if bf1Count > 0 {
-		owned := "are single-owner — lose those developers and you lose the context."
-		if bf1Count == 1 {
-			owned = "is single-owner — lose that developer and you lose the context."
+	var bf1Legacy int
+	for _, cr := range allChurnRisk {
+		if cr.Label != "legacy-hotspot" {
+			continue
 		}
-		bullets = append(bullets, bullet("warning", "⚠️",
-			"<b>%s</b> %s with <b>bus factor = 1</b> %s",
-			thousands(bf1Count), pluralFile(bf1Count), owned,
+		if _, ok := bfOne[cr.Path]; ok {
+			bf1Legacy++
+		}
+	}
+	if bf1Legacy > 0 {
+		bullets = append(bullets, bullet("critical", "🔴",
+			"<b>%s</b> of those %s also <b>bus factor = 1</b> — old, declining, and owned by a single person. The strongest single-owner signal in this report.",
+			thousands(bf1Legacy), map[bool]string{true: "is", false: "are"}[bf1Legacy == 1],
 		))
 	}
 
@@ -393,14 +402,14 @@ func buildExecutiveSummary(data *ReportData, allChurnRisk []stats.ChurnRiskResul
 		}
 	}
 
-	// Positive signal when all three risk buckets are clean — but only when
-	// we actually have data to check. A truly empty JSONL produces zero
-	// counts too; emitting "✅ all clean" there would misleadingly imply
-	// the repo was inspected and cleared.
+	// Positive signal when the narrow, high-signal buckets are clean —
+	// and only when we actually have data to check. A truly empty JSONL
+	// produces zero counts too; emitting "✅ all clean" there would
+	// misleadingly imply the repo was inspected and cleared.
 	hasData := len(allChurnRisk) > 0 || len(allBusFactor) > 0
-	if hasData && legacyCount == 0 && siloCount == 0 && bf1Count == 0 {
+	if hasData && legacyCount == 0 && siloCount == 0 && bf1Legacy == 0 {
 		bullets = append(bullets, bullet("ok", "✅",
-			"No legacy-hotspots, silos, or bus-factor-1 files detected.",
+			"No legacy-hotspots, silos, or single-owner legacy files flagged.",
 		))
 	}
 
