@@ -65,6 +65,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <dd>Old, concentrated, and still stable or growing — a knowledge bottleneck. Plan transfer before the owner moves on.</dd>
     <dt>Active-core</dt>
     <dd>Newer code with a single main author. Often fine during early development; revisit if it ages without spreading ownership.</dd>
+    <dt>Trend</dt>
+    <dd>Ratio of recent churn to older churn for a file. Below 0.5 means activity is declining sharply; around 1 is stable; above 1.5 is growing. The declining case is what flips an old concentrated file from <b>silo</b> to <b>legacy-hotspot</b>.</dd>
+    <dt>Age P__ / Trend P__</dt>
+    <dd>Percentile suffixes on Churn Risk labels show where this file sits in the repo's own distribution. <b>Age P90</b> = older than 90% of tracked files; <b>Trend P10</b> = declining more sharply than 90%. Useful to separate a borderline classification (P76/P24) from a real alarm (P98/P03).</dd>
     <dt>Coupling</dt>
     <dd>How often two files change in the same commit. 100% means every change to the less-active file touches the other too. Expected for test-plus-code pairs; unexpected coupling reveals hidden dependencies.</dd>
     <dt>Pareto concentration</dt>
