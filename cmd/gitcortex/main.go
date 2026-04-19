@@ -25,7 +25,7 @@ var version = "dev"
 func main() {
 	rootCmd := &cobra.Command{
 		Use:     "gitcortex",
-		Short:   "Git metrics extraction and analysis",
+		Short:   "Repository behavior analyzer from git history",
 		Version: version,
 	}
 

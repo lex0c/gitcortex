@@ -1,6 +1,10 @@
 # gitcortex
 
-Extracts commit metadata, file changes, blob sizes, and developer info into JSONL. Generates stats like top contributors, file hotspots, bus factor, coupling analysis, churn risk, working patterns, and developer collaboration networks.
+**Repository behavior analyzer.** Reads git history — commits, authors, dates, file paths, line counts — and surfaces signals about how people and processes interact with a codebase: hotspots, bus factor, coupling, churn risk, working patterns, collaboration networks. It analyzes the behavior recorded in git, not the source code itself — every metric is derived from who touched what, when, and with whom.
+
+That distinction matters in practice: a beautifully written library touched by one maintainer can classify as `silo`; a pile of spaghetti that the whole team works on daily will read as `active`. The tool complements code review and static analysis, it doesn't replace them — it surfaces the human and process layer over the repo.
+
+Under the hood it extracts commit metadata, file changes, blob sizes, and developer info into JSONL, then derives the stats above from that stream.
 
 ## Performance
 
