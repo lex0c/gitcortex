@@ -126,8 +126,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				entry := runOne(ctx, cfg, j.repo)
-				manifest.Repos[j.idx] = entry
+				manifest.Repos[j.idx] = runJobSafely(ctx, cfg, j.repo)
 			}
 		}()
 	}
@@ -195,6 +194,40 @@ func loadMatcher(cfg Config) (*Matcher, error) {
 		return NewMatcher(nil), nil
 	}
 	return LoadMatcher(path)
+}
+
+// runJobFn is the injection point the worker pool uses. Default is
+// the real runOne; tests override it to simulate extract panics and
+// verify the pool's recovery path. Not exposed via any user-facing
+// API — this is strictly a test seam.
+var runJobFn = runOne
+
+// runJobSafely wraps runJobFn in a defer-recover. If extract panics
+// inside a worker the goroutine would otherwise crash the entire
+// process and the repo's manifest slot would stay at "pending", which
+// is indistinguishable from a job that was never dispatched. Convert
+// panics to a well-formed ManifestRepo with Status="failed" so the
+// manifest reflects reality and the rest of the pool keeps running.
+//
+// extract.Run doesn't panic under normal inputs — the recover exists
+// for the "impossible" cases (e.g. a git binary that writes malformed
+// output, nil-deref bugs introduced by a future refactor). Better to
+// isolate the blast radius than leave a silent corruption mode.
+func runJobSafely(ctx context.Context, cfg Config, repo Repo) (entry ManifestRepo) {
+	defer func() {
+		if r := recover(); r != nil {
+			entry = ManifestRepo{
+				Slug:      repo.Slug,
+				Path:      repo.AbsPath,
+				JSONL:     filepath.Join(cfg.Output, repo.Slug+".jsonl"),
+				StateFile: filepath.Join(cfg.Output, repo.Slug+".state"),
+				Status:    "failed",
+				Error:     fmt.Sprintf("panic: %v", r),
+			}
+			log.Printf("scan: [%s] panicked: %v", repo.Slug, r)
+		}
+	}()
+	return runJobFn(ctx, cfg, repo)
 }
 
 func runOne(ctx context.Context, cfg Config, repo Repo) ManifestRepo {

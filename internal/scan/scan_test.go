@@ -13,6 +13,79 @@ import (
 	"github.com/lex0c/gitcortex/internal/stats"
 )
 
+// Regression: if extract.Run panics inside a worker (a future
+// refactor with a nil deref, an unexpected git binary output, etc.),
+// defer wg.Done() still closes the WaitGroup — but without a
+// recover, the goroutine crashes the whole process before the
+// manifest slot for that repo is written. Even without a full crash,
+// the slot would silently stay at "pending" indistinguishable from
+// "worker never reached it". The pool must convert panics to a
+// ManifestRepo with Status="failed" and continue with sibling jobs.
+//
+// Override the injection seam runJobFn: first repo panics, second
+// runs normally. Assert (1) the pool survives, (2) the panicking
+// repo's slot is Status=failed with a panic: prefix, (3) the
+// non-panicking repo still completes.
+func TestRun_RecoversFromWorkerPanic(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	root := t.TempDir()
+	makeRealRepo(t, filepath.Join(root, "boom"), map[string]string{"x.go": "x\n"})
+	makeRealRepo(t, filepath.Join(root, "ok"), map[string]string{"y.go": "y\n"})
+
+	// Override runJobFn for the duration of this test only.
+	original := runJobFn
+	defer func() { runJobFn = original }()
+	runJobFn = func(ctx context.Context, cfg Config, repo Repo) ManifestRepo {
+		if repo.Slug == "boom" {
+			panic("simulated extract failure")
+		}
+		return original(ctx, cfg, repo)
+	}
+
+	output := filepath.Join(t.TempDir(), "out")
+	cfg := Config{
+		Roots:    []string{root},
+		Output:   output,
+		Parallel: 1, // force serial so the panicking job is reached
+		Extract: extract.Config{
+			BatchSize:      100,
+			CommandTimeout: extract.DefaultCommandTimeout,
+		},
+	}
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run should not propagate the worker panic as an error; got %v", err)
+	}
+
+	gotStatus := map[string]ManifestRepo{}
+	for _, r := range res.Manifest.Repos {
+		gotStatus[r.Slug] = r
+	}
+	boom, ok := gotStatus["boom"]
+	if !ok {
+		t.Fatal("boom slot missing from manifest")
+	}
+	if boom.Status != "failed" {
+		t.Errorf("boom should be failed after panic, got Status=%q", boom.Status)
+	}
+	if !strings.Contains(boom.Error, "panic") {
+		t.Errorf("boom error should carry a panic: prefix so operators can tell panics from normal failures; got %q", boom.Error)
+	}
+	if okRepo, okFound := gotStatus["ok"]; !okFound || okRepo.Status != "ok" {
+		t.Errorf("sibling job must still complete despite the other worker's panic; got %+v", okRepo)
+	}
+	// Ensure the pool didn't leak: all slots have a non-pending status.
+	for _, r := range res.Manifest.Repos {
+		if r.Status == "pending" {
+			t.Errorf("repo %s left at 'pending' after Run returned — the pool abandoned a slot", r.Slug)
+		}
+	}
+}
+
 func TestRun_EndToEnd(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
