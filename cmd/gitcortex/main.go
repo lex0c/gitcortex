@@ -921,6 +921,19 @@ breakdown — handy for showing aggregated work across many repos.`,
 			if from != "" && to != "" && from > to {
 				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
 			}
+			// Resolve --since up-front. If this fails we'd otherwise
+			// discover the typo only after a full multi-repo scan —
+			// minutes to hours on a large workspace, all thrown away
+			// because the user mistyped `--since 1yy`. Validate early,
+			// fail fast, keep the result for the report stage.
+			fromDate := from
+			if since != "" {
+				d, err := parseSince(since)
+				if err != nil {
+					return err
+				}
+				fromDate = d
+			}
 
 			cfg := scan.Config{
 				Roots:      roots,
@@ -956,15 +969,6 @@ breakdown — handy for showing aggregated work across many repos.`,
 			}
 			if len(result.JSONLs) == 0 {
 				return fmt.Errorf("no successful repos extracted; cannot build report")
-			}
-
-			fromDate := from
-			if since != "" {
-				d, err := parseSince(since)
-				if err != nil {
-					return err
-				}
-				fromDate = d
 			}
 
 			ds, err := stats.LoadMultiJSONL(result.JSONLs, stats.LoadOptions{

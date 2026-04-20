@@ -1,9 +1,49 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
+
+// scanCmd must validate --since BEFORE running the discovery walk
+// and extract pool. Without the early check, an obvious typo like
+// `--since 1yy` only surfaces after scan.Run has already walked
+// every root and extracted every repo found — which can take
+// minutes-to-hours on a large workspace and waste the work.
+//
+// Use an empty TempDir so scan.Run would fail fast with "no git
+// repositories found" if we reached it — that error does not mention
+// "since", so an error containing "since" proves the early
+// validation fired first.
+func TestScanCmd_ValidatesSinceBeforeScanning(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--since", "bogus",
+	})
+	// Swallow any stderr output cobra might emit so we don't pollute
+	// go-test logs on success.
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --since bogus, got nil")
+	}
+	if !strings.Contains(err.Error(), "since") {
+		t.Errorf("expected error to mention --since (proving early validation), got %q", err)
+	}
+	// Reaching scan.Run on an empty TempDir would produce the
+	// discovery error; asserting its absence confirms the walk was
+	// not started.
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("scan.Run was reached before --since was validated — discovery ran on an invalid-flag input: %q", err)
+	}
+}
 
 func TestValidateDate(t *testing.T) {
 	cases := []struct {
