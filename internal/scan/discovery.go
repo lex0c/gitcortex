@@ -77,13 +77,20 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 				// Don't SkipDir blindly — if any negation rule could
 				// re-include a descendant (e.g. `vendor/` + `!vendor/keep`),
 				// pruning here would drop the re-inclusion before its
-				// target is visited. Descend and let Match() decide
-				// per-path. For ordinary `node_modules`-style excludes
-				// with no negations in play, CouldReinclude returns
-				// false and pruning remains.
+				// target is visited.
 				if !matcher.CouldReinclude(rel) {
 					return filepath.SkipDir
 				}
+				// The dir itself is ignored; we only walk in so a
+				// negated descendant can be visited in its own turn.
+				// Return early so the .git detection below doesn't
+				// record this ignored directory as a repo (and so its
+				// `return filepath.SkipDir` doesn't cut the descent
+				// off before the negation's target is seen). A
+				// descendant whose rel path is re-included by `!rule`
+				// will be examined by the next WalkDir callback
+				// invocation.
+				return nil
 			}
 
 			// Two repo shapes to detect:

@@ -80,6 +80,37 @@ func TestDiscover_HonorsNegatedDescendant(t *testing.T) {
 	}
 }
 
+// Regression: when the ignored directory itself is a repo and a
+// negation rule points at a descendant, the walker must NOT record
+// the ignored dir (it's ignored) AND must keep descending so the
+// negation's target can be visited. Previously the .git detection
+// ran unconditionally and both incorrectly recorded the ignored
+// parent AND SkipDir'd the child out of the walk.
+func TestDiscover_IgnoredRepoNotRecorded_DescendantStillFound(t *testing.T) {
+	root := t.TempDir()
+	// `vendor` is itself a repo AND is ignored by `vendor/`.
+	mustMkRepo(t, filepath.Join(root, "vendor"))
+	// `vendor/keep` is a nested repo, re-included by `!vendor/keep`.
+	mustMkRepo(t, filepath.Join(root, "vendor", "keep"))
+
+	matcher := NewMatcher([]string{"vendor/", "!vendor/keep"})
+	repos, err := Discover([]string{root}, matcher, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]bool{}
+	for _, r := range repos {
+		got[r.RelPath] = true
+	}
+	if got["vendor"] {
+		t.Error("vendor itself is ignored and must not be recorded as a repo")
+	}
+	if !got["vendor/keep"] {
+		t.Errorf("vendor/keep should be re-included by the negation rule; got %+v", repos)
+	}
+}
+
 func TestMatcher_CouldReinclude(t *testing.T) {
 	cases := []struct {
 		name     string
