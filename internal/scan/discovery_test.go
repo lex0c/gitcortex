@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,6 +161,38 @@ func findColliding6HexPaths(maxAttempts int) (string, string, bool) {
 		seen[prefix] = p
 	}
 	return "", "", false
+}
+
+// Regression: on macOS (APFS/HFS+ default) and Windows (NTFS),
+// `Repo.jsonl` and `repo.jsonl` are the same file on disk. A
+// case-sensitive slug compare would hand both repos the bare
+// basename and let the filesystem merge their outputs — one scan's
+// JSONL silently overwrites the other. Counts and seen-set are
+// lower-cased so any case-only difference is treated as a collision
+// and forces the hash suffix.
+func TestAssignSlugs_CaseInsensitiveUniqueness(t *testing.T) {
+	repos := []Repo{
+		{AbsPath: "/a/Team/Repo"},
+		{AbsPath: "/b/OSS/repo"},
+	}
+	assignSlugs(repos)
+
+	if repos[0].Slug == repos[1].Slug {
+		t.Fatalf("repos with case-only-differing basenames got same slug %q", repos[0].Slug)
+	}
+	// The fs collision only goes away if the slugs also differ when
+	// folded to lower case — which is what decides filenames on
+	// case-insensitive fs.
+	if strings.EqualFold(repos[0].Slug, repos[1].Slug) {
+		t.Fatalf("slugs %q and %q differ only in case — they would still collide on macOS/Windows", repos[0].Slug, repos[1].Slug)
+	}
+	// Sanity: both should have gained a hash suffix (the bare `Repo`
+	// and `repo` weren't safe to emit).
+	for _, r := range repos {
+		if !strings.Contains(r.Slug, "-") {
+			t.Errorf("repo %s got bare slug %q; case-sensitive branch did not trigger hashing", r.AbsPath, r.Slug)
+		}
+	}
 }
 
 // Same paths ingested twice must produce the same slugs — this is

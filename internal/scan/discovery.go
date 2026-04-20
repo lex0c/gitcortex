@@ -208,6 +208,18 @@ const initialSlugHashLen = 6
 // redo the pass with a longer hash. Grows up to the full 40 hex chars
 // before panicking — needing that much is a cryptographic event, not
 // a scan-time bug.
+//
+// Case-insensitive uniqueness: on macOS (APFS/HFS+ in the default
+// configuration) and Windows (NTFS), `Repo.jsonl` and `repo.jsonl`
+// resolve to the same file on disk. A case-sensitive slug compare
+// would treat the two repos as distinct, hand each the bare basename,
+// and then quietly let the filesystem merge their JSONL and state
+// files. Fold to lower case for BOTH the duplicate-detection count
+// and the uniqueness seen-set so collision-triggered hashing fires
+// on case-only differences. The emitted slug retains the original
+// case for readability (so paths named Repo and repo produce
+// `Repo-<hash>` and `repo-<hash>` — visually distinct to humans,
+// case-insensitively distinct on disk).
 func assignSlugs(repos []Repo) {
 	counts := make(map[string]int)
 	bases := make([]string, len(repos))
@@ -217,7 +229,7 @@ func assignSlugs(repos []Repo) {
 			base = "repo"
 		}
 		bases[i] = base
-		counts[base]++
+		counts[strings.ToLower(base)]++
 	}
 
 	for hashLen := initialSlugHashLen; hashLen <= 40; hashLen += 2 {
@@ -227,15 +239,16 @@ func assignSlugs(repos []Repo) {
 		for i := range repos {
 			base := bases[i]
 			slug := base
-			if counts[base] > 1 {
+			if counts[strings.ToLower(base)] > 1 {
 				h := sha1.Sum([]byte(repos[i].AbsPath))
 				slug = fmt.Sprintf("%s-%s", base, hex.EncodeToString(h[:])[:hashLen])
 			}
-			if prev, ok := seen[slug]; ok && prev != i {
+			key := strings.ToLower(slug)
+			if prev, ok := seen[key]; ok && prev != i {
 				collided = true
 				break
 			}
-			seen[slug] = i
+			seen[key] = i
 			proposed[i] = slug
 		}
 		if !collided {
