@@ -74,7 +74,16 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 			}
 
 			if rel != "." && matcher.Match(rel, true) {
-				return filepath.SkipDir
+				// Don't SkipDir blindly — if any negation rule could
+				// re-include a descendant (e.g. `vendor/` + `!vendor/keep`),
+				// pruning here would drop the re-inclusion before its
+				// target is visited. Descend and let Match() decide
+				// per-path. For ordinary `node_modules`-style excludes
+				// with no negations in play, CouldReinclude returns
+				// false and pruning remains.
+				if !matcher.CouldReinclude(rel) {
+					return filepath.SkipDir
+				}
 			}
 
 			// Two repo shapes to detect:

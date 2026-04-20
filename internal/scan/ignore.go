@@ -105,6 +105,43 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 	return matched
 }
 
+// CouldReinclude reports whether any negation rule targets a descendant
+// of dir — i.e. walking into the dir could still yield a re-included
+// path. Callers use this to decide whether to prune an ignored
+// directory via filepath.SkipDir or descend into it and evaluate
+// children individually.
+//
+// Without this check the walker short-circuits the matcher's last-
+// match-wins semantics: a `vendor/` + `!vendor/keep` pair would skip
+// the vendor subtree entirely before vendor/keep could be examined,
+// silently dropping the re-included path.
+//
+// The check is conservative — it returns true when:
+//   - a negation's pattern begins with `dir/` (explicit descendant
+//     reference, the documented common case), OR
+//   - a negation's pattern has no path separator (basename rules like
+//     `!keep` that could fire anywhere, including inside dir).
+//
+// Negations that target a sibling or ancestor path correctly don't
+// trigger descent, so pruning remains effective for unrelated ignored
+// trees like `node_modules/`.
+func (m *Matcher) CouldReinclude(dir string) bool {
+	dir = filepath.ToSlash(dir)
+	for _, r := range m.rules {
+		if !r.Negate {
+			continue
+		}
+		pat := strings.TrimPrefix(r.Pattern, "**/")
+		if !strings.Contains(pat, "/") {
+			return true
+		}
+		if strings.HasPrefix(pat, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func matchRule(r IgnoreRule, relPath string) bool {
 	pat := r.Pattern
 

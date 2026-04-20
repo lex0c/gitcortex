@@ -50,6 +50,59 @@ func TestDiscover_RespectsIgnore(t *testing.T) {
 	}
 }
 
+// Regression: `vendor/` + `!vendor/keep` must descend into vendor/
+// so the negation has a chance to re-include vendor/keep. Before the
+// fix, the walker SkipDir'd vendor unconditionally and the re-included
+// repo was silently dropped.
+func TestDiscover_HonorsNegatedDescendant(t *testing.T) {
+	root := t.TempDir()
+	mustMkRepo(t, filepath.Join(root, "app"))
+	mustMkRepo(t, filepath.Join(root, "vendor", "garbage"))
+	mustMkRepo(t, filepath.Join(root, "vendor", "keep"))
+
+	matcher := NewMatcher([]string{"vendor/", "!vendor/keep"})
+	repos, err := Discover([]string{root}, matcher, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range repos {
+		got[r.RelPath] = true
+	}
+	if !got["app"] {
+		t.Errorf("app should be included: %+v", repos)
+	}
+	if !got["vendor/keep"] {
+		t.Errorf("vendor/keep should be re-included by negation rule: %+v", repos)
+	}
+	if got["vendor/garbage"] {
+		t.Errorf("vendor/garbage should remain ignored: %+v", repos)
+	}
+}
+
+func TestMatcher_CouldReinclude(t *testing.T) {
+	cases := []struct {
+		name     string
+		patterns []string
+		dir      string
+		want     bool
+	}{
+		{"no negation", []string{"vendor/"}, "vendor", false},
+		{"explicit descendant", []string{"vendor/", "!vendor/keep"}, "vendor", true},
+		{"unrelated negation", []string{"vendor/", "!src/main"}, "vendor", false},
+		{"basename negation could fire anywhere", []string{"vendor/", "!keep"}, "vendor", true},
+		{"deep-match negation", []string{"build/", "!**/src"}, "build", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := NewMatcher(c.patterns)
+			if got := m.CouldReinclude(c.dir); got != c.want {
+				t.Errorf("CouldReinclude(%q) with %v = %v, want %v", c.dir, c.patterns, got, c.want)
+			}
+		})
+	}
+}
+
 func TestDiscover_DoesNotDescendIntoRepo(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Join(root, "parent")
