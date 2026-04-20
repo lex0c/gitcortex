@@ -143,6 +143,47 @@ The default branch is auto-detected from `origin/HEAD`, falling back to `main`, 
 
 The `--mailmap` flag uses git's built-in `.mailmap` support to unify developer identities. Without it, the same person with different emails (e.g., `alice@work.com` and `alice@personal.com`) appears as separate contributors.
 
+### What gitcortex collects from git
+
+Extraction runs two git commands against the local repository and streams their output. No source-code bytes are read.
+
+```
+git log -M --raw --numstat --format=<metadata> <branch>    → commits, parents, per-file diffs (counts only)
+git cat-file --batch-check                                 → blob sizes (old/new) for each file change
+```
+
+Per-commit metadata (populates the `commit` record):
+
+| Field | Source | Used by |
+|---|---|---|
+| `sha`, `tree`, `parents` | `git log --format` | commit graph, merge detection |
+| `author_name`, `author_email`, `author_date` | `git log --format` | contributors, activity, working patterns, bus factor |
+| `committer_name`, `committer_email`, `committer_date` | `git log --format` | committer identity feeds the `dev` registry (so a committer who is never an author still appears as a known developer); no other stat consumes these fields |
+| `additions`, `deletions`, `files_changed` | summed from `--numstat` | summary totals, hotspots, churn-risk |
+| `message` | `git log --format` | opt-in only (`--include-commit-messages`); truncated to 80 chars in `top-commits` when present |
+
+Per-file-change metadata (populates the `commit_file` record):
+
+| Field | Source | Used by |
+|---|---|---|
+| `path_current`, `path_previous`, `status` | `git log --raw` | hotspots, directories, extensions, rename tracking (`R100` / `C075` trigger merges) |
+| `additions`, `deletions` | `git log --numstat` | per-file churn, recent churn, coupling |
+| `old_hash`, `new_hash`, `old_size`, `new_size` | `git cat-file --batch-check` | retained but not currently used in stats |
+
+**Not collected:**
+- File contents / diff hunks — only line counts from `--numstat`.
+- Commit messages (unless `--include-commit-messages` is passed).
+- Tags, refs other than the traversed branch, reflog, notes.
+- Any network traffic — extraction is 100% local to the git directory.
+
+**Opt-ins that change what ships in the JSONL:**
+- `--include-commit-messages` — adds the commit subject to each `commit` record (off by default).
+- `--mailmap` — normalizes author/committer names+emails via git's `.mailmap` before recording (off by default; warned when a `.mailmap` exists but the flag is omitted).
+- `--ignore <glob>` — drops matching `commit_file` records entirely at extract time (counts in the `commit` record are recomputed so totals remain consistent).
+- `--first-parent` — traverses only the first-parent chain, skipping merged branch history.
+
+Full per-record schema (every field, types, enums): see [`docs/RUNBOOK.md`](docs/RUNBOOK.md#jsonl-format).
+
 Output is a JSONL file with one record per line. Four record types:
 
 ```jsonl
