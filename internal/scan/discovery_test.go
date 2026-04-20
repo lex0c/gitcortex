@@ -123,6 +123,13 @@ func TestMatcher_CouldReinclude(t *testing.T) {
 		{"unrelated negation", []string{"vendor/", "!src/main"}, "vendor", false},
 		{"basename negation could fire anywhere", []string{"vendor/", "!keep"}, "vendor", true},
 		{"deep-match negation", []string{"build/", "!**/src"}, "build", true},
+		// Globbed first segment — reviewer case.
+		{"glob star in segment", []string{"vendor*/", "!vendor*/keep"}, "vendor", true},
+		{"wildcard segment matches any parent", []string{"*/", "!*/keep"}, "vendor", true},
+		{"glob prefix that doesn't match dir", []string{"vendor*/", "!foo*/keep"}, "vendor", false},
+		{"nested dir with literal pattern", []string{"pkg/vendor/", "!pkg/vendor/keep"}, "pkg/vendor", true},
+		{"nested dir with glob in first segment", []string{"*/vendor/", "!*/vendor/keep"}, "pkg/vendor", true},
+		{"pattern with same segment count as dir can't match descendant", []string{"!vendor"}, "vendor", true}, // basename-anywhere
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -131,6 +138,37 @@ func TestMatcher_CouldReinclude(t *testing.T) {
 				t.Errorf("CouldReinclude(%q) with %v = %v, want %v", c.dir, c.patterns, got, c.want)
 			}
 		})
+	}
+}
+
+// Regression: glob-prefixed negations like `!vendor*/keep` or `!*/keep`
+// used to slip past CouldReinclude because it only matched literal
+// `dir + "/"` prefixes. Discovery then pruned vendor/ and the
+// re-included vendor/keep repo disappeared from the scan.
+func TestDiscover_HonorsGlobbedNegation(t *testing.T) {
+	root := t.TempDir()
+	mustMkRepo(t, filepath.Join(root, "vendor", "keep"))
+	mustMkRepo(t, filepath.Join(root, "vendor", "garbage"))
+	mustMkRepo(t, filepath.Join(root, "vendor-old", "keep"))
+	mustMkRepo(t, filepath.Join(root, "unrelated"))
+
+	matcher := NewMatcher([]string{"vendor*/", "!vendor*/keep"})
+	repos, err := Discover([]string{root}, matcher, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range repos {
+		got[r.RelPath] = true
+	}
+	want := []string{"vendor/keep", "vendor-old/keep", "unrelated"}
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("missing %q in discovered repos: %+v", w, repos)
+		}
+	}
+	if got["vendor/garbage"] {
+		t.Error("vendor/garbage should remain ignored")
 	}
 }
 

@@ -116,26 +116,59 @@ func (m *Matcher) Match(relPath string, isDir bool) bool {
 // the vendor subtree entirely before vendor/keep could be examined,
 // silently dropping the re-included path.
 //
-// The check is conservative — it returns true when:
-//   - a negation's pattern begins with `dir/` (explicit descendant
-//     reference, the documented common case), OR
+// Returns true when:
 //   - a negation's pattern has no path separator (basename rules like
-//     `!keep` that could fire anywhere, including inside dir).
+//     `!keep` or `!*.go` that could fire at any depth), OR
+//   - a negation begins with `**/` (deep-match; applies anywhere in the
+//     tree), OR
+//   - the pattern's leading path segments are each compatible with the
+//     corresponding segment of dir via path.Match, so its trailing
+//     segment(s) could name a descendant. This covers literal prefixes
+//     like `!vendor/keep` AND globbed prefixes like `!vendor*/keep` or
+//     `!*/keep` — both can match children of an ignored `vendor`.
 //
-// Negations that target a sibling or ancestor path correctly don't
-// trigger descent, so pruning remains effective for unrelated ignored
-// trees like `node_modules/`.
+// Negations that target a sibling or ancestor path (e.g. `!src/keep`
+// when walking vendor) correctly don't trigger descent, so pruning
+// remains effective for unrelated ignored trees like `node_modules/`.
 func (m *Matcher) CouldReinclude(dir string) bool {
 	dir = filepath.ToSlash(dir)
+	dirSegs := strings.Split(dir, "/")
 	for _, r := range m.rules {
 		if !r.Negate {
 			continue
 		}
-		pat := strings.TrimPrefix(r.Pattern, "**/")
+		pat := r.Pattern
+		// `**/foo` and other deep-match patterns can fire at any
+		// depth — walking into any ignored subtree could reach one.
+		if strings.HasPrefix(pat, "**/") {
+			return true
+		}
+		// Basename-only rules (no `/`) apply to any segment. `!keep`
+		// could re-include vendor/keep, a/b/keep, anywhere.
 		if !strings.Contains(pat, "/") {
 			return true
 		}
-		if strings.HasPrefix(pat, dir+"/") {
+		patSegs := strings.Split(pat, "/")
+		// The pattern must have strictly more segments than dir;
+		// otherwise its deepest named entity is dir itself or an
+		// ancestor, never a descendant worth descending for.
+		if len(patSegs) <= len(dirSegs) {
+			continue
+		}
+		// Each of the pattern's leading segments must be compatible
+		// with the corresponding dir segment. path.Match handles both
+		// literal names (`vendor`) and globs (`vendor*`, `*`, `?`)
+		// uniformly; a failing match on any segment rules this
+		// negation out.
+		ok := true
+		for i := 0; i < len(dirSegs); i++ {
+			matched, err := path.Match(patSegs[i], dirSegs[i])
+			if err != nil || !matched {
+				ok = false
+				break
+			}
+		}
+		if ok {
 			return true
 		}
 	}
