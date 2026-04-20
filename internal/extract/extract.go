@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -389,28 +390,36 @@ func loadDevEmails(path string) (map[string]struct{}, error) {
 	return cache, scanner.Err()
 }
 
-// ShouldIgnore reports whether path matches any of the ignore patterns.
+// ShouldIgnore reports whether p matches any of the ignore patterns.
 // Exported so downstream packages (e.g. the stats suspect-warning)
 // can verify that the globs they emit actually match the paths they
 // describe — without a shared predicate the two surfaces can drift
 // and users end up with --ignore suggestions that don't do anything.
-func ShouldIgnore(path string, patterns []string) bool {
+//
+// Uses path.Match and path.Base (not filepath.*) because the inputs
+// here are git-emitted paths, which are always forward-slash
+// regardless of the host OS. filepath.Match is OS-aware and would
+// silently fail to apply glob metacharacters across "/" on Windows
+// — e.g. "src/generated/*.go" against "src/generated/types.go" can
+// return false because the Windows separator is "\\". path.Match
+// fixes the semantics to match the input data.
+func ShouldIgnore(p string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
 	}
 	for _, pattern := range patterns {
 		// Basename match: "*.min.js" matches "dist/app.min.js"
-		if matched, _ := filepath.Match(pattern, filepath.Base(path)); matched {
+		if matched, _ := path.Match(pattern, path.Base(p)); matched {
 			return true
 		}
 		// Full path match: "src/generated/*.go" matches "src/generated/types.go"
-		if matched, _ := filepath.Match(pattern, path); matched {
+		if matched, _ := path.Match(pattern, p); matched {
 			return true
 		}
 		// Directory prefix: "dist/*" or "dist/" matches "dist/foo/bar.js"
 		prefix := strings.TrimSuffix(pattern, "*")
 		prefix = strings.TrimSuffix(prefix, "/")
-		if prefix != "" && prefix != pattern && strings.HasPrefix(path, prefix+"/") {
+		if prefix != "" && prefix != pattern && strings.HasPrefix(p, prefix+"/") {
 			return true
 		}
 	}

@@ -7,8 +7,19 @@ on:
     branches: [main]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  # Cross-platform verification. The project cross-compiles cleanly to
+  # all three OSes via the release workflow, but "compiles" ≠ "runtime-
+  # correct": path-separator quirks, signal handling, temp-file
+  # semantics, and filepath.* OS-awareness are things that only surface
+  # when actually running. This matrix runs vet + unit tests on each
+  # platform so a regression is caught before release, not after a user
+  # reports it.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,6 +34,23 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+
+  # Linux-only dogfood: build the binary, extract from this repo, and
+  # gate on churn-risk. The steps shell out to ./gitcortex and assume
+  # POSIX tooling (make), so keeping them on ubuntu avoids bifurcating
+  # the quality gate across OSes. The cross-platform story is covered
+  # by the `test` matrix above.
+  dogfood:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
 
       - name: Build
         run: make build
