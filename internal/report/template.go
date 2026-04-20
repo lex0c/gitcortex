@@ -383,6 +383,11 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span style="color:#656d76;">Scope</span>
     <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
 
+    {{if .Extensions}}
+    <span style="color:#656d76;">Extensions</span>
+    <span>{{range $i, $e := .Extensions}}{{if $i}}, {{end}}<b>{{$e.Ext}}</b> ({{printf "%.0f" $e.Pct}}%){{end}}</span>
+    {{end}}
+
     <span style="color:#656d76;">Specialization</span>
     <span>{{printf "%.3f" .Specialization}} <span style="color:#656d76;">({{if lt .Specialization 0.15}}broad generalist{{else if lt .Specialization 0.35}}balanced{{else if lt .Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}})</span></span>
 

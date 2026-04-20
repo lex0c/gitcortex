@@ -344,6 +344,170 @@ func TestMergeFileEntryByExtNilSrc(t *testing.T) {
 	}
 }
 
+// DevProfile extensions: verifies that a dev's extension footprint is
+// aggregated from the files they touched, sorted churn-desc, with Pct
+// equal to files/FilesTouched*100. Uses a hand-built dataset so the
+// expected distribution is deterministic.
+func TestDevProfileExtensions(t *testing.T) {
+	ds := &Dataset{
+		Latest: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		contributors: map[string]*ContributorStat{
+			"alice@x": {
+				Name: "Alice", Email: "alice@x",
+				Commits: 4, FilesTouched: 4, ActiveDays: 2,
+				FirstDate: "2024-01-01", LastDate: "2024-05-01",
+			},
+		},
+		files: map[string]*fileEntry{
+			"cmd/main.go":      {devLines: map[string]int64{"alice@x": 100}, devCommits: map[string]int{"alice@x": 2}, additions: 80, deletions: 20},
+			"internal/util.go": {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}, additions: 50, deletions: 10},
+			"deploy/prod.yaml": {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}, additions: 15, deletions: 5},
+			"Makefile":         {devLines: map[string]int64{"alice@x": 5}, devCommits: map[string]int{"alice@x": 1}, additions: 5, deletions: 0},
+		},
+		commits:   map[string]*commitEntry{},
+		workGrid:  [7][24]int{},
+	}
+
+	profiles := DevProfiles(ds, "alice@x", 0)
+	if len(profiles) != 1 {
+		t.Fatalf("got %d profiles, want 1", len(profiles))
+	}
+	p := profiles[0]
+
+	if len(p.Extensions) != 3 {
+		t.Fatalf("alice.Extensions len = %d, want 3 (.go, .yaml, (none))", len(p.Extensions))
+	}
+	// .go dominates (160 churn across 2 files), .yaml next (20), (none)
+	// last (5). Pct based on files/FilesTouched = files/4.
+	if p.Extensions[0].Ext != ".go" || p.Extensions[0].Files != 2 || p.Extensions[0].Churn != 160 {
+		t.Errorf("[0] = %+v, want {.go, 2, 160}", p.Extensions[0])
+	}
+	if p.Extensions[0].Pct != 50.0 {
+		t.Errorf(".go pct = %.1f, want 50.0 (2/4)", p.Extensions[0].Pct)
+	}
+	if p.Extensions[1].Ext != ".yaml" || p.Extensions[1].Files != 1 {
+		t.Errorf("[1] = %+v, want .yaml/1", p.Extensions[1])
+	}
+	if p.Extensions[2].Ext != "(none)" {
+		t.Errorf("[2] = %+v, want (none)", p.Extensions[2])
+	}
+}
+
+// Regression: sort MUST be files desc (not churn desc) so the
+// displayed Pct — computed from files — is monotonic in both CLI and
+// HTML bar widths. Here .py has MORE churn (one huge commit) but
+// FEWER files than .go. Under the previous churn-first sort, .py
+// would lead and the Pct column (25% for .py, 75% for .go) would
+// decrease non-monotonically in a files-sorted visual. Under the
+// corrected files-first sort, .go leads as it should.
+func TestDevProfileExtensionsSortedByFiles(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Commits: 2, FilesTouched: 4, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"a.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"b.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"c.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			// One .py file with way more dev-lines than each .go.
+			"big.py": {devLines: map[string]int64{"alice@x": 500}, devCommits: map[string]int{"alice@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+	if p.Extensions[0].Ext != ".go" {
+		t.Errorf("[0] = %q, want .go (3 files beats .py's 1 file under files-first sort)", p.Extensions[0].Ext)
+	}
+	if p.Extensions[0].Pct != 75.0 {
+		t.Errorf(".go Pct = %.1f, want 75.0", p.Extensions[0].Pct)
+	}
+	if p.Extensions[1].Ext != ".py" || p.Extensions[1].Pct != 25.0 {
+		t.Errorf("[1] = %+v, want .py @ 25%%", p.Extensions[1])
+	}
+	// The .py churn (500) is surfaced on the field for JSON consumers
+	// even though it ranks second by file count.
+	if p.Extensions[1].Churn != 500 {
+		t.Errorf(".py Churn = %d, want 500 (raw value still exposed)", p.Extensions[1].Churn)
+	}
+}
+
+// Edge case: a dev whose only touches are root-level extensionless
+// files (Makefile, LICENSE) collapses into a single "(none)" bucket
+// at 100% — no crash, no fallthrough.
+func TestDevProfileExtensionsAllNone(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"ops@x": {Email: "ops@x", Commits: 2, FilesTouched: 2, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"Makefile": {devLines: map[string]int64{"ops@x": 30}, devCommits: map[string]int{"ops@x": 1}},
+			"LICENSE":  {devLines: map[string]int64{"ops@x": 5}, devCommits: map[string]int{"ops@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "ops@x", 0)[0]
+	if len(p.Extensions) != 1 || p.Extensions[0].Ext != "(none)" {
+		t.Fatalf("Extensions = %+v, want single (none) bucket", p.Extensions)
+	}
+	if p.Extensions[0].Pct != 100.0 {
+		t.Errorf("(none) Pct = %.1f, want 100.0", p.Extensions[0].Pct)
+	}
+}
+
+// Edge case: a dev whose commits never touch any file (all commits
+// had files_changed = 0, so no commit_file records reached fe.devLines).
+// devFiles[email] is absent; Extensions must be nil — both HTML
+// templates guard on truthiness so a nil slice renders as nothing.
+func TestDevProfileExtensionsEmpty(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"ghost@x": {Email: "ghost@x", Commits: 1, FilesTouched: 0, ActiveDays: 1},
+		},
+		files:    map[string]*fileEntry{},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "ghost@x", 0)[0]
+	if len(p.Extensions) != 0 {
+		t.Errorf("Extensions = %+v, want empty", p.Extensions)
+	}
+}
+
+// Truncate to top-5 when a dev's extension set is larger. Under the
+// files-first sort, ties on file count (all 1 each here) fall through
+// to churn desc, so the top 5 by churn still win.
+func TestDevProfileExtensionsTopFive(t *testing.T) {
+	ds := &Dataset{
+		Latest: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Commits: 7, FilesTouched: 7, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"a.go":  {devLines: map[string]int64{"alice@x": 100}, devCommits: map[string]int{"alice@x": 1}},
+			"a.py":  {devLines: map[string]int64{"alice@x": 80}, devCommits: map[string]int{"alice@x": 1}},
+			"a.rs":  {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}},
+			"a.ts":  {devLines: map[string]int64{"alice@x": 40}, devCommits: map[string]int{"alice@x": 1}},
+			"a.md":  {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}},
+			"a.sh":  {devLines: map[string]int64{"alice@x": 5}, devCommits: map[string]int{"alice@x": 1}},
+			"a.yml": {devLines: map[string]int64{"alice@x": 3}, devCommits: map[string]int{"alice@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+	if len(p.Extensions) != 5 {
+		t.Fatalf("Extensions len = %d, want top-5 truncation", len(p.Extensions))
+	}
+	// Top 5 by churn: .go .py .rs .ts .md. .sh and .yml excluded.
+	for i, want := range []string{".go", ".py", ".rs", ".ts", ".md"} {
+		if p.Extensions[i].Ext != want {
+			t.Errorf("[%d] = %q, want %q", i, p.Extensions[i].Ext, want)
+		}
+	}
+}
+
 func TestExtensionStatsTopN(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{

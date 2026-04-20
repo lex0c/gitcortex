@@ -1264,6 +1264,7 @@ type DevProfile struct {
 	LastDate        string
 	TopFiles        []DevFileContrib
 	Scope           []DirScope
+	Extensions      []DevExtContrib
 	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
@@ -1290,6 +1291,26 @@ type DevFileContrib struct {
 	Path    string
 	Commits int
 	Churn   int64
+}
+
+// DevExtContrib is a dev's footprint in a single extension bucket.
+// Churn is the summed per-file dev-lines (from fe.devLines), so it
+// reflects lines the dev personally added/removed across files that
+// currently carry this extension — NOT the file's lifetime churn.
+// Pct is the share of the dev's files (by count) that land in this
+// bucket, matching DirScope.Pct's semantics so the two read
+// consistently side by side.
+//
+// Caveat: the bucket is derived from the file's canonical post-rename
+// path. A dev who worked on foo.js pre-migration still shows up under
+// ".ts" if that file was later renamed. Per-era per-dev attribution
+// would need byExt to carry a dev dimension, which isn't tracked; see
+// METRICS.md for the full rationale.
+type DevExtContrib struct {
+	Ext   string
+	Files int
+	Churn int64
+	Pct   float64
 }
 
 // DevProfiles returns a profile for each developer (or a specific one if filterEmail is set).
@@ -1562,6 +1583,60 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			scope = scope[:5]
 		}
 
+		// Extensions: the dev's language/skill fingerprint. Aggregated
+		// from the same devFiles map used for Scope + TopFiles — each
+		// file contributes its dev-attributable churn (devLines[email])
+		// to the bucket picked via the file's canonical-path
+		// extension. The canonical-path simplification is documented
+		// in METRICS.md; per-era per-dev would need byExt to carry a
+		// dev dimension.
+		type extAccForDev struct {
+			files int
+			churn int64
+		}
+		extCount := make(map[string]*extAccForDev)
+		if files, ok := devFiles[email]; ok {
+			for path, fa := range files {
+				ext := extractExtension(path)
+				acc, ok := extCount[ext]
+				if !ok {
+					acc = &extAccForDev{}
+					extCount[ext] = acc
+				}
+				acc.files++
+				acc.churn += fa.churn
+			}
+		}
+		var extensions []DevExtContrib
+		for ext, acc := range extCount {
+			pct := 0.0
+			if cs.FilesTouched > 0 {
+				pct = math.Round(float64(acc.files)/float64(cs.FilesTouched)*1000) / 10
+			}
+			extensions = append(extensions, DevExtContrib{
+				Ext: ext, Files: acc.files, Churn: acc.churn, Pct: pct,
+			})
+		}
+		// Sort mirrors Scope: files desc first, so the displayed Pct
+		// (computed from files) is monotonic in CLI and the HTML bar
+		// widths — Pct-sorted = visually sorted. Tiebreak on churn
+		// desc keeps the "more investment wins" signal when two
+		// buckets hold the same number of files, then ext asc for
+		// determinism. The Churn field on each entry is still
+		// available for JSON consumers who want a churn-ranked view.
+		sort.Slice(extensions, func(i, j int) bool {
+			if extensions[i].Files != extensions[j].Files {
+				return extensions[i].Files > extensions[j].Files
+			}
+			if extensions[i].Churn != extensions[j].Churn {
+				return extensions[i].Churn > extensions[j].Churn
+			}
+			return extensions[i].Ext < extensions[j].Ext
+		})
+		if len(extensions) > 5 {
+			extensions = extensions[:5]
+		}
+
 		// Contribution type
 		contribRatio := 0.0
 		contribType := "growth"
@@ -1608,7 +1683,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope, Specialization: specialization,
+			TopFiles: topFiles, Scope: scope, Extensions: extensions, Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,

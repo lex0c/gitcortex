@@ -468,6 +468,16 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintf(f.w, "%s (%.0f%%)", s.Dir, s.Pct)
 			}
 			fmt.Fprintln(f.w)
+			if len(p.Extensions) > 0 {
+				fmt.Fprintf(f.w, "  Extensions:    ")
+				for j, e := range p.Extensions {
+					if j > 0 {
+						fmt.Fprintf(f.w, ", ")
+					}
+					fmt.Fprintf(f.w, "%s (%.0f%%)", e.Ext, e.Pct)
+				}
+				fmt.Fprintln(f.w)
+			}
 			// %.3f (not %.2f): labels are assigned at thresholds 0.15 / 0.35
 			// / 0.7 using the unrounded float. With %.2f a value like
 			// 0.149 displays as "0.15" and the "broad generalist" label
