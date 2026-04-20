@@ -185,7 +185,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Contributors}}
-<h2>Top Contributors</h2>
+<h2>Top Contributors{{if lt (len .Contributors) .Summary.TotalDevs}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Contributors)}} of {{thousands .Summary.TotalDevs}}</span>{{end}}</h2>
 <p class="hint">Ranked by commit count. High commit count with low lines may indicate small fixes; low count with high lines may indicate large features. · {{docRef "contributors"}}</p>
 <table>
 <tr><th>Name</th><th>Email</th><th>Commits</th><th></th><th>Additions</th><th>Deletions</th></tr>
@@ -204,7 +204,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Hotspots}}
-<h2>File Hotspots</h2>
+<h2>File Hotspots{{if lt (len .Hotspots) .Summary.TotalFiles}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Hotspots)}} of {{thousands .Summary.TotalFiles}}</span>{{end}}</h2>
 <p class="hint">Most frequently changed files. High churn with few devs = knowledge silo. High churn with many devs = shared bottleneck. · {{docRef "hotspots"}}</p>
 <table>
 <tr><th>Path</th><th>Commits</th><th>Churn</th><th></th><th>Devs</th></tr>
@@ -222,7 +222,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Directories}}
-<h2>Directories</h2>
+<h2>Directories{{if lt (len .Directories) .TotalDirectories}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Directories)}} of {{thousands .TotalDirectories}}</span>{{end}}</h2>
 <p class="hint">Module-level health. <b>File touches</b> is the sum of per-file commit counts (one commit touching N files contributes N), not distinct commits. Low bus factor = knowledge concentrated in few people. · {{docRef "directories"}}</p>
 <table>
 <tr><th>Directory</th><th>File Touches</th><th>Churn</th><th>Files</th><th>Devs</th><th>Bus Factor</th></tr>
@@ -240,7 +240,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Extensions}}
-<h2>Extensions</h2>
+<h2>Extensions{{if lt (len .Extensions) .TotalExtensions}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Extensions)}} of {{thousands .TotalExtensions}}</span>{{end}}</h2>
 <p class="hint">File extensions ranked by <b>recent churn</b> — "where is the team spending effort now", not "what exists at HEAD". Cross-read with Directories: a repo with high <code>.yaml</code> recent churn concentrated in one dir is config-as-code; spread across many dirs is config sprawl. · {{docRef "extensions"}}</p>
 <table>
 <tr><th>Ext</th><th>Files</th><th>Churn</th><th>Recent Churn</th><th></th><th>Devs</th><th>First Seen</th><th>Last Seen</th></tr>
@@ -261,7 +261,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .ChurnRisk}}
-<h2>Churn Risk</h2>
+<h2>Churn Risk{{if lt (len .ChurnRisk) .Summary.TotalFiles}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .ChurnRisk)}} of {{thousands .Summary.TotalFiles}}</span>{{end}}</h2>
 <p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
 {{if .ChurnRiskLabelCounts}}
 <div class="churn-chips">
@@ -290,7 +290,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .BusFactor}}
-<h2>Bus Factor Risk</h2>
+<h2>Bus Factor Risk{{if lt (len .BusFactor) .TotalBusFactorFiles}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .BusFactor)}} of {{thousands .TotalBusFactorFiles}}</span>{{end}}</h2>
 <p class="hint">Files with fewest developers owning 80%+ of changes. Bus factor 1 = if that person leaves, nobody else knows the code. · {{docRef "bus-factor"}}</p>
 <table>
 <tr><th>Path</th><th>Bus Factor</th><th>Top Devs</th></tr>
@@ -337,7 +337,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .TopCommits}}
-<h2>Top Commits</h2>
+<h2>Top Commits{{if lt (len .TopCommits) .Summary.TotalCommits}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .TopCommits)}} of {{thousands .Summary.TotalCommits}}</span>{{end}}</h2>
 <p class="hint">Largest commits by lines changed. Unusually large commits may be imports, generated code, or risky big-bang changes worth reviewing. · {{docRef "top-commits"}}</p>
 <table>
 <tr><th>SHA</th><th>Author</th><th>Date</th><th>Lines</th><th>Files</th>{{if and (gt (len .TopCommits) 0) (index .TopCommits 0).Message}}<th>Message</th>{{end}}</tr>

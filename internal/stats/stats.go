@@ -376,6 +376,35 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 	return result
 }
 
+// DirectoryCount returns the total number of distinct directories
+// across all tracked files — the universe `DirectoryStats` ranks
+// before truncation. Useful for headers like "Top 20 of 127" so the
+// reader sees the size of the repo's dir tree without waiting for
+// DirectoryStats(ds, 0) to materialize a slice. Same derivation
+// (last "/" split, "." for root-level files) to stay consistent.
+func DirectoryCount(ds *Dataset) int {
+	dirs := make(map[string]struct{})
+	for path := range ds.files {
+		dir := "."
+		if i := strings.LastIndex(path, "/"); i >= 0 {
+			dir = path[:i]
+		}
+		dirs[dir] = struct{}{}
+	}
+	return len(dirs)
+}
+
+// ExtensionCount returns the total number of distinct extension
+// buckets ExtensionStats would produce. Same derivation via
+// extractExtension so the count matches what ranking would show.
+func ExtensionCount(ds *Dataset) int {
+	exts := make(map[string]struct{})
+	for path := range ds.files {
+		exts[extractExtension(path)] = struct{}{}
+	}
+	return len(exts)
+}
+
 // ExtensionStat rolls history up per file extension. The historical
 // lens is the point: "which extension is the team spending effort on"
 // answers a different question than "which extension exists in the
@@ -622,6 +651,22 @@ func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 		result[i] = *buckets[key]
 	}
 	return result
+}
+
+// BusFactorCount returns the universe size for BusFactor — files
+// with at least one dev authoring lines. Cannot use
+// Summary.TotalFiles because BusFactor skips files where
+// fe.devLines is empty (pure-rename-only files after the ingest
+// fix that gates devLines on non-zero churn), which would make a
+// "N of TotalFiles" header lie for rename-heavy repos.
+func BusFactorCount(ds *Dataset) int {
+	n := 0
+	for _, fe := range ds.files {
+		if len(fe.devLines) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 func BusFactor(ds *Dataset, n int) []BusFactorResult {

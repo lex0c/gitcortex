@@ -57,6 +57,62 @@ func TestExtractExtensionPolicy(t *testing.T) {
 	}
 }
 
+// DirectoryCount and ExtensionCount back the "N of M" header badges
+// in the main report. They must match what DirectoryStats and
+// ExtensionStats would produce pre-truncation — otherwise "showing 20
+// of 127" lies when the user expands to --top 0 and finds a
+// different number.
+func TestDirectoryCountAndExtensionCount(t *testing.T) {
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"cmd/main.go":   {devLines: map[string]int64{"a": 1}},
+			"cmd/util.go":   {devLines: map[string]int64{"a": 1}},
+			"internal/a.go": {devLines: map[string]int64{"a": 1}},
+			"internal/b.go": {devLines: map[string]int64{"a": 1}},
+			"docs/x.md":     {devLines: map[string]int64{"a": 1}},
+			"README.md":     {devLines: map[string]int64{"a": 1}}, // "." bucket
+			"Makefile":      {devLines: map[string]int64{"a": 1}}, // "." bucket, (none) ext
+		},
+	}
+	// Distinct dirs: "cmd", "internal", "docs", "." → 4
+	if n := DirectoryCount(ds); n != 4 {
+		t.Errorf("DirectoryCount = %d, want 4", n)
+	}
+	// Distinct exts: ".go", ".md", "(none)" → 3
+	if n := ExtensionCount(ds); n != 3 {
+		t.Errorf("ExtensionCount = %d, want 3", n)
+	}
+	// Consistency invariant: must match len of the stats function's
+	// full output. If they ever drift, the "N of M" header lies.
+	if got, want := DirectoryCount(ds), len(DirectoryStats(ds, 0)); got != want {
+		t.Errorf("DirectoryCount (%d) != len(DirectoryStats(_, 0)) (%d)", got, want)
+	}
+	if got, want := ExtensionCount(ds), len(ExtensionStats(ds, 0)); got != want {
+		t.Errorf("ExtensionCount (%d) != len(ExtensionStats(_, 0)) (%d)", got, want)
+	}
+}
+
+// BusFactorCount must exclude pure-rename files (empty devLines) —
+// those are skipped by BusFactor itself and so cannot be part of its
+// denominator. Using Summary.TotalFiles would over-count here. Build
+// a dataset with one file that carries dev lines and one that
+// doesn't; assert BusFactorCount == 1 and matches the real output.
+func TestBusFactorCountExcludesEmptyDevLines(t *testing.T) {
+	ds := &Dataset{
+		UniqueFileCount: 2, // Summary total; includes both
+		files: map[string]*fileEntry{
+			"src/authored.go":       {devLines: map[string]int64{"alice@x": 10}},
+			"src/pure-rename-only":  {devLines: map[string]int64{}}, // no authored lines
+		},
+	}
+	if got := BusFactorCount(ds); got != 1 {
+		t.Errorf("BusFactorCount = %d, want 1 (pure-rename file must be excluded)", got)
+	}
+	if got, want := BusFactorCount(ds), len(BusFactor(ds, 0)); got != want {
+		t.Errorf("BusFactorCount (%d) != len(BusFactor(_, 0)) (%d) — header would lie", got, want)
+	}
+}
+
 func TestExtensionStatsAggregation(t *testing.T) {
 	// Hand-built dataset so aggregation is inspectable: two .go files
 	// with distinct devs, one .yaml shared by both, and a Makefile
