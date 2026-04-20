@@ -22,6 +22,11 @@ type commitEntry struct {
 	del     int64
 	files   int
 	message string
+	// repo carries the LoadMultiJSONL pathPrefix (without the trailing
+	// colon) so RepoBreakdown can attribute commits back to their source
+	// repository on multi-repo scans. Empty for single-file loads, which
+	// keeps single-repo callers' behavior unchanged.
+	repo string
 }
 
 type fileEntry struct {
@@ -242,6 +247,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				del:     c.Deletions,
 				files:   c.FilesChanged,
 				message: c.Message,
+				repo:    strings.TrimSuffix(pathPrefix, ":"),
 			}
 
 			// Contributors

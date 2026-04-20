@@ -134,6 +134,42 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </div>
 {{end}}
 
+{{if gt (len .Repos) 1}}
+<h2>Per-Repository Breakdown <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Repos)}} repositories</span></h2>
+<p class="hint">How {{.Profile.Name}}'s work is split across repositories in this scan. Use this to point at the projects with the most activity, or to spot single-repo focus vs. broad multi-repo engagement.</p>
+<table>
+<tr>
+  <th>Repository</th>
+  <th>Commits</th>
+  <th>% of My Commits</th>
+  <th>Churn</th>
+  <th>% of My Churn</th>
+  <th>Files</th>
+  <th>Active days</th>
+  <th>First → Last</th>
+</tr>
+{{range .Repos}}
+<tr>
+  <td class="mono">{{.Repo}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <div style="flex:0 0 60px; height:8px; background:#eaeef2; border-radius:3px; overflow:hidden;">
+        <div style="height:100%; width:{{printf "%.0f" .PctOfTotalCommits}}%; background:#0969da;"></div>
+      </div>
+      <span class="mono">{{printf "%.1f" .PctOfTotalCommits}}%</span>
+    </div>
+  </td>
+  <td>{{thousands .Churn}}</td>
+  <td class="mono">{{printf "%.1f" .PctOfTotalChurn}}%</td>
+  <td>{{thousands .Files}}</td>
+  <td>{{.ActiveDays}}</td>
+  <td class="mono" style="font-size:11px;">{{.FirstCommitDate}} → {{.LastCommitDate}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .Profile.TopFiles}}
 <h2>Top Files</h2>
 <p class="hint">Files this developer changed most (churn = additions + deletions). High churn on few files suggests deep ownership and potential knowledge concentration. · {{docRef "hotspots"}}</p>

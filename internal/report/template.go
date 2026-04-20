@@ -145,6 +145,45 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   </div>
 </div>
 
+{{if gt (len .Repos) 1}}
+<h2>Per-Repository Breakdown <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Repos)}} repositories</span></h2>
+<p class="hint">Cross-repo aggregation from <code>scan</code>. Use this view to see how work is distributed: a single repo dominating commits or churn often means the consolidated activity story is really about that one project; an even spread shows broad multi-repo engagement. Bar widths are normalized to the largest commit-count repo.</p>
+{{$maxRepoCommits := 0}}{{range .Repos}}{{if gt .Commits $maxRepoCommits}}{{$maxRepoCommits = .Commits}}{{end}}{{end}}
+<table>
+<tr>
+  <th>Repository</th>
+  <th>Commits</th>
+  <th>% Commits</th>
+  <th>Churn</th>
+  <th>% Churn</th>
+  <th>Files</th>
+  <th>Active days</th>
+  <th>Devs</th>
+  <th>First → Last</th>
+</tr>
+{{range .Repos}}
+<tr>
+  <td class="mono">{{.Repo}}</td>
+  <td>{{thousands .Commits}}</td>
+  <td>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <div style="flex:0 0 60px; height:8px; background:#eaeef2; border-radius:3px; overflow:hidden;">
+        <div style="height:100%; width:{{if gt $maxRepoCommits 0}}{{printf "%.0f" (pctFloat .PctOfTotalCommits 100.0)}}%{{else}}0%{{end}}; background:#216e39;"></div>
+      </div>
+      <span class="mono">{{printf "%.1f" .PctOfTotalCommits}}%</span>
+    </div>
+  </td>
+  <td>{{thousands .Churn}}</td>
+  <td class="mono">{{printf "%.1f" .PctOfTotalChurn}}%</td>
+  <td>{{thousands .Files}}</td>
+  <td>{{.ActiveDays}}</td>
+  <td>{{.UniqueDevs}}</td>
+  <td class="mono" style="font-size:11px;">{{.FirstCommitDate}} → {{.LastCommitDate}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .ActivityYears}}
 <h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('act-heatmap'),t=document.getElementById('act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
 <p class="hint">Monthly commit heatmap. Darker = more commits. Sudden drop-offs may mark team changes, re-orgs, or freezes; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers. · {{docRef "activity"}}</p>

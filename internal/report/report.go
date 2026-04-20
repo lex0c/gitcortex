@@ -68,6 +68,12 @@ type ReportData struct {
 	TotalDirectories    int
 	TotalExtensions     int
 	TotalBusFactorFiles int
+
+	// Repos holds per-repository aggregates for multi-repo (scan) reports.
+	// Empty on single-repo runs — the template gates the section behind
+	// `{{if gt (len .Repos) 1}}` so single-repo callers keep their
+	// existing layout untouched.
+	Repos []stats.RepoStat
 }
 
 // htmlTreeDepth caps the repo-structure tree baked into the HTML report.
@@ -376,6 +382,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		TotalDirectories:     stats.DirectoryCount(ds),
 		TotalExtensions:      stats.ExtensionCount(ds),
 		TotalBusFactorFiles:  stats.BusFactorCount(ds),
+		Repos:                stats.RepoBreakdown(ds, ""),
 	}
 	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 
@@ -641,6 +648,13 @@ type ProfileReportData struct {
 	MaxActivityCommits int
 	PatternGrid     [7][24]int
 	MaxPattern      int
+
+	// Repos is the per-repository breakdown filtered to this developer's
+	// commits. Empty on single-repo profile reports — gated in the
+	// template so existing single-repo callers see no change. The headline
+	// use case for `gitcortex scan --email me` lives here: the developer
+	// can see at a glance which repos they spent time in.
+	Repos []stats.RepoStat
 }
 
 func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) error {
@@ -672,6 +686,7 @@ func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) err
 		MaxActivityCommits: maxAct,
 		PatternGrid:        p.WorkGrid,
 		MaxPattern:         maxP,
+		Repos:              stats.RepoBreakdown(ds, email),
 	}
 
 	return profileTmpl.Execute(w, data)

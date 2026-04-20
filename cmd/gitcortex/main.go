@@ -16,6 +16,7 @@ import (
 	"github.com/lex0c/gitcortex/internal/extract"
 	"github.com/lex0c/gitcortex/internal/git"
 	reportpkg "github.com/lex0c/gitcortex/internal/report"
+	"github.com/lex0c/gitcortex/internal/scan"
 	"github.com/lex0c/gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
@@ -35,6 +36,7 @@ func main() {
 	rootCmd.AddCommand(diffCmd())
 	rootCmd.AddCommand(ciCmd())
 	rootCmd.AddCommand(reportCmd())
+	rootCmd.AddCommand(scanCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -866,6 +868,166 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
 	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
 	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
+
+	return cmd
+}
+
+// --- Scan ---
+
+func scanCmd() *cobra.Command {
+	var (
+		roots              []string
+		output             string
+		ignoreFile         string
+		maxDepth           int
+		parallel           int
+		email              string
+		from               string
+		to                 string
+		since              string
+		reportPath         string
+		topN               int
+		extractIgnore      []string
+		batchSize          int
+		mailmap            bool
+		firstParent        bool
+		includeMessages    bool
+		couplingMaxFiles   int
+		couplingMinChanges int
+		churnHalfLife      int
+		networkMinFiles    int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Discover git repositories under one or more roots and consolidate their history",
+		Long: `Walk the given root(s), find every git repository, and run extract on each
+repository in parallel. Outputs one JSONL per repo plus a manifest in --output.
+Optionally generates a consolidated HTML report including a per-repository
+breakdown — handy for showing aggregated work across many repos.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(roots) == 0 {
+				return fmt.Errorf("--root is required (repeatable for multiple roots)")
+			}
+			if since != "" && (from != "" || to != "") {
+				return fmt.Errorf("--since cannot be combined with --from/--to")
+			}
+			if err := validateDate(from, "--from"); err != nil {
+				return err
+			}
+			if err := validateDate(to, "--to"); err != nil {
+				return err
+			}
+			if from != "" && to != "" && from > to {
+				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+
+			cfg := scan.Config{
+				Roots:      roots,
+				Output:     output,
+				IgnoreFile: ignoreFile,
+				MaxDepth:   maxDepth,
+				Parallel:   parallel,
+				Extract: extract.Config{
+					BatchSize:       batchSize,
+					IncludeMessages: includeMessages,
+					CommandTimeout:  extract.DefaultCommandTimeout,
+					FirstParent:     firstParent,
+					Mailmap:         mailmap,
+					IgnorePatterns:  extractIgnore,
+					StartOffset:     -1,
+				},
+			}
+
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			result, err := scan.Run(ctx, cfg)
+			// scan.Run returns a partial result alongside ctx.Err() on
+			// cancellation. Honor that — write whatever progress we made
+			// to disk and surface the error so the CLI exits non-zero.
+			if err != nil {
+				return err
+			}
+
+			if reportPath == "" {
+				fmt.Fprintf(os.Stderr, "Scan complete: %d JSONL file(s) in %s\n", len(result.JSONLs), result.OutputDir)
+				return nil
+			}
+			if len(result.JSONLs) == 0 {
+				return fmt.Errorf("no successful repos extracted; cannot build report")
+			}
+
+			fromDate := from
+			if since != "" {
+				d, err := parseSince(since)
+				if err != nil {
+					return err
+				}
+				fromDate = d
+			}
+
+			ds, err := stats.LoadMultiJSONL(result.JSONLs, stats.LoadOptions{
+				From:         fromDate,
+				To:           to,
+				HalfLifeDays: churnHalfLife,
+				CoupMaxFiles: couplingMaxFiles,
+			})
+			if err != nil {
+				return fmt.Errorf("load consolidated dataset: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Loaded %d commits across %d repo(s)\n", ds.CommitCount, len(result.JSONLs))
+
+			f, err := os.Create(reportPath)
+			if err != nil {
+				return fmt.Errorf("create report: %w", err)
+			}
+			defer f.Close()
+
+			// Label the report after the basename of the first --root
+			// (or the output dir as a fallback). "scan-scan-output" was
+			// the previous default; users find the root name far more
+			// recognizable as the H1 of the report.
+			repoLabel := filepath.Base(result.OutputDir)
+			if len(cfg.Roots) > 0 {
+				repoLabel = filepath.Base(absPath(cfg.Roots[0]))
+			}
+			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles}
+			if email != "" {
+				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email); err != nil {
+					return fmt.Errorf("generate profile report: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(reportPath))
+				return nil
+			}
+			if err := reportpkg.Generate(f, ds, repoLabel, topN, sf); err != nil {
+				return fmt.Errorf("generate report: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Consolidated report written to %s\n", fileURL(reportPath))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&roots, "root", nil, "Root directory to walk for repositories (repeatable)")
+	cmd.Flags().StringVar(&output, "output", "scan-output", "Directory to write per-repo JSONL files and the manifest")
+	cmd.Flags().StringVar(&ignoreFile, "ignore-file", "", "Gitignore-style file with directories to skip during discovery. When unset, only the first --root is searched for a .gitcortex-ignore; pass an explicit path to apply rules across all roots.")
+	cmd.Flags().IntVar(&maxDepth, "max-depth", 0, "Maximum directory depth to descend into when looking for repos (0 = unlimited)")
+	cmd.Flags().IntVar(&parallel, "parallel", 4, "Number of repositories to extract in parallel")
+	cmd.Flags().StringVar(&email, "email", "", "Generate a per-developer profile report (only when --report is set)")
+	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD (forwarded to the consolidated report)")
+	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD (forwarded to the consolidated report)")
+	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y); mutually exclusive with --from/--to")
+	cmd.Flags().StringVar(&reportPath, "report", "", "If set, generate a consolidated HTML report at this path after the scan")
+	cmd.Flags().IntVar(&topN, "top", 20, "Top-N entries per section in the consolidated report")
+	cmd.Flags().StringSliceVar(&extractIgnore, "extract-ignore", nil, "Glob patterns forwarded to per-repo extract --ignore (e.g. package-lock.json)")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Per-repo extract checkpoint interval")
+	cmd.Flags().BoolVar(&mailmap, "mailmap", false, "Use .mailmap (per repo) to normalize identities")
+	cmd.Flags().BoolVar(&firstParent, "first-parent", false, "Restrict extracts to the first-parent chain")
+	cmd.Flags().BoolVar(&includeMessages, "include-commit-messages", false, "Include commit messages in JSONL (needed for Top Commits in the consolidated report)")
+	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis (consolidated report)")
+	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results (consolidated report)")
+	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (consolidated report)")
+	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges (consolidated report)")
 
 	return cmd
 }
