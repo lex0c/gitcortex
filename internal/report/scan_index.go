@@ -100,8 +100,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </head>
 <body>
 
-<h1>Scan Index <span style="font-size:14px; color:#656d76; font-weight:normal;">{{.TotalRepos}} repositor{{if eq .TotalRepos 1}}y{{else}}ies{{end}}</span></h1>
-<p class="subtitle">{{if .Roots}}roots: {{range $i, $r := .Roots}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}{{end}}</p>
+<h1>Index <span style="font-size:14px; color:#656d76; font-weight:normal;">{{.TotalRepos}} repositor{{if eq .TotalRepos 1}}y{{else}}ies{{end}}</span></h1>
 
 <div class="summary">
   <div class="summary-card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>

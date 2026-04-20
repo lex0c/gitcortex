@@ -200,7 +200,7 @@ func TestScanCmd_ReportDirGeneratesPerRepoHTMLAndIndex(t *testing.T) {
 	if !strings.Contains(index, `href="alpha.html"`) || !strings.Contains(index, `href="beta.html"`) {
 		t.Errorf("index.html should link to both per-repo reports; got body excerpt: %.300s", index)
 	}
-	if !strings.Contains(index, "Scan Index") {
+	if !strings.Contains(index, "<h1>Index") {
 		t.Errorf("index.html missing title block")
 	}
 }
