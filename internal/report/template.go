@@ -251,7 +251,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td>{{thousands .Files}}</td>
   <td>{{thousands .Churn}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
-  <td style="width:20%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pct (int64 .RecentChurn) (int64 $maxRecent)}}%"></div></div></td>
+  <td style="width:20%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .RecentChurn $maxRecent}}%"></div></div></td>
   <td>{{.UniqueDevs}}</td>
   <td class="mono">{{.FirstSeen}}</td>
   <td class="mono">{{.LastSeen}}</td>
@@ -279,7 +279,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td class="mono truncate">{{.Path}}</td>
   <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}{{if .AgePercentile}}<div style="font-size:10px; color:#656d76; margin-top:2px;">age P{{derefInt .AgePercentile}} · trend P{{derefInt .TrendPercentile}}</div>{{end}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
-  <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pct (int64 .RecentChurn) (int64 $maxChurn)}}%"></div></div></td>
+  <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .RecentChurn $maxChurn}}%"></div></div></td>
   <td>{{.BusFactor}}</td>
   <td>{{.AgeDays}}d</td>
   <td>{{if lt .Trend 0.5}}↓ {{printf "%.2f" .Trend}}{{else if gt .Trend 1.5}}↑ {{printf "%.2f" .Trend}}{{else}}→ {{printf "%.2f" .Trend}}{{end}}</td>
