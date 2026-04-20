@@ -404,6 +404,15 @@ type ExtensionStat struct {
 // Policy:
 //   - Basename after the final "/" is the subject; directory prefix is
 //     ignored.
+//   - Multi-input prefix ("<stem>:") on root-level files is stripped
+//     first, so repo.v1:Makefile collapses to (none) instead of
+//     picking the dot inside the stem and emitting ".v1:makefile".
+//     LoadMultiJSONL is the only code path that injects ":" into
+//     tracked paths, so the presence of ":" in a basename is a strong
+//     signal of this prefix; the alternative — a real filename with
+//     ":" — is rare enough on POSIX/Windows that we accept the
+//     false-positive risk in exchange for correct multi-repo
+//     behaviour.
 //   - Single-dot dotfiles (".gitignore", ".env") keep their full name —
 //     they carry meaning as a group, and reducing them to "" would
 //     merge them with extension-less files (Makefile, LICENSE).
@@ -418,6 +427,17 @@ func extractExtension(path string) string {
 	}
 	if path == "" {
 		return "(none)"
+	}
+	// Strip multi-input stem prefix. LoadMultiJSONL prepends "<stem>:"
+	// to paths; for nested files the slash-split above already
+	// discarded it, but root-level files still carry it and the dots
+	// inside a stem name (e.g. "repo.v1") would otherwise be mistaken
+	// for a real extension.
+	if i := strings.IndexByte(path, ':'); i >= 0 {
+		path = path[i+1:]
+		if path == "" {
+			return "(none)"
+		}
 	}
 	lastDot := strings.LastIndex(path, ".")
 	if lastDot <= 0 {

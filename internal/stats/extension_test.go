@@ -34,6 +34,18 @@ func TestExtractExtensionPolicy(t *testing.T) {
 		{"..", "(none)"},   // two dots → trailing-dot rule collapses
 		{"/", "(none)"},    // just a separator
 		{"foo/", "(none)"}, // trailing slash, empty basename
+		// Multi-input stem prefix. LoadMultiJSONL prepends "<stem>:"
+		// to root-level paths, and the stem may legitimately contain
+		// dots; without stripping, those dots would be mistaken for
+		// extensions. Only reaches the basename for root-level files —
+		// nested paths already discard the prefix via the slash split.
+		{"repo.v1:Makefile", "(none)"},
+		{"repo.v1:LICENSE", "(none)"},
+		{"repo.v1:foo.go", ".go"},   // real ext still wins after prefix strip
+		{"repo:Makefile", "(none)"}, // stem with no dots — same rule
+		{"repo.v1:.gitignore", ".gitignore"}, // dotfile survives prefix
+		{"repo.v1:src/foo.go", ".go"},        // nested path: slash strips prefix first
+		{"repo.v1:", "(none)"},               // prefix with empty basename
 	}
 	for _, c := range cases {
 		got := extractExtension(c.path)
