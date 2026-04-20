@@ -124,6 +124,13 @@ func TestShouldIgnore(t *testing.T) {
 		{"src/main.go", nil, false},
 		{"src/main.go", []string{}, false},
 		{"", []string{"*.go"}, false},
+		// Portability regression: pattern with a slash glob.
+		// filepath.Match on Windows uses "\\" as separator and would
+		// silently fail to match "src/generated/types.go" against
+		// "src/generated/*.go". path.Match keeps forward-slash
+		// semantics and matches on every platform.
+		{"src/generated/types.go", []string{"src/generated/*.go"}, true},
+		{"src/hand/types.go", []string{"src/generated/*.go"}, false},
 	}
 
 	for _, tt := range tests {
