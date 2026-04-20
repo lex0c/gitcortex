@@ -200,8 +200,11 @@ func TestScanCmd_ReportDirGeneratesPerRepoHTMLAndIndex(t *testing.T) {
 	if !strings.Contains(index, `href="alpha.html"`) || !strings.Contains(index, `href="beta.html"`) {
 		t.Errorf("index.html should link to both per-repo reports; got body excerpt: %.300s", index)
 	}
-	if !strings.Contains(index, "<h1>Index") {
-		t.Errorf("index.html missing title block")
+	// The summary card strip is now the top-of-page anchor (no H1).
+	// Asserting on the "Repositories" label keeps the test meaningful
+	// if the card layout changes.
+	if !strings.Contains(index, "Repositories") {
+		t.Errorf("index.html missing summary strip")
 	}
 }
 

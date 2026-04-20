@@ -137,7 +137,6 @@ const scanIndexHTML = `<!DOCTYPE html>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
-h1 { font-size: 24px; margin-bottom: 4px; }
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
 .summary-card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
 .summary-card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
@@ -170,8 +169,6 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </style>
 </head>
 <body>
-
-<h1>Index <span style="font-size:14px; color:#656d76; font-weight:normal;">{{.TotalRepos}} repositor{{if eq .TotalRepos 1}}y{{else}}ies{{end}}</span></h1>
 
 <div class="summary">
   <div class="summary-card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>
