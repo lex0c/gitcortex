@@ -198,6 +198,42 @@ func TestAssignSlugs_DeterministicUnderRetry(t *testing.T) {
 //   - elapsed time < full baseline (walk was actually interrupted)
 //   - at least one repo was discovered BEFORE cancel (not a
 //     pre-cancel scenario in disguise)
+// Regression: WalkDir given a symlink ROOT visits only the link
+// entry and refuses to descend. Users whose ~/work is a symlink to
+// a real data disk would previously see "no git repositories found"
+// despite the target being full of repos. Canonicalize via
+// EvalSymlinks before walking so the walk starts at a real dir.
+func TestDiscover_DereferencesSymlinkRoot(t *testing.T) {
+	real := t.TempDir()
+	mustMkRepo(t, filepath.Join(real, "repo-a"))
+	mustMkRepo(t, filepath.Join(real, "nested", "repo-b"))
+
+	// Place the symlink in a separate TempDir so the test doesn't
+	// have to clean it up explicitly.
+	linkDir := t.TempDir()
+	link := filepath.Join(linkDir, "work")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks not supported here: %v", err)
+	}
+
+	repos, err := Discover(context.Background(), []string{link}, NewMatcher(nil), 0)
+	if err != nil {
+		t.Fatalf("Discover via symlink root: %v", err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("want 2 repos found through symlink root, got %d: %+v", len(repos), repos)
+	}
+	got := map[string]bool{}
+	for _, r := range repos {
+		got[r.Slug] = true
+	}
+	for _, want := range []string{"repo-a", "repo-b"} {
+		if !got[want] {
+			t.Errorf("expected slug %q in %v (symlink root was not dereferenced)", want, got)
+		}
+	}
+}
+
 func TestDiscover_AbortsMidWalk(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a large synthetic tree; skipped in -short mode")

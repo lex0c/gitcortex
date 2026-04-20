@@ -55,6 +55,25 @@ func Discover(ctx context.Context, roots []string, matcher *Matcher, maxDepth in
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", root, err)
 		}
+		// Canonicalize via EvalSymlinks. os.Stat above followed the
+		// symlink for the is-directory check, but filepath.WalkDir
+		// treats a symlink ROOT specially: it visits only the link
+		// itself (reported with ModeSymlink) and does NOT descend
+		// into the target. For a user whose ~/work is a symlink to
+		// /mnt/data/work — a common setup — the walk would yield
+		// zero callbacks past the root and scan would conclude "no
+		// git repositories found under ..." despite the target being
+		// full of repos. EvalSymlinks dereferences the root once so
+		// WalkDir starts with a real directory path; links ENCOUNTERED
+		// during the walk are still left as-is (default WalkDir
+		// behavior), which is what we want — we don't chase every
+		// symlink we come across, only the ones the user explicitly
+		// named as a root.
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve symlinks for %s: %w", abs, err)
+		}
+		abs = resolved
 		info, err := os.Stat(abs)
 		if err != nil {
 			return nil, fmt.Errorf("stat %s: %w", abs, err)
