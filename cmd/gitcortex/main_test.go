@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,6 +115,120 @@ func TestScanCmd_RejectsMissingIgnoreFile(t *testing.T) {
 	if strings.Contains(err.Error(), "no git repositories found") {
 		t.Errorf("ignore-file check ran after discovery; got %q", err)
 	}
+}
+
+// --report without --email is ambiguous under the "no team-wide
+// consolidation" design: the only meaningful single-HTML output
+// across multiple repos is a developer profile. The error must
+// point the user at the right flag for each intent.
+func TestScanCmd_RejectsReportWithoutEmail(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--report", filepath.Join(t.TempDir(), "out.html"),
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --report without --email")
+	}
+	if !strings.Contains(err.Error(), "--report-dir") || !strings.Contains(err.Error(), "--email") {
+		t.Errorf("error should point at both --report-dir and --email as remediation; got %q", err)
+	}
+}
+
+// `scan --report-dir <dir>` writes index.html plus one HTML per
+// successful repo, with each per-repo HTML rendered from a
+// single-input Dataset (no cross-repo path prefix). End-to-end
+// check against two real repos built with git.
+func TestScanCmd_ReportDirGeneratesPerRepoHTMLAndIndex(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	makeRepoWithCommit(t, filepath.Join(root, "alpha"), "a.go", "package a\n")
+	makeRepoWithCommit(t, filepath.Join(root, "beta"), "b.py", "print('b')\n")
+
+	scanOut := t.TempDir()
+	reportDir := t.TempDir()
+
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", root,
+		"--output", scanOut,
+		"--report-dir", reportDir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("scan --report-dir: %v", err)
+	}
+
+	// Every successful repo gets a standalone HTML named <slug>.html.
+	for _, slug := range []string{"alpha", "beta"} {
+		path := filepath.Join(reportDir, slug+".html")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("per-repo report missing: %v", err)
+		}
+		if !strings.Contains(string(b), "<!DOCTYPE html>") {
+			t.Errorf("%s should be a full HTML document", path)
+		}
+		// Paths inside the per-repo report must NOT carry a
+		// `<repo>:` prefix — each tab is standalone, so LoadJSONL
+		// (not LoadMultiJSONL) was used and file paths appear raw.
+		if strings.Contains(string(b), slug+":") {
+			t.Errorf("per-repo report %s contains a `%s:` path prefix; Dataset was loaded as multi-repo", path, slug)
+		}
+	}
+
+	// index.html links to each per-repo report.
+	indexBytes, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatalf("index.html missing: %v", err)
+	}
+	index := string(indexBytes)
+	if !strings.Contains(index, `href="alpha.html"`) || !strings.Contains(index, `href="beta.html"`) {
+		t.Errorf("index.html should link to both per-repo reports; got body excerpt: %.300s", index)
+	}
+	if !strings.Contains(index, "Scan Index") {
+		t.Errorf("index.html missing title block")
+	}
+}
+
+// makeRepoWithCommit initializes a git repo with one file and one
+// commit using a deterministic identity.
+func makeRepoWithCommit(t *testing.T, dir, file, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("add", ".")
+	run("commit", "-q", "-m", "initial")
 }
 
 func TestValidateDate(t *testing.T) {

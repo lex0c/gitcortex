@@ -872,6 +872,114 @@ func reportCmd() *cobra.Command {
 	return cmd
 }
 
+// renderScanReportDir is `scan --report-dir` in one place: for each
+// successful repo in the manifest, load only that repo's JSONL as a
+// standalone dataset, run the normal `report` pipeline into
+// <dir>/<slug>.html, and afterward emit <dir>/index.html linking
+// all of them. Intentionally uses LoadJSONL (single-input) rather
+// than LoadMultiJSONL so each per-repo report's paths carry no
+// `<repo>:` prefix — each tab of the experience is self-contained.
+func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOptions, sf stats.StatsFlags, topN int) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create report dir: %w", err)
+	}
+
+	// Build an index-row slice parallel to Manifest.Repos so the
+	// landing page preserves scan order. We can't skip failed/pending
+	// entries — operators need to see what didn't produce a report.
+	entries := make([]reportpkg.ScanIndexEntry, 0, len(result.Manifest.Repos))
+	var totalCommits int
+	allDevs := map[string]struct{}{}
+	maxCommits := 0
+
+	for _, m := range result.Manifest.Repos {
+		entry := reportpkg.ScanIndexEntry{
+			Slug:   m.Slug,
+			Path:   m.Path,
+			Status: m.Status,
+			Error:  m.Error,
+		}
+		if m.Status != "ok" {
+			entries = append(entries, entry)
+			continue
+		}
+
+		ds, err := stats.LoadJSONL(m.JSONL, loadOpts)
+		if err != nil {
+			// Treat load failure as a per-repo failure — index shows it,
+			// but the scan itself was already successful to that point.
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("load %s: %v", m.JSONL, err)
+			entries = append(entries, entry)
+			continue
+		}
+
+		outFile := filepath.Join(dir, m.Slug+".html")
+		f, err := os.Create(outFile)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", outFile, err)
+		}
+		if err := reportpkg.Generate(f, ds, m.Slug, topN, sf); err != nil {
+			f.Close()
+			return fmt.Errorf("generate report for %s: %w", m.Slug, err)
+		}
+		f.Close()
+
+		summary := stats.ComputeSummary(ds)
+		entry.Commits = summary.TotalCommits
+		entry.Devs = summary.TotalDevs
+		entry.Files = summary.TotalFiles
+		entry.Churn = summary.TotalAdditions + summary.TotalDeletions
+		entry.FirstCommitDate = summary.FirstCommitDate
+		entry.LastCommitDate = summary.LastCommitDate
+		entry.ReportHref = m.Slug + ".html"
+
+		totalCommits += entry.Commits
+		if entry.Commits > maxCommits {
+			maxCommits = entry.Commits
+		}
+		for _, c := range stats.TopContributors(ds, 0) {
+			allDevs[c.Email] = struct{}{}
+		}
+
+		entries = append(entries, entry)
+	}
+
+	indexPath := filepath.Join(dir, "index.html")
+	f, err := os.Create(indexPath)
+	if err != nil {
+		return fmt.Errorf("create index: %w", err)
+	}
+	defer f.Close()
+
+	var okCount, failedCount int
+	for _, e := range entries {
+		switch e.Status {
+		case "ok":
+			okCount++
+		case "failed", "pending":
+			failedCount++
+		}
+	}
+
+	data := reportpkg.ScanIndexData{
+		Roots:        result.Manifest.Roots,
+		Repos:        entries,
+		TotalRepos:   len(entries),
+		OKRepos:      okCount,
+		FailedRepos:  failedCount,
+		TotalCommits: totalCommits,
+		TotalDevs:    len(allDevs),
+		MaxCommits:   maxCommits,
+	}
+	if err := reportpkg.GenerateScanIndex(f, data); err != nil {
+		return fmt.Errorf("generate index: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Per-repo reports written to %s (%d ok, %d failed); open %s\n",
+		dir, okCount, failedCount, fileURL(indexPath))
+	return nil
+}
+
 // --- Scan ---
 
 func scanCmd() *cobra.Command {
@@ -886,6 +994,7 @@ func scanCmd() *cobra.Command {
 		to                 string
 		since              string
 		reportPath         string
+		reportDir          string
 		topN               int
 		extractIgnore      []string
 		batchSize          int
@@ -920,6 +1029,21 @@ breakdown — handy for showing aggregated work across many repos.`,
 			}
 			if from != "" && to != "" && from > to {
 				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+			// Report-flag combinations. --report is reserved for the
+			// only case that genuinely consolidates signal across repos
+			// — the per-developer profile; cross-repo team aggregation
+			// inflates hotspots/bus-factor/coupling with mixed-codebase
+			// noise and has been replaced by --report-dir which emits
+			// one standalone HTML per repo plus an index landing page.
+			if reportPath != "" && email == "" {
+				return fmt.Errorf("--report requires --email (profile consolidation); for per-repo HTML reports use --report-dir <dir>")
+			}
+			if reportPath != "" && reportDir != "" {
+				return fmt.Errorf("--report and --report-dir are mutually exclusive; pick profile (--report + --email) or per-repo (--report-dir)")
+			}
+			if email != "" && reportDir != "" {
+				return fmt.Errorf("--email filters a single consolidated profile report; combine it with --report <file>, not --report-dir")
 			}
 			// Resolve --since up-front. If this fails we'd otherwise
 			// discover the typo only after a full multi-repo scan —
@@ -977,48 +1101,53 @@ breakdown — handy for showing aggregated work across many repos.`,
 					filepath.Join(result.OutputDir, "manifest.json"))
 			}
 
-			if reportPath == "" {
-				fmt.Fprintf(os.Stderr, "Scan complete: %d JSONL file(s) in %s\n", len(result.JSONLs), result.OutputDir)
-				return nil
-			}
-
-			ds, err := stats.LoadMultiJSONL(result.JSONLs, stats.LoadOptions{
+			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles}
+			loadOpts := stats.LoadOptions{
 				From:         fromDate,
 				To:           to,
 				HalfLifeDays: churnHalfLife,
 				CoupMaxFiles: couplingMaxFiles,
-			})
-			if err != nil {
-				return fmt.Errorf("load consolidated dataset: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "Loaded %d commits across %d repo(s)\n", ds.CommitCount, len(result.JSONLs))
 
-			f, err := os.Create(reportPath)
-			if err != nil {
-				return fmt.Errorf("create report: %w", err)
-			}
-			defer f.Close()
-
-			// Label the report after the basename of the first --root
-			// (or the output dir as a fallback). "scan-scan-output" was
-			// the previous default; users find the root name far more
-			// recognizable as the H1 of the report.
-			repoLabel := filepath.Base(result.OutputDir)
-			if len(cfg.Roots) > 0 {
-				repoLabel = filepath.Base(absPath(cfg.Roots[0]))
-			}
-			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles}
+			// Path 1: profile consolidation — the one cross-repo
+			// aggregation that earns its place (a single dev's work
+			// across all scanned repos). Build a multi-repo Dataset
+			// (path-prefixed via LoadMultiJSONL) and filter by email
+			// at render time.
 			if email != "" {
+				ds, err := stats.LoadMultiJSONL(result.JSONLs, loadOpts)
+				if err != nil {
+					return fmt.Errorf("load consolidated dataset: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Loaded %d commits across %d repo(s)\n", ds.CommitCount, len(result.JSONLs))
+
+				f, err := os.Create(reportPath)
+				if err != nil {
+					return fmt.Errorf("create report: %w", err)
+				}
+				defer f.Close()
+
+				repoLabel := filepath.Base(absPath(cfg.Roots[0]))
 				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email); err != nil {
 					return fmt.Errorf("generate profile report: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(reportPath))
 				return nil
 			}
-			if err := reportpkg.Generate(f, ds, repoLabel, topN, sf); err != nil {
-				return fmt.Errorf("generate report: %w", err)
+
+			// Path 2: per-repo reports + index. Each repo is loaded
+			// standalone so its stats reflect its own codebase — no
+			// hotspot/bus-factor/coupling mixing across unrelated
+			// projects. The index.html lists every repo with cards
+			// linking into each per-repo report; failed extracts are
+			// surfaced inline so operators can spot them without
+			// opening the manifest.
+			if reportDir != "" {
+				return renderScanReportDir(result, reportDir, loadOpts, sf, topN)
 			}
-			fmt.Fprintf(os.Stderr, "Consolidated report written to %s\n", fileURL(reportPath))
+
+			// Path 3: no report flag — just confirm JSONLs landed.
+			fmt.Fprintf(os.Stderr, "Scan complete: %d JSONL file(s) in %s\n", len(result.JSONLs), result.OutputDir)
 			return nil
 		},
 	}
@@ -1032,8 +1161,9 @@ breakdown — handy for showing aggregated work across many repos.`,
 	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD (forwarded to the consolidated report)")
 	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD (forwarded to the consolidated report)")
 	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y); mutually exclusive with --from/--to")
-	cmd.Flags().StringVar(&reportPath, "report", "", "If set, generate a consolidated HTML report at this path after the scan")
-	cmd.Flags().IntVar(&topN, "top", 20, "Top-N entries per section in the consolidated report")
+	cmd.Flags().StringVar(&reportPath, "report", "", "With --email, write a developer profile consolidated across all scanned repos to this HTML file. For per-repo reports use --report-dir instead.")
+	cmd.Flags().StringVar(&reportDir, "report-dir", "", "Directory to write one standalone HTML report per repo plus an index.html landing page. Each per-repo report is equivalent to running `gitcortex report` on that repo alone — no cross-repo metric mixing.")
+	cmd.Flags().IntVar(&topN, "top", 20, "Top-N entries per section in each per-repo report")
 	cmd.Flags().StringSliceVar(&extractIgnore, "extract-ignore", nil, "Glob patterns forwarded to per-repo extract --ignore (e.g. package-lock.json)")
 	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Per-repo extract checkpoint interval")
 	cmd.Flags().BoolVar(&mailmap, "mailmap", false, "Use .mailmap (per repo) to normalize identities")

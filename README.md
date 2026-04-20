@@ -405,16 +405,22 @@ For workspaces containing many repos (an engineer's `~/work`, a platform team's 
 
 ### Scan: discover and aggregate every repo under a root
 
-Walk one or more directories, find every git repository (working trees and bare clones both detected), extract them in parallel, and optionally generate a consolidated HTML report. The main use case is "show my manager every project I've touched in the last year" or "give a platform team one dashboard across N services" without scripting the multi-extract + multi-input pipeline manually.
+Walk one or more directories, find every git repository (working trees and bare clones both detected), extract them in parallel, and optionally render HTML. Two output modes:
+
+- `--report-dir <dir>` — one standalone HTML per repo plus an `index.html` landing page linking them. Each per-repo report is equivalent to running `gitcortex report` against that repo alone; no metric mixing across unrelated codebases.
+- `--report <file> --email <address>` — a **single** consolidated profile report for one developer across every scanned repo. The only cross-repo aggregation in the feature, because "where did this person spend their time?" is the only question that genuinely benefits from pooling signal across projects.
+
+There is no third mode. Cross-repo consolidation at the team/codebase level inflates hotspots, bus factor, and coupling with noise from unrelated codebases; if that's what you want, inspect `manifest.json` or run `gitcortex report` per JSONL.
 
 ```bash
-# Discover and extract every repo under ~/work, one JSONL per repo
+# Discover and extract every repo under ~/work (JSONLs + manifest, no HTML)
 gitcortex scan --root ~/work --output ./scan-out
 
-# Consolidated report across all discovered repos
-gitcortex scan --root ~/work --output ./scan-out --report ./all.html
+# Per-repo HTML reports + index landing page
+gitcortex scan --root ~/work --output ./scan-out --report-dir ./reports
+# opens ./reports/index.html → click through to each repo
 
-# Personal cross-repo profile: only MY commits, with per-repo breakdown
+# Personal cross-repo profile: only MY commits, consolidated into one HTML
 gitcortex scan --root ~/work --output ./scan-out \
   --report ./me.html --email me@company.com --since 1y \
   --include-commit-messages
@@ -422,7 +428,7 @@ gitcortex scan --root ~/work --output ./scan-out \
 # Multiple roots, higher parallelism, pre-set ignore patterns
 gitcortex scan --root ~/work --root ~/personal --root ~/oss \
   --parallel 8 --max-depth 4 \
-  --output ./scan-out --report ./all.html
+  --output ./scan-out --report-dir ./reports
 ```
 
 The scan output directory holds:
@@ -450,7 +456,7 @@ vendor/
 
 Directory rules, globs, `**/foo`, and `!path` negations all work. Globbed negations like `!vendor*/keep` are honored — discovery descends into any dir where a negation rule could match a descendant. If `--ignore-file` is not set, scan looks for `.gitcortex-ignore` in the first `--root`.
 
-**Consolidated profile report.** When `scan --email me@company.com --report path.html` runs against a multi-repo dataset, the profile report renders a *Per-Repository Breakdown* section: commits, churn, files, active days, and share-of-total — all filtered to that developer's contributions (files count reflects only files the dev touched). The section is profile-only; the team report focuses on the aggregate across repos without a per-repo split (run `stats --input repo.jsonl` per-repo or read the `manifest.json` for that).
+**Consolidated profile report.** When `scan --email me@company.com --report path.html` runs against a multi-repo dataset, the profile report renders a *Per-Repository Breakdown* section: commits, churn, files, active days, and share-of-total — all filtered to that developer's contributions (files count reflects only files the dev touched). This is the one report that legitimately aggregates across repos; team-level views live in `--report-dir` (one HTML per repo, never mixed).
 
 **Flags worth knowing:**
 
