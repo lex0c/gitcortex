@@ -367,7 +367,19 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 
 			cm := ds.commits[cf.Commit]
 			if cm != nil {
-				fe.devLines[cm.email] += cf.Additions + cf.Deletions
+				// Only record a devLines entry when the change actually
+				// carried lines. Pure renames (R100 with 0/0 numstat)
+				// would otherwise create a zero-valued map entry that
+				// survives as "dev touched this file" into every
+				// downstream consumer — bus factor, unique-dev counts,
+				// dev network, and DevProfile authored counts — inflating
+				// them with contributions that are not authored work.
+				// devCommits still increments unconditionally so the
+				// "appeared on this file" signal stays available for
+				// callers that want it.
+				if lines := cf.Additions + cf.Deletions; lines > 0 {
+					fe.devLines[cm.email] += lines
+				}
 				fe.devCommits[cm.email]++
 
 				// Contributor files touched

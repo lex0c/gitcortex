@@ -381,11 +381,11 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
   <div style="display:grid; grid-template-columns:110px 1fr; gap:4px 12px; font-size:13px; margin-bottom:12px;">
     <span style="color:#656d76;">Scope</span>
-    <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
+    <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}{{if gt .ScopeHidden 0}} <span style="color:#656d76; font-style:italic;">(+{{.ScopeHidden}} more)</span>{{end}}</span>
 
     {{if .Extensions}}
     <span style="color:#656d76;">Extensions</span>
-    <span>{{range $i, $e := .Extensions}}{{if $i}}, {{end}}<b>{{$e.Ext}}</b> ({{printf "%.0f" $e.Pct}}%){{end}}</span>
+    <span>{{range $i, $e := .Extensions}}{{if $i}}, {{end}}<b>{{$e.Ext}}</b> ({{printf "%.0f" $e.Pct}}%){{end}}{{if gt .ExtensionsHidden 0}} <span style="color:#656d76; font-style:italic;">(+{{.ExtensionsHidden}} more)</span>{{end}}</span>
     {{end}}
 
     <span style="color:#656d76;">Specialization</span>
