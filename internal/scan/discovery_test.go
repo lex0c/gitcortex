@@ -163,6 +163,32 @@ func findColliding6HexPaths(maxAttempts int) (string, string, bool) {
 	return "", "", false
 }
 
+// `index` is the landing-page filename used by `scan --report-dir`.
+// A repo whose basename is literally `index` would emit
+// `<dir>/index.html`, colliding with (and getting overwritten by)
+// the landing page. Force the hash branch for reserved names so
+// the per-repo report file never lands on a reserved path.
+func TestAssignSlugs_ReservesIndex(t *testing.T) {
+	repos := []Repo{
+		{AbsPath: "/workspace/index"},
+		{AbsPath: "/other/unrelated"},
+	}
+	assignSlugs(repos)
+
+	for _, r := range repos {
+		if filepath.Base(r.AbsPath) == "index" && r.Slug == "index" {
+			t.Errorf("`index` basename must not produce the bare slug; landing page would be overwritten (path=%s, slug=%s)", r.AbsPath, r.Slug)
+		}
+	}
+	// Case-insensitivity: `Index` would also collide on a case-
+	// insensitive filesystem serving the HTML.
+	repos = []Repo{{AbsPath: "/workspace/Index"}}
+	assignSlugs(repos)
+	if strings.EqualFold(repos[0].Slug, "index") {
+		t.Errorf("`Index` basename must also be reserved; got %q", repos[0].Slug)
+	}
+}
+
 // Regression: on macOS (APFS/HFS+ default) and Windows (NTFS),
 // `Repo.jsonl` and `repo.jsonl` are the same file on disk. A
 // case-sensitive slug compare would hand both repos the bare

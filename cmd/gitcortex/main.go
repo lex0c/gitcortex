@@ -914,14 +914,29 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 			continue
 		}
 
+		// All render-time errors for a single repo (create the output
+		// file, template.Execute) get demoted to an inline failure and
+		// the loop continues to the next repo — matching the policy
+		// already applied above for LoadJSONL. Aborting the batch on
+		// one bad render would discard every HTML already written and
+		// skip the index entirely, leaving operators staring at an
+		// incomplete directory with no way to discover the state.
 		outFile := filepath.Join(dir, m.Slug+".html")
 		f, err := os.Create(outFile)
 		if err != nil {
-			return fmt.Errorf("create %s: %w", outFile, err)
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("create %s: %v", outFile, err)
+			entries = append(entries, entry)
+			continue
 		}
 		if err := reportpkg.Generate(f, ds, m.Slug, topN, sf); err != nil {
 			f.Close()
-			return fmt.Errorf("generate report for %s: %w", m.Slug, err)
+			// Best-effort cleanup: leave nothing half-written on disk.
+			_ = os.Remove(outFile)
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("render %s: %v", m.Slug, err)
+			entries = append(entries, entry)
+			continue
 		}
 		f.Close()
 
@@ -952,12 +967,20 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 	}
 	defer f.Close()
 
-	var okCount, failedCount int
+	// Pending and failed live in separate buckets: pending means the
+	// worker never reached the repo (user cancelled mid-scan, or a
+	// future scheduling change), while failed means the extract was
+	// attempted and broke. Conflating them in the summary strip would
+	// mislead operators reading a cancel-shaped failure as a real
+	// repo-level problem.
+	var okCount, failedCount, pendingCount int
 	for _, e := range entries {
 		switch e.Status {
 		case "ok":
 			okCount++
-		case "failed", "pending":
+		case "pending", "skipped":
+			pendingCount++
+		default:
 			failedCount++
 		}
 	}
@@ -968,6 +991,7 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 		TotalRepos:   len(entries),
 		OKRepos:      okCount,
 		FailedRepos:  failedCount,
+		PendingRepos: pendingCount,
 		TotalCommits: totalCommits,
 		TotalDevs:    len(allDevs),
 		MaxCommits:   maxCommits,
@@ -975,8 +999,19 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 	if err := reportpkg.GenerateScanIndex(f, data); err != nil {
 		return fmt.Errorf("generate index: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Per-repo reports written to %s (%d ok, %d failed); open %s\n",
-		dir, okCount, failedCount, fileURL(indexPath))
+
+	// Log line tracks the summary card: only non-zero buckets appear
+	// so a fully-successful scan doesn't confuse the operator with
+	// trailing "0 failed, 0 pending".
+	parts := []string{fmt.Sprintf("%d ok", okCount)}
+	if failedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failedCount))
+	}
+	if pendingCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d pending", pendingCount))
+	}
+	fmt.Fprintf(os.Stderr, "Per-repo reports written to %s (%s); open %s\n",
+		dir, strings.Join(parts, ", "), fileURL(indexPath))
 	return nil
 }
 

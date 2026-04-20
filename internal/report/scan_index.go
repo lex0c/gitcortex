@@ -30,14 +30,18 @@ type ScanIndexData struct {
 	GeneratedAt string
 	Roots       []string
 	Repos       []ScanIndexEntry
-	// TotalRepos / OKRepos / FailedRepos are precomputed so the
-	// template doesn't need conditional arithmetic; the summary strip
-	// at the top renders directly from these.
-	TotalRepos    int
-	OKRepos       int
-	FailedRepos   int
-	TotalCommits  int
-	TotalDevs     int
+	// TotalRepos / OKRepos / FailedRepos / PendingRepos are
+	// precomputed so the template doesn't need conditional arithmetic.
+	// Pending is distinct from failed: a pending repo is one the
+	// worker never reached (cancelled mid-scan), a failed repo is one
+	// whose extract or render broke. Mixing them in the summary would
+	// read a cancel-shaped partial run as a fleet-of-errors.
+	TotalRepos   int
+	OKRepos      int
+	FailedRepos  int
+	PendingRepos int
+	TotalCommits int
+	TotalDevs    int
 	// Largest repo commit count — used to normalize the bar widths so
 	// the relative-volume bars are visually comparable across repos.
 	MaxCommits int
@@ -100,7 +104,7 @@ footer { margin-top: 30px; color: #656d76; font-size: 12px; text-align: center; 
 <p class="subtitle">Generated {{.GeneratedAt}}{{if .Roots}} · roots: {{range $i, $r := .Roots}}{{if $i}}, {{end}}<code>{{$r}}</code>{{end}}{{end}}</p>
 
 <div class="summary">
-  <div class="summary-card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}</div></div>
+  <div class="summary-card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>
   <div class="summary-card"><div class="label">Total commits</div><div class="value" title="{{thousands .TotalCommits}}">{{humanize .TotalCommits}}</div></div>
   <div class="summary-card"><div class="label">Unique devs</div><div class="value">{{thousands .TotalDevs}}</div></div>
 </div>

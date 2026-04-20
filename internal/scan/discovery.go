@@ -187,6 +187,23 @@ func Discover(ctx context.Context, roots []string, matcher *Matcher, maxDepth in
 // grows the length if a truncation collision occurs.
 const initialSlugHashLen = 6
 
+// reservedSlugs are base names that cannot be emitted bare because
+// downstream consumers reserve the name for their own output file.
+// `scan --report-dir` writes <dir>/index.html as the landing page;
+// a repo whose basename was literally `index` would collide and
+// silently get overwritten by the landing or vice versa. Forcing
+// the hash branch for reserved names avoids the collision without
+// losing the repo. Compared case-insensitively to align with the
+// case-folding done elsewhere in assignSlugs.
+var reservedSlugs = map[string]struct{}{
+	"index": {},
+}
+
+func isReservedSlug(base string) bool {
+	_, ok := reservedSlugs[strings.ToLower(base)]
+	return ok
+}
+
 // assignSlugs derives a unique slug per repo from its basename, falling
 // back to `<basename>-<shortHash(absPath)>` when two repos share a name.
 // The slug is also the JSONL filename stem and the persistence key
@@ -239,7 +256,7 @@ func assignSlugs(repos []Repo) {
 		for i := range repos {
 			base := bases[i]
 			slug := base
-			if counts[strings.ToLower(base)] > 1 {
+			if counts[strings.ToLower(base)] > 1 || isReservedSlug(base) {
 				h := sha1.Sum([]byte(repos[i].AbsPath))
 				slug = fmt.Sprintf("%s-%s", base, hex.EncodeToString(h[:])[:hashLen])
 			}

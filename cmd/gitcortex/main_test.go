@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lex0c/gitcortex/internal/scan"
+	"github.com/lex0c/gitcortex/internal/stats"
 )
 
 // scanCmd must validate --since BEFORE running the discovery walk
@@ -199,6 +202,114 @@ func TestScanCmd_ReportDirGeneratesPerRepoHTMLAndIndex(t *testing.T) {
 	}
 	if !strings.Contains(index, "Scan Index") {
 		t.Errorf("index.html missing title block")
+	}
+}
+
+// renderScanReportDir must render the index for a manifest that
+// mixes ok / failed / pending statuses. Failed entries show their
+// error message, pending entries render with the pending pill, and
+// neither inflates the "failed" count in the summary card.
+func TestRenderScanReportDir_MixedStatuses(t *testing.T) {
+	dir := t.TempDir()
+	okJSONL := filepath.Join(dir, "good.jsonl")
+	jsonlContent := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-01T00:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"a.go","additions":10,"deletions":0}
+`
+	if err := os.WriteFile(okJSONL, []byte(jsonlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: dir,
+		Manifest: scan.Manifest{
+			Roots: []string{"/fake/root"},
+			Repos: []scan.ManifestRepo{
+				{Slug: "good", Path: "/fake/root/good", Status: "ok", JSONL: okJSONL},
+				{Slug: "broken", Path: "/fake/root/broken", Status: "failed", Error: "simulated extract crash"},
+				{Slug: "skipped", Path: "/fake/root/skipped", Status: "pending"},
+			},
+		},
+	}
+
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatalf("renderScanReportDir returned error despite inline-failure policy: %v", err)
+	}
+
+	// OK entry's report file exists; failed/pending do not.
+	if _, err := os.Stat(filepath.Join(reportDir, "good.html")); err != nil {
+		t.Errorf("good.html missing: %v", err)
+	}
+	for _, unwanted := range []string{"broken.html", "skipped.html"} {
+		if _, err := os.Stat(filepath.Join(reportDir, unwanted)); err == nil {
+			t.Errorf("%s should NOT be written — status was not ok", unwanted)
+		}
+	}
+
+	indexB, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatalf("index.html: %v", err)
+	}
+	index := string(indexB)
+
+	// Summary card splits failed and pending correctly: "(1 failed)"
+	// AND "(1 pending)" appear, not "(2 failed)".
+	if strings.Contains(index, "(2 failed)") {
+		t.Error("summary miscounted pending as failed — `(2 failed)` appeared instead of separate buckets")
+	}
+	if !strings.Contains(index, "1 failed") {
+		t.Errorf("summary should show `1 failed`; index excerpt: %.600s", index)
+	}
+	if !strings.Contains(index, "1 pending") {
+		t.Errorf("summary should show `1 pending`; index excerpt: %.600s", index)
+	}
+
+	// Failed entry's error bubbles up to the card.
+	if !strings.Contains(index, "simulated extract crash") {
+		t.Error("failed entry's error message missing from index")
+	}
+
+	// Status pills render for each entry. Grep for the pill classes.
+	for _, want := range []string{"status-ok", "status-failed", "status-pending"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index missing %q pill — a status branch lost its style", want)
+		}
+	}
+
+	// Only OK entries carry an href; failed/pending must not link to
+	// a file that doesn't exist.
+	if strings.Contains(index, `href="broken.html"`) || strings.Contains(index, `href="skipped.html"`) {
+		t.Error("index links to a non-existent per-repo HTML for a non-ok entry")
+	}
+}
+
+// Render with zero successful repos must still emit an index
+// without tripping on the MaxCommits==0 guard in the bar-width
+// template expression.
+func TestRenderScanReportDir_AllFailedStillEmitsIndex(t *testing.T) {
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: t.TempDir(),
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				{Slug: "a", Status: "failed", Error: "boom"},
+				{Slug: "b", Status: "failed", Error: "also boom"},
+			},
+		},
+	}
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatalf("render should not fail on all-failed manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(reportDir, "index.html")); err != nil {
+		t.Fatalf("index.html must be emitted even when every repo failed: %v", err)
 	}
 }
 
