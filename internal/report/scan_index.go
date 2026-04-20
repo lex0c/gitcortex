@@ -1,6 +1,7 @@
 package report
 
 import (
+	"fmt"
 	"html/template"
 	"io"
 	"time"
@@ -22,7 +23,57 @@ type ScanIndexEntry struct {
 	Churn           int64
 	FirstCommitDate string
 	LastCommitDate  string
-	ReportHref      string
+	// LastCommitAgo is LastCommitDate humanized relative to the
+	// index generation time: "today" / "Nd ago" / "Nmo ago" / "Ny ago".
+	// Lets operators spot abandoned repos in a list of 30 without
+	// doing date math in their head.
+	LastCommitAgo string
+	// RecencyBucket classifies LastCommitAgo into "fresh" (≤ 30 days),
+	// "stable" (≤ 1 year), "stale" (> 1 year). Drives the badge color
+	// in the template so the cold repos stand out at a glance.
+	RecencyBucket string
+	ReportHref    string
+}
+
+// HumanizeAgo is the caller entry point for the index: formats
+// `lastDate` (YYYY-MM-DD) as a compact "ago" phrase relative to
+// wall-clock now, and classifies recency into fresh / stable /
+// stale for template coloring. Empty pair on unparsable input so
+// failed/pending rows with no dates render nothing.
+func HumanizeAgo(lastDate string) (label, bucket string) {
+	return humanizeAgoAt(lastDate, time.Now())
+}
+
+// humanizeAgoAt is the testable core — same logic as HumanizeAgo
+// but takes an explicit "now" so tests can pin the reference time
+// and avoid drift.
+func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
+	t, err := time.Parse("2006-01-02", lastDate)
+	if err != nil {
+		return "", ""
+	}
+	days := int(now.Sub(t).Hours() / 24)
+	switch {
+	case days < 0:
+		return "", ""
+	case days == 0:
+		label = "today"
+	case days < 30:
+		label = fmt.Sprintf("%dd ago", days)
+	case days < 365:
+		label = fmt.Sprintf("%dmo ago", days/30)
+	default:
+		label = fmt.Sprintf("%dy ago", days/365)
+	}
+	switch {
+	case days <= 30:
+		bucket = "fresh"
+	case days <= 365:
+		bucket = "stable"
+	default:
+		bucket = "stale"
+	}
+	return label, bucket
 }
 
 // ScanIndexData is the top-level template input for the index page.
@@ -89,6 +140,10 @@ h1 { font-size: 24px; margin-bottom: 4px; }
 .repo .bar-outer { flex: 1; height: 8px; background: #eaeef2; border-radius: 3px; overflow: hidden; }
 .repo .bar-inner { height: 100%; background: #2da44e; }
 .repo .dates { font-size: 11px; color: #656d76; font-family: "SF Mono", Consolas, monospace; }
+.recency { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin-bottom: 4px; }
+.recency.fresh { background: #dafbe1; color: #1a7f37; }
+.recency.stable { background: #eaeef2; color: #656d76; }
+.recency.stale { background: #fff4d4; color: #9a6700; }
 .status-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .status-ok { background: #dafbe1; color: #1a7f37; }
 .status-failed { background: #ffebe9; color: #cf222e; }
@@ -138,6 +193,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span class="lbl">files</span>
   </div>
   <div class="dates">
+    {{if .LastCommitAgo}}<span class="recency {{.RecencyBucket}}">{{.LastCommitAgo}}</span><br>{{end}}
     {{.FirstCommitDate}}<br>→ {{.LastCommitDate}}
   </div>
   {{else}}

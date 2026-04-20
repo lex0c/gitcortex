@@ -947,6 +947,7 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 		entry.Churn = summary.TotalAdditions + summary.TotalDeletions
 		entry.FirstCommitDate = summary.FirstCommitDate
 		entry.LastCommitDate = summary.LastCommitDate
+		entry.LastCommitAgo, entry.RecencyBucket = reportpkg.HumanizeAgo(summary.LastCommitDate)
 		entry.ReportHref = m.Slug + ".html"
 
 		totalCommits += entry.Commits
