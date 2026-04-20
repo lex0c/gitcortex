@@ -1264,7 +1264,13 @@ type DevProfile struct {
 	LastDate        string
 	TopFiles        []DevFileContrib
 	Scope           []DirScope
-	Extensions      []DevExtContrib
+	// ScopeHidden / ExtensionsHidden count the buckets dropped by the
+	// top-5 truncation so CLI and HTML can surface "+N more" — without
+	// this, a reader sees Pct summing to e.g. 85% and wonders if the
+	// math is broken. Zero when the full set fits in 5.
+	ScopeHidden      int
+	Extensions       []DevExtContrib
+	ExtensionsHidden int
 	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
@@ -1554,11 +1560,24 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 				dirCount[dir]++
 			}
 		}
+		// Pct denominator is the count of files the dev authored lines
+		// on (len(devFiles[email])), NOT cs.FilesTouched. The latter
+		// includes pure renames (path appears in the dev's change set
+		// but with zero additions/deletions), which would never appear
+		// in dirCount/extCount numerators — creating a silent
+		// under-100% sum. Using len(devFiles[email]) keeps Pct summing
+		// to 100% (modulo top-5 truncation) and aligns the visible
+		// numbers with the Herfindahl specialization index below,
+		// which also operates on dirCount.
+		authored := 0
+		if files, ok := devFiles[email]; ok {
+			authored = len(files)
+		}
 		var scope []DirScope
 		for dir, count := range dirCount {
 			pct := 0.0
-			if cs.FilesTouched > 0 {
-				pct = math.Round(float64(count)/float64(cs.FilesTouched)*1000) / 10
+			if authored > 0 {
+				pct = math.Round(float64(count)/float64(authored)*1000) / 10
 			}
 			scope = append(scope, DirScope{Dir: dir, Files: count, Pct: pct})
 		}
@@ -1579,7 +1598,9 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			specValues = append(specValues, count)
 		}
 		specialization := herfindahl(specValues)
+		scopeHidden := 0
 		if len(scope) > 5 {
+			scopeHidden = len(scope) - 5
 			scope = scope[:5]
 		}
 
@@ -1610,8 +1631,11 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		var extensions []DevExtContrib
 		for ext, acc := range extCount {
 			pct := 0.0
-			if cs.FilesTouched > 0 {
-				pct = math.Round(float64(acc.files)/float64(cs.FilesTouched)*1000) / 10
+			// Same denominator as Scope above — authored-file count,
+			// not FilesTouched — so pure renames don't deflate the
+			// percentages silently.
+			if authored > 0 {
+				pct = math.Round(float64(acc.files)/float64(authored)*1000) / 10
 			}
 			extensions = append(extensions, DevExtContrib{
 				Ext: ext, Files: acc.files, Churn: acc.churn, Pct: pct,
@@ -1633,7 +1657,9 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			}
 			return extensions[i].Ext < extensions[j].Ext
 		})
+		extensionsHidden := 0
 		if len(extensions) > 5 {
+			extensionsHidden = len(extensions) - 5
 			extensions = extensions[:5]
 		}
 
@@ -1683,7 +1709,9 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope, Extensions: extensions, Specialization: specialization,
+			TopFiles: topFiles, Scope: scope, ScopeHidden: scopeHidden,
+			Extensions: extensions, ExtensionsHidden: extensionsHidden,
+			Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,

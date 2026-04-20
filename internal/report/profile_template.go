@@ -87,7 +87,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     {{range $i, $s := .Profile.Scope}}<div style="flex:{{printf "%.0f" $s.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$s.Dir}} — {{$s.Files}} files ({{printf "%.0f" $s.Pct}}%)">{{if gt $s.Pct 8.0}}{{$s.Dir}} {{printf "%.0f" $s.Pct}}%{{end}}</div>{{end}}
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; font-size:11px; color:#656d76;">
-    {{range $i, $s := .Profile.Scope}}<span><span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}};"></span> {{$s.Dir}} ({{printf "%.0f" $s.Pct}}%)</span>{{end}}
+    {{range $i, $s := .Profile.Scope}}<span><span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}};"></span> {{$s.Dir}} ({{printf "%.0f" $s.Pct}}%)</span>{{end}}{{if gt .Profile.ScopeHidden 0}}<span style="font-style:italic;">+{{.Profile.ScopeHidden}} more directories not shown</span>{{end}}
   </div>
 </div>
 
@@ -99,7 +99,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     {{range $i, $e := .Profile.Extensions}}<div style="flex:{{printf "%.0f" $e.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$e.Ext}} — {{$e.Files}} files ({{printf "%.0f" $e.Pct}}%)">{{if gt $e.Pct 8.0}}{{$e.Ext}} {{printf "%.0f" $e.Pct}}%{{end}}</div>{{end}}
   </div>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; font-size:11px; color:#656d76;">
-    {{range $i, $e := .Profile.Extensions}}<span><span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}};"></span> {{$e.Ext}} ({{printf "%.0f" $e.Pct}}%)</span>{{end}}
+    {{range $i, $e := .Profile.Extensions}}<span><span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}};"></span> {{$e.Ext}} ({{printf "%.0f" $e.Pct}}%)</span>{{end}}{{if gt .Profile.ExtensionsHidden 0}}<span style="font-style:italic;">+{{.Profile.ExtensionsHidden}} more extensions not shown</span>{{end}}
   </div>
 </div>
 {{end}}

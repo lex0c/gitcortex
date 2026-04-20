@@ -456,6 +456,72 @@ func TestDevProfileExtensionsAllNone(t *testing.T) {
 	}
 }
 
+// Regression: Pct denominator is len(devFiles[email]), NOT
+// cs.FilesTouched. FilesTouched includes pure-rename contributions
+// (the dev appears in the file's contribFiles but adds zero lines),
+// which would deflate all percentages because those files never make
+// it into the Scope/Extension numerators. Under the corrected
+// denominator the visible Pcts sum to 100 (modulo top-5 truncation).
+// This test drives that divergence: FilesTouched = 5 but only 4
+// files carry non-zero devLines, so the denominators differ.
+func TestDevProfileExtensionsPctDenominatorIgnoresRenames(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			// FilesTouched = 5 simulates the dev having appeared on a
+			// 5th file via a pure rename (no add/del lines). The files
+			// map below only has 4 entries with non-zero devLines.
+			"alice@x": {Email: "alice@x", Commits: 5, FilesTouched: 5, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"a.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"b.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"c.go": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"d.py": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+
+	// Visible extensions: .go with 3/4 = 75%, .py with 1/4 = 25%.
+	// Under the old (FilesTouched=5) denominator the sum would be
+	// 3/5 + 1/5 = 80% — a silent 20% gap from the rename.
+	var sum float64
+	for _, e := range p.Extensions {
+		sum += e.Pct
+	}
+	if sum != 100.0 {
+		t.Errorf("Extensions Pct sum = %.1f, want 100.0 (denominator should be authored files, not FilesTouched)", sum)
+	}
+
+	// Spot-check individual values.
+	var goPct, pyPct float64
+	for _, e := range p.Extensions {
+		if e.Ext == ".go" {
+			goPct = e.Pct
+		}
+		if e.Ext == ".py" {
+			pyPct = e.Pct
+		}
+	}
+	if goPct != 75.0 {
+		t.Errorf(".go Pct = %.1f, want 75.0 (3/4)", goPct)
+	}
+	if pyPct != 25.0 {
+		t.Errorf(".py Pct = %.1f, want 25.0 (1/4)", pyPct)
+	}
+
+	// Same invariant on Scope: a.go/b.go/c.go all at root, d.py at
+	// root → single bucket "." at 100%. Renames shouldn't count.
+	var scopeSum float64
+	for _, s := range p.Scope {
+		scopeSum += s.Pct
+	}
+	if scopeSum != 100.0 {
+		t.Errorf("Scope Pct sum = %.1f, want 100.0", scopeSum)
+	}
+}
+
 // Edge case: a dev whose commits never touch any file (all commits
 // had files_changed = 0, so no commit_file records reached fe.devLines).
 // devFiles[email] is absent; Extensions must be nil — both HTML
@@ -472,6 +538,104 @@ func TestDevProfileExtensionsEmpty(t *testing.T) {
 	p := DevProfiles(ds, "ghost@x", 0)[0]
 	if len(p.Extensions) != 0 {
 		t.Errorf("Extensions = %+v, want empty", p.Extensions)
+	}
+}
+
+// Regression: once a dev has >5 buckets the top-5 truncation is the
+// ONLY way Pct sum can drop below 100. Lock that invariant — a
+// silent change to the cap size or the sort would surface here.
+func TestDevProfileExtensionsTruncationSum(t *testing.T) {
+	// 6 files, all single-ext, each 1 file → all 6 buckets carry the
+	// same Files=1. Top-5 sort keeps 5 (tiebroken by churn desc then
+	// ext asc); the 6th drops off, contributing its ~16.7% to the
+	// gap. Math: 5 × round(1/6 × 1000)/10 = 5 × 16.7 = 83.5%.
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Commits: 6, FilesTouched: 6, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"a.go":  {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}},
+			"b.py":  {devLines: map[string]int64{"alice@x": 50}, devCommits: map[string]int{"alice@x": 1}},
+			"c.rs":  {devLines: map[string]int64{"alice@x": 40}, devCommits: map[string]int{"alice@x": 1}},
+			"d.ts":  {devLines: map[string]int64{"alice@x": 30}, devCommits: map[string]int{"alice@x": 1}},
+			"e.md":  {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}},
+			"f.sh":  {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+	if len(p.Extensions) != 5 {
+		t.Fatalf("Extensions len = %d, want 5 (truncated from 6)", len(p.Extensions))
+	}
+	var sum float64
+	for _, e := range p.Extensions {
+		sum += e.Pct
+	}
+	// Must be strictly <100 (truncated) but close (~83.5 for this
+	// fixture). Wide tolerance — the exact value is rounding-sensitive.
+	if sum >= 100.0 {
+		t.Errorf("truncated Extensions sum = %.1f, want strictly < 100", sum)
+	}
+	if sum < 80.0 || sum > 86.0 {
+		t.Errorf("truncated Extensions sum = %.1f, want ~83.5 (5/6 buckets × 16.7%%)", sum)
+	}
+}
+
+// Regression: when truncation drops buckets, the count goes into
+// ScopeHidden/ExtensionsHidden so renderers can surface "+N more"
+// next to the visible list. Silent when no truncation (the whole
+// point is to appear only when the Pct-sum <100% case makes readers
+// suspect a bug).
+func TestDevProfileHiddenCounters(t *testing.T) {
+	// Build a dev with 7 extensions and 6 dirs so both counters hit.
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"alice@x": {Email: "alice@x", Commits: 7, FilesTouched: 7, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"d1/a.go":  {devLines: map[string]int64{"alice@x": 70}, devCommits: map[string]int{"alice@x": 1}},
+			"d2/b.py":  {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}},
+			"d3/c.rs":  {devLines: map[string]int64{"alice@x": 50}, devCommits: map[string]int{"alice@x": 1}},
+			"d4/d.ts":  {devLines: map[string]int64{"alice@x": 40}, devCommits: map[string]int{"alice@x": 1}},
+			"d5/e.md":  {devLines: map[string]int64{"alice@x": 30}, devCommits: map[string]int{"alice@x": 1}},
+			"d6/f.sh":  {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}},
+			"d6/g.yml": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+
+	// 6 dirs → 5 visible, 1 hidden.
+	if p.ScopeHidden != 1 {
+		t.Errorf("ScopeHidden = %d, want 1", p.ScopeHidden)
+	}
+	// 7 extensions → 5 visible, 2 hidden.
+	if p.ExtensionsHidden != 2 {
+		t.Errorf("ExtensionsHidden = %d, want 2", p.ExtensionsHidden)
+	}
+}
+
+// Silent when nothing to hide — the counters must be zero so the
+// renderers don't emit "+0 more" (noise) for the common case.
+func TestDevProfileHiddenCountersZeroWhenFits(t *testing.T) {
+	ds := &Dataset{
+		contributors: map[string]*ContributorStat{
+			"bob@x": {Email: "bob@x", Commits: 3, FilesTouched: 3, ActiveDays: 1},
+		},
+		files: map[string]*fileEntry{
+			"src/a.go":  {devLines: map[string]int64{"bob@x": 10}, devCommits: map[string]int{"bob@x": 1}},
+			"src/b.go":  {devLines: map[string]int64{"bob@x": 10}, devCommits: map[string]int{"bob@x": 1}},
+			"docs/x.md": {devLines: map[string]int64{"bob@x": 5}, devCommits: map[string]int{"bob@x": 1}},
+		},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
+	}
+	p := DevProfiles(ds, "bob@x", 0)[0]
+	if p.ScopeHidden != 0 || p.ExtensionsHidden != 0 {
+		t.Errorf("Hidden counters: Scope=%d Ext=%d, want 0/0 (dev has ≤5 buckets each)",
+			p.ScopeHidden, p.ExtensionsHidden)
 	}
 }
 

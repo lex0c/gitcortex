@@ -467,6 +467,9 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				}
 				fmt.Fprintf(f.w, "%s (%.0f%%)", s.Dir, s.Pct)
 			}
+			if p.ScopeHidden > 0 {
+				fmt.Fprintf(f.w, "  (+%d more)", p.ScopeHidden)
+			}
 			fmt.Fprintln(f.w)
 			if len(p.Extensions) > 0 {
 				fmt.Fprintf(f.w, "  Extensions:    ")
@@ -475,6 +478,9 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 						fmt.Fprintf(f.w, ", ")
 					}
 					fmt.Fprintf(f.w, "%s (%.0f%%)", e.Ext, e.Pct)
+				}
+				if p.ExtensionsHidden > 0 {
+					fmt.Fprintf(f.w, "  (+%d more)", p.ExtensionsHidden)
 				}
 				fmt.Fprintln(f.w)
 			}
