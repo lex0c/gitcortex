@@ -24,6 +24,11 @@ func TestHumanizeAgoAt(t *testing.T) {
 		{"30 days exact", "2026-03-21", "1mo ago", "fresh"},
 		{"two months", "2026-02-15", "2mo ago", "stable"},
 		{"eleven months", "2025-05-25", "11mo ago", "stable"},
+		// Month label must not exceed "11mo" — days/30 = 12 on the
+		// 360-day boundary, but the label is clamped so the stable
+		// band always reads as sub-year.
+		{"month clamp at 360 days", "2025-04-25", "11mo ago", "stable"},
+		{"month clamp at 364 days", "2025-04-21", "11mo ago", "stable"},
 		// 365-day boundary: still "stable" at exactly one year,
 		// "stale" the day after. 2025-04-20 is 365 days before now.
 		{"one year exact (stable boundary)", "2025-04-20", "1y ago", "stable"},
@@ -33,7 +38,12 @@ func TestHumanizeAgoAt(t *testing.T) {
 		{"bad input", "not-a-date", "", ""},
 		// Future dates (clock skew) yield empty — we don't label "in 3d"
 		// on an index that exists to surface recency of PAST commits.
-		{"future date", "2026-05-01", "", ""},
+		{"full-day future", "2026-05-01", "", ""},
+		// Sub-day future (committer-date hours ahead of scanner clock)
+		// lands in days==0 → "today". Documented: the index works at
+		// day granularity and "today" is the least-misleading fallback
+		// for intra-day skew.
+		{"same-day future (sub-day skew)", "2026-04-20", "today", "fresh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -88,6 +98,18 @@ func TestGenerateScanIndex_RecencyChipRenders(t *testing.T) {
 	}
 	if !strings.Contains(out, `>2d ago<`) {
 		t.Error("recency label text missing")
+	}
+	// Anchor the chip inside the `.dates` wrapper — without this,
+	// a future template change that moved the chip outside the
+	// dates cell (losing the date context) would still satisfy the
+	// class-only assertion above.
+	if !strings.Contains(out, `class="dates"`) {
+		t.Error("`.dates` wrapper missing — the recency chip has lost its structural anchor")
+	}
+	datesIdx := strings.Index(out, `class="dates"`)
+	recencyIdx := strings.Index(out, `class="recency fresh"`)
+	if datesIdx < 0 || recencyIdx < 0 || recencyIdx < datesIdx {
+		t.Errorf("recency chip not inside `.dates` wrapper: dates@%d recency@%d", datesIdx, recencyIdx)
 	}
 	// Failed entry has no dates block, so no recency chip should
 	// render for it — a weak but useful guard against a template

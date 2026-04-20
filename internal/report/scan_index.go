@@ -47,6 +47,16 @@ func HumanizeAgo(lastDate string) (label, bucket string) {
 // humanizeAgoAt is the testable core — same logic as HumanizeAgo
 // but takes an explicit "now" so tests can pin the reference time
 // and avoid drift.
+//
+// Future-commit policy: a date strictly in the past ("days >= 0
+// when measured against midnight-to-midnight") is labeled.
+// Anything earlier than today's date (even by one hour, via
+// committer-date clock skew or CI rewrite) yields empty — the
+// index exists to surface how stale each repo is, and "in 3d" on
+// a repo whose scanner clock drifted would be actively misleading.
+// Sub-day skew within TODAY lands in `days == 0 → "today"`, which
+// is the most reasonable fallback given the template's day
+// granularity.
 func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
 	t, err := time.Parse("2006-01-02", lastDate)
 	if err != nil {
@@ -61,7 +71,16 @@ func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
 	case days < 30:
 		label = fmt.Sprintf("%dd ago", days)
 	case days < 365:
-		label = fmt.Sprintf("%dmo ago", days/30)
+		// Cap the month reading at 11 — otherwise `days/30` emits
+		// "12mo ago" at days 360-364, which reads as older than
+		// "1y ago" even though it's actually in the still-stable
+		// (≤365d) band. Clamping keeps the label progression
+		// monotonic with the bucket color.
+		months := days / 30
+		if months > 11 {
+			months = 11
+		}
+		label = fmt.Sprintf("%dmo ago", months)
 	default:
 		label = fmt.Sprintf("%dy ago", days/365)
 	}
@@ -79,7 +98,6 @@ func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
 // ScanIndexData is the top-level template input for the index page.
 type ScanIndexData struct {
 	GeneratedAt string
-	Roots       []string
 	Repos       []ScanIndexEntry
 	// TotalRepos / OKRepos / FailedRepos / PendingRepos are
 	// precomputed so the template doesn't need conditional arithmetic.
@@ -120,7 +138,6 @@ const scanIndexHTML = `<!DOCTYPE html>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
 h1 { font-size: 24px; margin-bottom: 4px; }
-.subtitle { color: #656d76; font-size: 13px; margin-bottom: 24px; }
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
 .summary-card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
 .summary-card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
@@ -194,7 +211,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   </div>
   <div class="dates">
     {{if .LastCommitAgo}}<span class="recency {{.RecencyBucket}}">{{.LastCommitAgo}}</span><br>{{end}}
-    {{.FirstCommitDate}}<br>→ {{.LastCommitDate}}
+    {{if .LastCommitDate}}{{.FirstCommitDate}}<br>→ {{.LastCommitDate}}{{end}}
   </div>
   {{else}}
   <div style="grid-column: span 5; color:#656d76; font-style:italic;">No report available.</div>

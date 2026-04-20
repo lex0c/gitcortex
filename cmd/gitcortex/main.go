@@ -987,7 +987,6 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 	}
 
 	data := reportpkg.ScanIndexData{
-		Roots:        result.Manifest.Roots,
 		Repos:        entries,
 		TotalRepos:   len(entries),
 		OKRepos:      okCount,
@@ -1001,15 +1000,22 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 		return fmt.Errorf("generate index: %w", err)
 	}
 
-	// Log line tracks the summary card: only non-zero buckets appear
-	// so a fully-successful scan doesn't confuse the operator with
-	// trailing "0 failed, 0 pending".
-	parts := []string{fmt.Sprintf("%d ok", okCount)}
+	// Log line tracks the summary card's zero-suppression: only
+	// non-zero buckets appear, and the opener is whichever bucket
+	// has a count so an all-failed scan reads as "2 failed" instead
+	// of the misleading "0 ok, 2 failed".
+	var parts []string
+	if okCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d ok", okCount))
+	}
 	if failedCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d failed", failedCount))
 	}
 	if pendingCount > 0 {
 		parts = append(parts, fmt.Sprintf("%d pending", pendingCount))
+	}
+	if len(parts) == 0 {
+		parts = []string{"0 repos"} // defensive; renderScanReportDir requires > 0 manifest entries to be reached at all
 	}
 	fmt.Fprintf(os.Stderr, "Per-repo reports written to %s (%s); open %s\n",
 		dir, strings.Join(parts, ", "), fileURL(indexPath))

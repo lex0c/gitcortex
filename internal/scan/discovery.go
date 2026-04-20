@@ -187,21 +187,23 @@ func Discover(ctx context.Context, roots []string, matcher *Matcher, maxDepth in
 // grows the length if a truncation collision occurs.
 const initialSlugHashLen = 6
 
-// reservedSlugs are base names that cannot be emitted bare because
-// downstream consumers reserve the name for their own output file.
+// isReservedSlug reports whether base would collide with a name
+// downstream consumers already use for their own output file.
 // `scan --report-dir` writes <dir>/index.html as the landing page;
-// a repo whose basename was literally `index` would collide and
-// silently get overwritten by the landing or vice versa. Forcing
-// the hash branch for reserved names avoids the collision without
-// losing the repo. Compared case-insensitively to align with the
-// case-folding done elsewhere in assignSlugs.
-var reservedSlugs = map[string]struct{}{
-	"index": {},
-}
-
+// a repo whose basename was literally `index` would overwrite it
+// (or be overwritten by it). Forcing the hash branch for reserved
+// names avoids the collision without losing the repo.
+//
+// Switch, not a package-level map, to keep the reserved set
+// immutable — a mutable map would let one test silently leak an
+// entry into every other test that runs afterward. Case folded to
+// align with the case-insensitivity elsewhere in assignSlugs.
 func isReservedSlug(base string) bool {
-	_, ok := reservedSlugs[strings.ToLower(base)]
-	return ok
+	switch strings.ToLower(base) {
+	case "index":
+		return true
+	}
+	return false
 }
 
 // assignSlugs derives a unique slug per repo from its basename, falling
