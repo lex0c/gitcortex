@@ -77,6 +77,50 @@ func TestGenerate_SmokeRender(t *testing.T) {
 	}
 }
 
+// Regression: the Per-Repository Breakdown section emits a CSS width
+// for each repo's commit-share bar. The width has to be a numeric
+// literal — if the template feeds a string through printf "%.0f"
+// (e.g. via the string-returning pctFloat helper) html/template's
+// CSS sanitizer replaces it with `ZgotmplZ` and the bars render at
+// zero width. Exercise the multi-repo path end-to-end and assert
+// the rendered widths are clean.
+func TestGenerate_PerRepoBreakdownWidthsAreNumeric(t *testing.T) {
+	dir := t.TempDir()
+	alpha := filepath.Join(dir, "alpha.jsonl")
+	beta := filepath.Join(dir, "beta.jsonl")
+	// Distinct SHAs and content so both repos appear in the breakdown.
+	alphaRow := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-01T00:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"a.go","additions":10,"deletions":0}
+`
+	betaRow := `{"type":"commit","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","author_email":"me@x.com","author_name":"Me","author_date":"2024-02-01T00:00:00Z","additions":20,"deletions":5,"files_changed":1}
+{"type":"commit_file","commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","path_current":"b.go","additions":20,"deletions":5}
+`
+	if err := os.WriteFile(alpha, []byte(alphaRow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beta, []byte(betaRow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := stats.LoadMultiJSONL([]string{alpha, beta})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := Generate(&buf, ds, "scan-fixture", 10, stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Per-Repository Breakdown") {
+		t.Fatal("breakdown section missing from multi-repo report")
+	}
+	if strings.Contains(out, "ZgotmplZ") {
+		t.Error("report contains ZgotmplZ — template fed a non-numeric value to a CSS context (likely printf'd a string)")
+	}
+	if strings.Contains(out, "%!f(string=") {
+		t.Error("report contains %!f(string=...) — printf was given a string where a float was expected")
+	}
+}
+
 func TestGenerate_EmptyDataset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.jsonl")

@@ -147,8 +147,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if gt (len .Repos) 1}}
 <h2>Per-Repository Breakdown <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Repos)}} repositories</span></h2>
-<p class="hint">Cross-repo aggregation from <code>scan</code>. Use this view to see how work is distributed: a single repo dominating commits or churn often means the consolidated activity story is really about that one project; an even spread shows broad multi-repo engagement. Bar widths are normalized to the largest commit-count repo.</p>
-{{$maxRepoCommits := 0}}{{range .Repos}}{{if gt .Commits $maxRepoCommits}}{{$maxRepoCommits = .Commits}}{{end}}{{end}}
+<p class="hint">Cross-repo aggregation from <code>scan</code>. Use this view to see how work is distributed: a single repo dominating commits or churn often means the consolidated activity story is really about that one project; an even spread shows broad multi-repo engagement. Bar widths are the share of total commits across all scanned repos.</p>
 <table>
 <tr>
   <th>Repository</th>
@@ -168,7 +167,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td>
     <div style="display:flex; align-items:center; gap:6px;">
       <div style="flex:0 0 60px; height:8px; background:#eaeef2; border-radius:3px; overflow:hidden;">
-        <div style="height:100%; width:{{if gt $maxRepoCommits 0}}{{printf "%.0f" (pctFloat .PctOfTotalCommits 100.0)}}%{{else}}0%{{end}}; background:#216e39;"></div>
+        <div style="height:100%; width:{{printf "%.0f" .PctOfTotalCommits}}%; background:#216e39;"></div>
       </div>
       <span class="mono">{{printf "%.1f" .PctOfTotalCommits}}%</span>
     </div>
