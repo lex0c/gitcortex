@@ -376,6 +376,35 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 	return result
 }
 
+// DirectoryCount returns the total number of distinct directories
+// across all tracked files — the universe `DirectoryStats` ranks
+// before truncation. Useful for headers like "Top 20 of 127" so the
+// reader sees the size of the repo's dir tree without waiting for
+// DirectoryStats(ds, 0) to materialize a slice. Same derivation
+// (last "/" split, "." for root-level files) to stay consistent.
+func DirectoryCount(ds *Dataset) int {
+	dirs := make(map[string]struct{})
+	for path := range ds.files {
+		dir := "."
+		if i := strings.LastIndex(path, "/"); i >= 0 {
+			dir = path[:i]
+		}
+		dirs[dir] = struct{}{}
+	}
+	return len(dirs)
+}
+
+// ExtensionCount returns the total number of distinct extension
+// buckets ExtensionStats would produce. Same derivation via
+// extractExtension so the count matches what ranking would show.
+func ExtensionCount(ds *Dataset) int {
+	exts := make(map[string]struct{})
+	for path := range ds.files {
+		exts[extractExtension(path)] = struct{}{}
+	}
+	return len(exts)
+}
+
 // ExtensionStat rolls history up per file extension. The historical
 // lens is the point: "which extension is the team spending effort on"
 // answers a different question than "which extension exists in the
@@ -622,6 +651,22 @@ func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 		result[i] = *buckets[key]
 	}
 	return result
+}
+
+// BusFactorCount returns the universe size for BusFactor — files
+// with at least one dev authoring lines. Cannot use
+// Summary.TotalFiles because BusFactor skips files where
+// fe.devLines is empty (pure-rename-only files after the ingest
+// fix that gates devLines on non-zero churn), which would make a
+// "N of TotalFiles" header lie for rename-heavy repos.
+func BusFactorCount(ds *Dataset) int {
+	n := 0
+	for _, fe := range ds.files {
+		if len(fe.devLines) > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 func BusFactor(ds *Dataset, n int) []BusFactorResult {
@@ -1263,7 +1308,14 @@ type DevProfile struct {
 	FirstDate       string
 	LastDate        string
 	TopFiles        []DevFileContrib
-	Scope           []DirScope
+	// TopFilesHidden counts the files dropped by the top-10 truncation
+	// so CLI/HTML can surface "+N more" next to the visible list. Same
+	// motivation as ScopeHidden/ExtensionsHidden below: silent
+	// truncation makes a reader wonder whether the list is the dev's
+	// whole footprint or just a sample. Zero when the dev's touched
+	// file count fits in 10.
+	TopFilesHidden int
+	Scope          []DirScope
 	// ScopeHidden / ExtensionsHidden count the buckets dropped by the
 	// top-5 truncation so CLI and HTML can surface "+N more" — without
 	// this, a reader sees Pct summing to e.g. 85% and wonders if the
@@ -1276,6 +1328,11 @@ type DevProfile struct {
 	ContribType     string  // "growth", "balanced", "refactor"
 	Pace            float64 // commits per active day
 	Collaborators   []DevCollaborator
+	// CollaboratorsHidden mirrors the Scope/Extensions pattern for
+	// the top-5 collaborator truncation. On a wide team a dev may
+	// share files with dozens of people; top-5 is UI-driven (one
+	// line per collaborator) and the rest should not vanish silently.
+	CollaboratorsHidden int
 	MonthlyActivity []ActivityBucket
 	WorkGrid        [7][24]int
 	WeekendPct      float64
@@ -1495,6 +1552,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		}
 
 		var topFiles []DevFileContrib
+		topFilesHidden := 0
 		if files, ok := devFiles[email]; ok {
 			for path, fa := range files {
 				topFiles = append(topFiles, DevFileContrib{Path: path, Commits: fa.commits, Churn: fa.churn})
@@ -1509,6 +1567,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 				return topFiles[i].Path < topFiles[j].Path
 			})
 			if len(topFiles) > 10 {
+				topFilesHidden = len(topFiles) - 10
 				topFiles = topFiles[:10]
 			}
 		}
@@ -1700,7 +1759,9 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			}
 			return collabs[i].Email < collabs[j].Email
 		})
+		collabsHidden := 0
 		if len(collabs) > 5 {
+			collabsHidden = len(collabs) - 5
 			collabs = collabs[:5]
 		}
 
@@ -1709,11 +1770,12 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope, ScopeHidden: scopeHidden,
+			TopFiles: topFiles, TopFilesHidden: topFilesHidden,
+			Scope: scope, ScopeHidden: scopeHidden,
 			Extensions: extensions, ExtensionsHidden: extensionsHidden,
 			Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
-			Pace: pace, Collaborators: collabs,
+			Pace: pace, Collaborators: collabs, CollaboratorsHidden: collabsHidden,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,
 		})
 	}

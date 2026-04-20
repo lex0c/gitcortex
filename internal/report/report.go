@@ -54,6 +54,20 @@ type ReportData struct {
 	// so mature repos (linux-scale) don't blow up the HTML. nil when
 	// the dataset has no files.
 	Structure *TreeNode
+
+	// TotalDirectories / TotalExtensions / TotalBusFactorFiles are
+	// the full universe sizes (before top-N truncation) for sections
+	// whose denominators aren't in Summary. Templates render "20 of
+	// 127" headers so the reader sees the scale of what's been
+	// truncated. TotalBusFactorFiles specifically excludes files
+	// with empty devLines (pure-rename-only files post-ingest-fix)
+	// because BusFactor skips those — using Summary.TotalFiles here
+	// would make the header lie on rename-heavy repos. Summary
+	// already carries TotalDevs / TotalFiles / TotalCommits for the
+	// rest.
+	TotalDirectories    int
+	TotalExtensions     int
+	TotalBusFactorFiles int
 }
 
 // htmlTreeDepth caps the repo-structure tree baked into the HTML report.
@@ -359,6 +373,9 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		PatternGrid:          grid,
 		MaxPattern:           maxP,
 		Structure:            BuildRepoTree(stats.FileHotspots(ds, 0), htmlTreeDepth),
+		TotalDirectories:     stats.DirectoryCount(ds),
+		TotalExtensions:      stats.ExtensionCount(ds),
+		TotalBusFactorFiles:  stats.BusFactorCount(ds),
 	}
 	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 
