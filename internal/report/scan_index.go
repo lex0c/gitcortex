@@ -137,10 +137,10 @@ const scanIndexHTML = `<!DOCTYPE html>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
-.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
-.summary-card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
-.summary-card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
-.summary-card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
+.card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
+.card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
 .repo { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px 20px; margin-bottom: 10px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1.2fr; gap: 16px; align-items: center; }
 .repo.failed { border-left: 4px solid #cf222e; }
 .repo.pending { border-left: 4px solid #bf8700; }
@@ -170,10 +170,10 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </head>
 <body>
 
-<div class="summary">
-  <div class="summary-card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>
-  <div class="summary-card"><div class="label">Total commits</div><div class="value" title="{{thousands .TotalCommits}}">{{humanize .TotalCommits}}</div></div>
-  <div class="summary-card"><div class="label">Unique devs</div><div class="value">{{thousands .TotalDevs}}</div></div>
+<div class="cards">
+  <div class="card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>
+  <div class="card"><div class="label">Total commits</div><div class="value" title="{{thousands .TotalCommits}}">{{humanize .TotalCommits}}</div></div>
+  <div class="card"><div class="label">Unique devs</div><div class="value">{{thousands .TotalDevs}}</div></div>
 </div>
 
 <p class="hint">Each repo below links to its own standalone report. Metrics are per-repository — no cross-repo aggregation that would mix signals from unrelated codebases. For a consolidated developer view, use <code>gitcortex scan --report &lt;file&gt; --email &lt;address&gt;</code>.</p>
