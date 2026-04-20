@@ -3,6 +3,7 @@ package scan
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,16 +46,21 @@ func TestMatcher_Basics(t *testing.T) {
 	}
 }
 
-func TestLoadMatcher_MissingFileIsOK(t *testing.T) {
-	m, err := LoadMatcher(filepath.Join(t.TempDir(), "missing"))
-	if err != nil {
-		t.Fatalf("expected no error for missing file, got %v", err)
+// LoadMatcher is called when the user supplied an explicit
+// --ignore-file; a missing file there is almost always a typo. If
+// we silently returned an empty matcher, every discovery would
+// widen to include node_modules/, vendor/, chromium-clones/, etc.
+// the user thought they had excluded — and they'd have no way to
+// tell from the console output. Fail loudly instead; the
+// default-path lookup in scan.loadMatcher handles the "silent when
+// absent" case via its own os.Stat before calling here.
+func TestLoadMatcher_MissingFileFails(t *testing.T) {
+	_, err := LoadMatcher(filepath.Join(t.TempDir(), "typo.ignore"))
+	if err == nil {
+		t.Fatal("expected error for missing explicit ignore file; a typo must not silently disable rules")
 	}
-	if m == nil {
-		t.Fatal("matcher should not be nil")
-	}
-	if m.Match("anything", false) {
-		t.Error("empty matcher should match nothing")
+	if !os.IsNotExist(err) && !strings.Contains(err.Error(), "typo.ignore") {
+		t.Errorf("error should identify the missing path; got %q", err)
 	}
 }
 

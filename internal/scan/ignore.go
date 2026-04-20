@@ -41,15 +41,16 @@ func NewMatcher(patterns []string) *Matcher {
 	return m
 }
 
-// LoadMatcher reads an ignore file and returns a matcher. A missing file
-// is not an error — scan simply proceeds with no user-provided rules.
-// This matches the gitignore contract where `.gitignore` is optional.
+// LoadMatcher reads an ignore file and returns a matcher. Missing files
+// are rejected — this entry point is used when the path was specified
+// explicitly (e.g. `--ignore-file foo.ignore`), where a typo should
+// fail loudly instead of silently disabling all ignore rules and
+// widening discovery scope. Callers that want "load if present, empty
+// matcher otherwise" semantics (implicit default-path lookup) should
+// os.Stat first.
 func LoadMatcher(file string) (*Matcher, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return NewMatcher(nil), nil
-		}
 		return nil, fmt.Errorf("open %s: %w", file, err)
 	}
 	defer f.Close()

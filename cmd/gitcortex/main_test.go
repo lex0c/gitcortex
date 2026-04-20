@@ -83,6 +83,39 @@ func TestScanCmd_ExitsNonZeroWhenAllExtractsFail(t *testing.T) {
 	}
 }
 
+// `scan --ignore-file /nonexistent` must fail at the CLI layer —
+// silently falling back to zero rules would widen discovery scope
+// without telling the user (e.g. node_modules and vendor/ dirs the
+// user thought they excluded suddenly appear in the report). The
+// default-path lookup in scan.loadMatcher still tolerates a missing
+// `.gitcortex-ignore` at the first root; only the explicit flag is
+// strict.
+func TestScanCmd_RejectsMissingIgnoreFile(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--ignore-file", filepath.Join(t.TempDir(), "typo.ignore"),
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing --ignore-file; a typo must not silently widen scope")
+	}
+	if !strings.Contains(err.Error(), "typo.ignore") {
+		t.Errorf("error should identify the missing file; got %q", err)
+	}
+	// Must fail BEFORE discovery starts — scan on an empty TempDir
+	// would otherwise produce "no git repositories found".
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("ignore-file check ran after discovery; got %q", err)
+	}
+}
+
 func TestValidateDate(t *testing.T) {
 	cases := []struct {
 		in      string
