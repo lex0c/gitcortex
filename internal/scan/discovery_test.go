@@ -164,3 +164,39 @@ func mustMkRepo(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDiscover_FindsBareRepo(t *testing.T) {
+	root := t.TempDir()
+	bare := filepath.Join(root, "myrepo.git")
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		full := filepath.Join(bare, name)
+		if name == "HEAD" {
+			if err := os.MkdirAll(bare, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(full, []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if err := os.MkdirAll(full, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Decoy: dir with HEAD only — must not be picked up.
+	decoy := filepath.Join(root, "not-a-repo")
+	if err := os.MkdirAll(decoy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(decoy, "HEAD"), []byte("nope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Slug != "myrepo.git" {
+		t.Fatalf("expected single myrepo.git, got %+v", repos)
+	}
+}

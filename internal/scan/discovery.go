@@ -77,20 +77,24 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 				return filepath.SkipDir
 			}
 
-			// Detect .git either as a directory (normal) or a file
-			// (worktree / submodule). Presence alone is enough — we don't
-			// try to validate the content; extract will fail loudly if
-			// the repo is broken, which is a better signal than silently
-			// skipping.
-			// Lstat (not Stat) so a symlink named `.git` pointing somewhere
-			// arbitrary doesn't get treated as a real repo. Real `.git`
-			// entries are either a directory (normal worktree) or a regular
-			// file (worktree/submodule pointer). Both are caught here; a
-			// symlink is rejected, which is the conservative choice — if
-			// users genuinely point `.git` at a shared dir via symlink they
-			// can resolve it before scanning.
+			// Two repo shapes to detect:
+			//   1. Working tree:   path/.git is a dir (normal) or file
+			//      (worktree/submodule pointer).
+			//   2. Bare repo:      path itself contains HEAD + objects/
+			//      + refs/ — common for clones used as fixtures or
+			//      mirrors (`git clone --bare`, GitHub-style server dirs
+			//      named foo.git).
+			// Lstat (not Stat) on the .git entry so a symlink named .git
+			// pointing somewhere arbitrary doesn't get treated as a real
+			// repo. The bare check uses os.Stat by way of isBareRepo,
+			// which inspects three required entries — much harder to
+			// trick than a single dirent check.
 			gitEntry := filepath.Join(path, ".git")
+			isWorkingTree := false
 			if info, statErr := os.Lstat(gitEntry); statErr == nil && info.Mode()&os.ModeSymlink == 0 {
+				isWorkingTree = true
+			}
+			if isWorkingTree || isBareRepo(path) {
 				if seen[path] {
 					return filepath.SkipDir
 				}
@@ -153,6 +157,20 @@ func assignSlugs(repos []Repo) {
 		}
 		repos[i].Slug = slug
 	}
+}
+
+// isBareRepo returns true when path is a bare git repository — i.e. the
+// directory itself holds HEAD, objects/, and refs/ rather than wrapping
+// them in a .git subdirectory. All three entries are required because
+// a stray HEAD file or empty refs/ dir alone is not enough to be a real
+// repo and we don't want false positives polluting the manifest.
+func isBareRepo(path string) bool {
+	for _, name := range []string{"HEAD", "objects", "refs"} {
+		if _, err := os.Stat(filepath.Join(path, name)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // sanitizeSlug strips characters that would break the LoadMultiJSONL prefix
