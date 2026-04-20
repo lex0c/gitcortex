@@ -121,6 +121,36 @@ func TestScanCmd_RejectsMissingIgnoreFile(t *testing.T) {
 	}
 }
 
+// --email without --report would silently reach os.Create("") after
+// the full scan/extract phase finished, surfacing a cryptic "open :
+// no such file or directory" error minutes into a wasted run. The
+// flag pair is mandatory in both directions: reject up front
+// alongside the other flag-combination checks.
+func TestScanCmd_RejectsEmailWithoutReport(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--email", "me@x.com",
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --email without --report; silent fall-through would waste a full scan before failing")
+	}
+	if !strings.Contains(err.Error(), "--report") {
+		t.Errorf("error should name --report as the missing flag; got %q", err)
+	}
+	// Must fail BEFORE discovery starts; empty TempDir would
+	// otherwise produce "no git repositories found".
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("flag validation ran after scan; got %q", err)
+	}
+}
+
 // --report without --email is ambiguous under the "no team-wide
 // consolidation" design: the only meaningful single-HTML output
 // across multiple repos is a developer profile. The error must

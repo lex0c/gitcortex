@@ -1120,6 +1120,14 @@ breakdown — handy for showing aggregated work across many repos.`,
 			if reportPath != "" && email == "" {
 				return fmt.Errorf("--report requires --email (profile consolidation); for per-repo HTML reports use --report-dir <dir>")
 			}
+			if email != "" && reportPath == "" {
+				// Without this up-front check, --email alone would
+				// run the full scan, reach the profile branch, and
+				// only then call os.Create("") — surfacing a cryptic
+				// `open : no such file or directory` after the slow
+				// multi-repo extract phase had already completed.
+				return fmt.Errorf("--email requires --report <file> pointing at the profile HTML output path")
+			}
 			if reportPath != "" && reportDir != "" {
 				return fmt.Errorf("--report and --report-dir are mutually exclusive; pick profile (--report + --email) or per-repo (--report-dir)")
 			}
