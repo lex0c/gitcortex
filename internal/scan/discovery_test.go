@@ -537,6 +537,72 @@ func TestDiscover_SlugDeterministicAcrossRuns(t *testing.T) {
 	}
 }
 
+// Regression: a random regular file named `.git` (not the
+// `gitdir: …` pointer format) used to make discovery record the
+// parent as a repo, SkipDir out of the subtree, and hide any real
+// repos nested below. Now the .git entry is validated — arbitrary
+// files are rejected AND the walker keeps descending to find real
+// repos deeper.
+func TestDiscover_RejectsArbitraryGitFileAndDescends(t *testing.T) {
+	root := t.TempDir()
+	// Parent with a bogus `.git` file — looks like a repo by naive
+	// existence check, isn't by content check.
+	bogus := filepath.Join(root, "bogus")
+	if err := os.MkdirAll(bogus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bogus, ".git"), []byte("not a git pointer file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Real nested repo the old code would have hidden via SkipDir
+	// after recording the bogus parent.
+	mustMkRepo(t, filepath.Join(bogus, "nested"))
+
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range repos {
+		got[r.RelPath] = true
+	}
+	if got["bogus"] {
+		t.Error("parent with a non-pointer `.git` file must not be recorded as a repo")
+	}
+	if !got["bogus/nested"] {
+		t.Errorf("real repo nested under a bogus .git file should still be discovered; got %+v", repos)
+	}
+}
+
+// Regression companion: a valid `gitdir: …` pointer file (the
+// format git writes for linked worktrees and submodules) must still
+// be accepted as a repo.
+func TestDiscover_AcceptsGitdirPointerFile(t *testing.T) {
+	root := t.TempDir()
+	realGit := filepath.Join(t.TempDir(), "real-git-dir")
+	if err := os.MkdirAll(realGit, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wt := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pointer file: git's actual format is literally "gitdir: <path>\n".
+	pointer := []byte("gitdir: " + realGit + "\n")
+	if err := os.WriteFile(filepath.Join(wt, ".git"), pointer, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].RelPath != "worktree" {
+		t.Fatalf("expected to discover the gitdir-pointer worktree, got %+v", repos)
+	}
+}
+
 func TestDiscover_RejectsSymlinkGit(t *testing.T) {
 	root := t.TempDir()
 	// A "repo" whose .git is a symlink — should not be picked up.

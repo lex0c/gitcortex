@@ -134,23 +134,22 @@ func Discover(ctx context.Context, roots []string, matcher *Matcher, maxDepth in
 			}
 
 			// Two repo shapes to detect:
-			//   1. Working tree:   path/.git is a dir (normal) or file
-			//      (worktree/submodule pointer).
+			//   1. Working tree:   path/.git is a dir (normal) or a
+			//      `gitdir: …` pointer file (worktree/submodule).
 			//   2. Bare repo:      path itself contains HEAD + objects/
 			//      + refs/ — common for clones used as fixtures or
 			//      mirrors (`git clone --bare`, GitHub-style server dirs
 			//      named foo.git).
-			// Lstat (not Stat) on the .git entry so a symlink named .git
-			// pointing somewhere arbitrary doesn't get treated as a real
-			// repo. The bare check uses os.Stat by way of isBareRepo,
-			// which inspects three required entries — much harder to
-			// trick than a single dirent check.
+			// Validating the .git entry (not just its presence) matters:
+			// a random regular file named `.git` would otherwise be
+			// accepted, the parent path recorded as a repo, and the
+			// walker SkipDir'd out of the subtree — hiding any real
+			// repos nested underneath and guaranteeing a downstream
+			// "not a git repository" failure during extract. isBareRepo
+			// separately requires HEAD + objects + refs so a stray HEAD
+			// or empty objects dir can't false-positive either.
 			gitEntry := filepath.Join(path, ".git")
-			isWorkingTree := false
-			if info, statErr := os.Lstat(gitEntry); statErr == nil && info.Mode()&os.ModeSymlink == 0 {
-				isWorkingTree = true
-			}
-			if isWorkingTree || isBareRepo(path) {
+			if isWorkingTreeEntry(gitEntry) || isBareRepo(path) {
 				if seen[path] {
 					return filepath.SkipDir
 				}
@@ -292,6 +291,50 @@ func isBareRepo(path string) bool {
 		}
 	}
 	return true
+}
+
+// isWorkingTreeEntry reports whether gitEntry (the path of a `.git`
+// dirent inside a candidate repo) marks a real git working tree.
+// Accepts:
+//   - A directory named `.git` — the standard layout.
+//   - A regular file named `.git` beginning with `gitdir: ` — the
+//     pointer format git writes for linked worktrees and submodules.
+// Rejects everything else: symlinks (by existing policy — the target
+// could be anywhere), irregular files, and — the case that motivated
+// the validation — a regular file named `.git` that happens to exist
+// with unrelated content. Without this check, any plain file called
+// `.git` (source dump, build artifact, user mistake) made discovery
+// record its parent as a repo and SkipDir out of the subtree, hiding
+// nested real repos and producing a guaranteed extract failure.
+func isWorkingTreeEntry(gitEntry string) bool {
+	info, err := os.Lstat(gitEntry)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	if info.IsDir() {
+		return true
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	// A valid gitdir pointer file starts with literally "gitdir: ".
+	// Checking only the first 8 bytes is sufficient (and cheap) — the
+	// full content isn't parsed here; extract will fail loudly if the
+	// pointer target is broken, which is a better signal than silently
+	// accepting every regular file and leaving the same confusion for
+	// the extract phase.
+	f, openErr := os.Open(gitEntry)
+	if openErr != nil {
+		return false
+	}
+	defer f.Close()
+	const prefix = "gitdir: "
+	buf := make([]byte, len(prefix))
+	n, _ := f.Read(buf)
+	return n == len(prefix) && string(buf) == prefix
 }
 
 // sanitizeSlug strips characters that would break the LoadMultiJSONL prefix
