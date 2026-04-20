@@ -77,7 +77,6 @@ h1 { font-size: 24px; margin-bottom: 4px; }
 .repo { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px 20px; margin-bottom: 10px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1.2fr; gap: 16px; align-items: center; }
 .repo.failed { border-left: 4px solid #cf222e; }
 .repo.pending { border-left: 4px solid #bf8700; }
-.repo.ok { border-left: 4px solid #2da44e; }
 .repo .name { font-weight: 600; font-size: 15px; }
 .repo .name a { color: #0969da; text-decoration: none; }
 .repo .name a:hover { text-decoration: underline; }
