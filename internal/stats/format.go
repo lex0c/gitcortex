@@ -500,6 +500,9 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 					}
 					fmt.Fprintf(f.w, "%s (%d shared)", c.Email, c.SharedFiles)
 				}
+				if p.CollaboratorsHidden > 0 {
+					fmt.Fprintf(f.w, "  (+%d more)", p.CollaboratorsHidden)
+				}
 			} else {
 				fmt.Fprintf(f.w, "solo contributor")
 			}
@@ -511,6 +514,9 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintln(f.w, "  Top files:")
 				for _, tf := range p.TopFiles {
 					fmt.Fprintf(f.w, "    %-50s %3d commits  %6d churn\n", tf.Path, tf.Commits, tf.Churn)
+				}
+				if p.TopFilesHidden > 0 {
+					fmt.Fprintf(f.w, "    ... (+%d more files not shown)\n", p.TopFilesHidden)
 				}
 			}
 

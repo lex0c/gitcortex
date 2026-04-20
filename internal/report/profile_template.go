@@ -127,6 +127,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
       <span style="background:#0969da; color:#fff; border-radius:8px; padding:0 6px; font-size:10px;" title="{{.SharedFiles}} files / {{.SharedLines}} lines">{{.SharedFiles}} files · {{humanize .SharedLines}} lines</span>
     </span>
     {{end}}
+    {{if gt .Profile.CollaboratorsHidden 0}}
+    <span style="display:inline-flex; align-items:center; padding:3px 10px; font-size:11px; color:#656d76; font-style:italic;">+{{.Profile.CollaboratorsHidden}} more collaborators not shown</span>
+    {{end}}
   </div>
 </div>
 {{end}}
@@ -144,6 +147,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td>{{thousands .Churn}}</td>
   <td style="width:30%"><div style="display:flex;"><div class="bar bar-churn" style="width:{{pct .Churn $maxChurn}}%"></div></div></td>
 </tr>
+{{end}}
+{{if gt .Profile.TopFilesHidden 0}}
+<tr><td colspan="4" style="color:#656d76; font-style:italic; text-align:center;">+{{.Profile.TopFilesHidden}} more files not shown</td></tr>
 {{end}}
 </table>
 {{end}}

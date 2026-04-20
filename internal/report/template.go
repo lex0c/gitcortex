@@ -398,7 +398,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <span>{{printf "%.1f" .Pace}} commits/active day</span>
 
     <span style="color:#656d76;">Collaboration</span>
-    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{thousands $c.SharedFiles}} files, {{thousands $c.SharedLines}} lines){{end}}{{else}}solo contributor{{end}}</span>
+    <span>{{if .Collaborators}}{{range $i, $c := .Collaborators}}{{if $i}}, {{end}}{{$c.Email}} ({{thousands $c.SharedFiles}} files, {{thousands $c.SharedLines}} lines){{end}}{{if gt .CollaboratorsHidden 0}} <span style="color:#656d76; font-style:italic;">(+{{.CollaboratorsHidden}} more)</span>{{end}}{{else}}solo contributor{{end}}</span>
 
     <span style="color:#656d76;">Weekend</span>
     <span>{{printf "%.1f" .WeekendPct}}%</span>
@@ -413,6 +413,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
       <span style="color:#656d76;">{{thousands .Commits}} commits</span>
       <span style="color:#656d76;">{{thousands .Churn}} churn</span>
     </div>
+    {{end}}
+    {{if gt .TopFilesHidden 0}}
+    <div style="color:#656d76; font-style:italic; margin-top:2px;">+{{.TopFilesHidden}} more files not shown</div>
     {{end}}
   </div>
   {{end}}

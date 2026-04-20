@@ -1263,7 +1263,14 @@ type DevProfile struct {
 	FirstDate       string
 	LastDate        string
 	TopFiles        []DevFileContrib
-	Scope           []DirScope
+	// TopFilesHidden counts the files dropped by the top-10 truncation
+	// so CLI/HTML can surface "+N more" next to the visible list. Same
+	// motivation as ScopeHidden/ExtensionsHidden below: silent
+	// truncation makes a reader wonder whether the list is the dev's
+	// whole footprint or just a sample. Zero when the dev's touched
+	// file count fits in 10.
+	TopFilesHidden int
+	Scope          []DirScope
 	// ScopeHidden / ExtensionsHidden count the buckets dropped by the
 	// top-5 truncation so CLI and HTML can surface "+N more" — without
 	// this, a reader sees Pct summing to e.g. 85% and wonders if the
@@ -1276,6 +1283,11 @@ type DevProfile struct {
 	ContribType     string  // "growth", "balanced", "refactor"
 	Pace            float64 // commits per active day
 	Collaborators   []DevCollaborator
+	// CollaboratorsHidden mirrors the Scope/Extensions pattern for
+	// the top-5 collaborator truncation. On a wide team a dev may
+	// share files with dozens of people; top-5 is UI-driven (one
+	// line per collaborator) and the rest should not vanish silently.
+	CollaboratorsHidden int
 	MonthlyActivity []ActivityBucket
 	WorkGrid        [7][24]int
 	WeekendPct      float64
@@ -1495,6 +1507,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		}
 
 		var topFiles []DevFileContrib
+		topFilesHidden := 0
 		if files, ok := devFiles[email]; ok {
 			for path, fa := range files {
 				topFiles = append(topFiles, DevFileContrib{Path: path, Commits: fa.commits, Churn: fa.churn})
@@ -1509,6 +1522,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 				return topFiles[i].Path < topFiles[j].Path
 			})
 			if len(topFiles) > 10 {
+				topFilesHidden = len(topFiles) - 10
 				topFiles = topFiles[:10]
 			}
 		}
@@ -1700,7 +1714,9 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			}
 			return collabs[i].Email < collabs[j].Email
 		})
+		collabsHidden := 0
 		if len(collabs) > 5 {
+			collabsHidden = len(collabs) - 5
 			collabs = collabs[:5]
 		}
 
@@ -1709,11 +1725,12 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope, ScopeHidden: scopeHidden,
+			TopFiles: topFiles, TopFilesHidden: topFilesHidden,
+			Scope: scope, ScopeHidden: scopeHidden,
 			Extensions: extensions, ExtensionsHidden: extensionsHidden,
 			Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
-			Pace: pace, Collaborators: collabs,
+			Pace: pace, Collaborators: collabs, CollaboratorsHidden: collabsHidden,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,
 		})
 	}

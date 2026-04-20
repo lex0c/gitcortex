@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -667,6 +668,62 @@ func TestDevProfileHiddenCounters(t *testing.T) {
 	}
 }
 
+// Completes the Hidden-counter family: TopFiles truncates at 10,
+// Collaborators at 5. Both used to drop buckets silently — the "+N
+// more" surfaced for Scope/Extensions had no counterpart here, so a
+// dev with 25 touched files or 12 frequent collaborators looked like
+// they had exactly 10 / 5. Build a dev with 12 files and 7
+// collaborators; assert the counters report the true drop count.
+func TestDevProfileHiddenCountersTopFilesAndCollaborators(t *testing.T) {
+	files := map[string]*fileEntry{}
+	// 12 files authored by alice → TopFilesHidden = 2.
+	for i := 0; i < 12; i++ {
+		path := fmt.Sprintf("dir%d/file%d.go", i, i)
+		files[path] = &fileEntry{
+			devLines:   map[string]int64{"alice@x": int64(100 - i*5)},
+			devCommits: map[string]int{"alice@x": 1},
+		}
+	}
+	// Seed 6 shared files between alice and each of 6 other devs →
+	// alice has 6 collaborators total; top-5 truncation gives
+	// CollaboratorsHidden = 1.
+	for i := 0; i < 6; i++ {
+		path := fmt.Sprintf("shared/collab%d.go", i)
+		collab := fmt.Sprintf("bob%d@x", i)
+		files[path] = &fileEntry{
+			devLines:   map[string]int64{"alice@x": 50, collab: 50},
+			devCommits: map[string]int{"alice@x": 1, collab: 1},
+		}
+	}
+	contribs := map[string]*ContributorStat{
+		"alice@x": {Email: "alice@x", Commits: 18, FilesTouched: 18, ActiveDays: 1},
+	}
+	for i := 0; i < 6; i++ {
+		contribs[fmt.Sprintf("bob%d@x", i)] = &ContributorStat{
+			Email: fmt.Sprintf("bob%d@x", i), Commits: 1, FilesTouched: 1, ActiveDays: 1,
+		}
+	}
+	ds := &Dataset{
+		contributors: contribs,
+		files:        files,
+		commits:      map[string]*commitEntry{},
+		workGrid:     [7][24]int{},
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+	if len(p.TopFiles) != 10 {
+		t.Fatalf("TopFiles len = %d, want 10 (truncated from 18)", len(p.TopFiles))
+	}
+	if p.TopFilesHidden != 8 {
+		t.Errorf("TopFilesHidden = %d, want 8 (18 - 10)", p.TopFilesHidden)
+	}
+	if len(p.Collaborators) != 5 {
+		t.Fatalf("Collaborators len = %d, want 5 (truncated from 6)", len(p.Collaborators))
+	}
+	if p.CollaboratorsHidden != 1 {
+		t.Errorf("CollaboratorsHidden = %d, want 1 (6 - 5)", p.CollaboratorsHidden)
+	}
+}
+
 // Silent when nothing to hide — the counters must be zero so the
 // renderers don't emit "+0 more" (noise) for the common case.
 func TestDevProfileHiddenCountersZeroWhenFits(t *testing.T) {
@@ -686,6 +743,12 @@ func TestDevProfileHiddenCountersZeroWhenFits(t *testing.T) {
 	if p.ScopeHidden != 0 || p.ExtensionsHidden != 0 {
 		t.Errorf("Hidden counters: Scope=%d Ext=%d, want 0/0 (dev has ≤5 buckets each)",
 			p.ScopeHidden, p.ExtensionsHidden)
+	}
+	// TopFiles cap is 10, Collaborators cap is 5 — bob has 3 files
+	// and zero collaborators, so both must stay at 0.
+	if p.TopFilesHidden != 0 || p.CollaboratorsHidden != 0 {
+		t.Errorf("Hidden counters: TopFiles=%d Collab=%d, want 0/0",
+			p.TopFilesHidden, p.CollaboratorsHidden)
 	}
 }
 
