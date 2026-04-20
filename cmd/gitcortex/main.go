@@ -963,12 +963,23 @@ breakdown — handy for showing aggregated work across many repos.`,
 				return err
 			}
 
+			// Exit non-zero when every repo failed to extract, regardless
+			// of whether a report was requested. scan.Run intentionally
+			// treats per-repo failures as non-fatal so a transient error
+			// on one repo doesn't tank the whole batch — but when the
+			// count of successes is zero, there's nothing useful on disk
+			// to inspect. Without this guard CI sees exit code 0 and
+			// continues with empty artifacts; the manifest's per-repo
+			// Status fields remain the only way to see the failures.
+			if len(result.JSONLs) == 0 {
+				return fmt.Errorf("scan found %d repositor(ies) but all extracts failed; see %s for per-repo status",
+					len(result.Manifest.Repos),
+					filepath.Join(result.OutputDir, "manifest.json"))
+			}
+
 			if reportPath == "" {
 				fmt.Fprintf(os.Stderr, "Scan complete: %d JSONL file(s) in %s\n", len(result.JSONLs), result.OutputDir)
 				return nil
-			}
-			if len(result.JSONLs) == 0 {
-				return fmt.Errorf("no successful repos extracted; cannot build report")
 			}
 
 			ds, err := stats.LoadMultiJSONL(result.JSONLs, stats.LoadOptions{

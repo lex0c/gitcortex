@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,6 +44,42 @@ func TestScanCmd_ValidatesSinceBeforeScanning(t *testing.T) {
 	// not started.
 	if strings.Contains(err.Error(), "no git repositories found") {
 		t.Errorf("scan.Run was reached before --since was validated — discovery ran on an invalid-flag input: %q", err)
+	}
+}
+
+// scanCmd must exit non-zero when every discovered repo's extract
+// failed, regardless of whether --report was requested. scan.Run
+// intentionally treats per-repo failures as non-fatal (a transient
+// error on one repo shouldn't tank the whole batch), but if ZERO
+// repos succeed there's nothing useful on disk and CI should know.
+// Previously the no-report branch returned success unconditionally;
+// automation saw exit 0 and "Scan complete: 0 JSONL file(s)" and
+// continued with empty artifacts.
+//
+// Test uses a fake repo (a bare `.git` dir with no history) so
+// discovery picks it up but extract fails.
+func TestScanCmd_ExitsNonZeroWhenAllExtractsFail(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "fake-repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", root,
+		"--output", t.TempDir(),
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit when all extracts fail; CI would silently treat this as success")
+	}
+	if !strings.Contains(err.Error(), "all extracts failed") {
+		t.Errorf("error should explain every repo failed; got %q", err)
 	}
 }
 
