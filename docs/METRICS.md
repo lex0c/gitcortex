@@ -294,6 +294,27 @@ A `tree(1)`-style view of the repository's directory layout, built from paths se
 
 **When to use**: before drilling into hotspots or churn-risk, skim the structure to locate the modules those files live in. The tree is navigational context; ranked tables are where judgment happens.
 
+## Per-Repository Breakdown
+
+Cross-repo aggregation that appears only when the dataset was loaded from more than one JSONL (typically via `gitcortex scan` or multiple `--input` files). One row per repo:
+
+| column | meaning |
+|---|---|
+| `Commits` | author-dated commit count in this repo |
+| `% Commits` | share of total commits in the dataset |
+| `Churn` | additions + deletions attributed to this repo |
+| `% Churn` | share of total churn |
+| `Files` | distinct files touched in this repo; when filtered by `--email`, counts only files that developer touched |
+| `Active days` | distinct UTC author-dates |
+| `Devs` | unique author emails in this repo |
+| `First → Last` | earliest and latest author-date |
+
+**How the repo label is derived**: `LoadMultiJSONL` prefixes every path in the dataset with `<filename-stem>:` (so `WordPress.git.jsonl` contributes paths like `WordPress.git:wp-includes/foo.php`). The breakdown groups by that prefix. If only a single JSONL is loaded, no prefix is emitted and the breakdown collapses to a single `(repo)` row the HTML report hides.
+
+**Divergence between `% Commits` and `% Churn` is informative**: a repo dominating churn while holding modest commit share often signals large-content work (docs, data), while the reverse points to small-diff high-frequency repos (config, manifests).
+
+**SHA collisions across repos** (forks, mirrors, cherry-picks between sibling projects) are preserved here — the breakdown tracks commits per repo via a dedicated slice populated at ingest, not the SHA-keyed commit map. Other file-level metrics (bus factor, coupling, dev network) still key by SHA and will collapse collided commits onto one record; if exact attribution matters for those, scan and aggregate the sibling repos separately.
+
 ## Data Flow
 
 ```
@@ -363,6 +384,8 @@ If the matched paths together account for at least `suspectWarningMinChurnRatio`
 Directory-segment heuristics (`vendor`, `node_modules`, `dist`, `build`, `third_party`) match the segment wherever it appears in the path, but `extract --ignore` treats a bare `dist/*` glob as a repo-root prefix. To avoid suggesting a fix that wouldn't actually remove the matched files, each bucket carries a `Suggestions` list of the specific parent prefixes it matched (e.g. `wp-includes/js/dist/*`, `services/auth/vendor/*`), and the warning emits every unique prefix so the copy-pasteable command covers every source of distortion. Suffix and basename patterns (`*.min.js`, `package-lock.json`, etc.) collapse to a single glob because extract's basename match already handles them at any depth.
 
 The warning is advisory. Nothing is auto-filtered; the user decides whether to re-extract. Matches do not affect computed stats in that run. JSON/CSV output paths skip the warning since they're typically piped.
+
+On multi-JSONL loads (e.g. `stats --input a.jsonl --input b.jsonl` or a `gitcortex scan` dataset), paths carry a `<repo>:` prefix internally. The suspect detector strips that prefix before matching and suggesting, so root-level `vendor/`, `package-lock.json`, `go.sum`, etc. in any individual repo are detected and the emitted `--ignore` globs are repo-relative (drop-in for `extract --ignore` and `scan --extract-ignore`). Same-shape findings across repos collapse to one suggestion (`dist/*` applies everywhere rather than being listed once per repo).
 
 Statistical heuristics (very high churn-per-commit, single-author bulk updates) are deliberately out of scope — their false-positive rate on hand-authored code is higher than the path-based list and we'd rather stay quiet than cry wolf.
 
