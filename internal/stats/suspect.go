@@ -142,11 +142,22 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 	for path, fe := range ds.files {
 		fileChurn := fe.additions + fe.deletions
 		totalChurn += fileChurn
+		// Multi-repo loads prefix every path with `<repo>:` so files
+		// from different repos can coexist in one Dataset. The
+		// pattern predicates assume bare repo-relative paths — they
+		// look for root-level `vendor/`, full-path `package-lock.json`,
+		// and similar shapes that fail when the string actually
+		// begins with `alpha:vendor/x.go` or equals
+		// `alpha:package-lock.json`. Strip the prefix once and feed
+		// the normalized form to both Match and Suggest; nested
+		// occurrences (e.g. `repo:pkg/vendor/x.go`) still work via
+		// the normal substring checks on the stripped path.
+		matchPath := stripRepoPrefix(path)
 		// A file might match multiple patterns (e.g. vendor/*.pb.go).
 		// Attribute it to the first match so totals don't double-count;
 		// the first-match wins keeps output predictable.
 		for _, pat := range defaultSuspectPatterns {
-			if !pat.Match(path) {
+			if !pat.Match(matchPath) {
 				continue
 			}
 			b, ok := buckets[pat.Glob]
@@ -159,7 +170,7 @@ func DetectSuspectFiles(ds *Dataset) ([]SuspectBucket, bool) {
 			b.Churn += fileChurn
 			suspectChurn += fileChurn
 			if pat.Suggest != nil {
-				suggSets[pat.Glob][pat.Suggest(path)] = struct{}{}
+				suggSets[pat.Glob][pat.Suggest(matchPath)] = struct{}{}
 			}
 			break
 		}

@@ -410,6 +410,53 @@ func TestStripRepoPrefix(t *testing.T) {
 	}
 }
 
+// Regression: multi-repo loads prefix every file path with `<repo>:`,
+// and the pattern predicates (hasPathSegment, basenameEquals) compare
+// against the raw string. Root-level occurrences like
+// `alpha:vendor/x.go` and `alpha:package-lock.json` slipped past
+// detection because `strings.HasPrefix(p, "vendor/")` and
+// `p == "package-lock.json"` both fail when the `<repo>:` prefix is
+// present. Symptom in the wild: stats on a scan consumed multiple
+// --input files, suspect warning suppressed, users kept seeing
+// inflated churn/bus-factor from generated content with no hint to
+// fix it.
+func TestDetectSuspectFiles_RootLevelUnderRepoPrefix(t *testing.T) {
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			// Root-level occurrences — the cases that previously missed.
+			"alpha:vendor/x.go":        {additions: 400, deletions: 400},
+			"beta:package-lock.json":   {additions: 400, deletions: 400},
+			"beta:go.sum":              {additions: 400, deletions: 400},
+			// Nested occurrence — worked before the fix and must still work.
+			"alpha:pkg/vendor/deep.go": {additions: 100, deletions: 100},
+		},
+	}
+	buckets, worth := DetectSuspectFiles(ds)
+	if !worth {
+		t.Fatal("expected warning-worthy dataset; prefix-stripped matching should fire on root-level vendor/lockfiles")
+	}
+
+	got := map[string]bool{}
+	for _, b := range buckets {
+		got[b.Pattern.Glob] = true
+	}
+	for _, want := range []string{"vendor/*", "package-lock.json", "go.sum"} {
+		if !got[want] {
+			t.Errorf("pattern %q missing from detected buckets %v — root-level %q under repo prefix went undetected", want, got, want)
+		}
+	}
+
+	// Suggestions should come out clean (no `<repo>:`) so the
+	// copy-pasted --ignore command actually matches these paths
+	// next run.
+	suggestions := CollectAllSuggestions(buckets)
+	for _, s := range suggestions {
+		if len(s) > 0 && s[0] == '\'' {
+			t.Errorf("suggestion %q should not carry shell quotes here", s)
+		}
+	}
+}
+
 func TestSuspectSuggestionsMatchExtractShouldIgnore(t *testing.T) {
 	// Mix root-level and nested occurrences of every pattern class:
 	// directory segments (vendor, dist), suffix (*.min.js), basename
