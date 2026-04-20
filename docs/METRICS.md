@@ -296,7 +296,9 @@ A `tree(1)`-style view of the repository's directory layout, built from paths se
 
 ## Per-Repository Breakdown
 
-Cross-repo aggregation that appears only when the dataset was loaded from more than one JSONL (typically via `gitcortex scan` or multiple `--input` files). One row per repo:
+Cross-repo aggregation scoped to a single developer. Renders in the HTML profile report (`report --email me@x.com` or `scan --email me@x.com --report …`) when the dataset was loaded from more than one JSONL. The metric is deliberately profile-only: on a team-view consolidated report, per-repo aggregates reduce to raw git-history distribution and are better inspected via `manifest.json` or by running `stats --input X.jsonl` per-repo. Filtered by a developer's email, the same numbers answer a genuinely different question — *"where did this person spend their time?"* — which is what the section surfaces.
+
+One row per repo:
 
 | column | meaning |
 |---|---|
@@ -304,7 +306,7 @@ Cross-repo aggregation that appears only when the dataset was loaded from more t
 | `% Commits` | share of total commits in the dataset |
 | `Churn` | additions + deletions attributed to this repo |
 | `% Churn` | share of total churn |
-| `Files` | distinct files touched in this repo; when filtered by `--email`, counts only files that developer touched |
+| `Files` | distinct files the developer touched in this repo (always email-filtered, since the section only renders on profile reports) |
 | `Active days` | distinct UTC author-dates |
 | `Devs` | unique author emails in this repo |
 | `First → Last` | earliest and latest author-date |

@@ -450,7 +450,7 @@ vendor/
 
 Directory rules, globs, `**/foo`, and `!path` negations all work. Globbed negations like `!vendor*/keep` are honored — discovery descends into any dir where a negation rule could match a descendant. If `--ignore-file` is not set, scan looks for `.gitcortex-ignore` in the first `--root`.
 
-**Consolidated report extras.** When a scan produces more than one repo's data, both the team report and `--email` profile report render a new *Per-Repository Breakdown* section: commits, churn, files, active days, and the share-of-total for each repo. On an `--email` profile the counts are filtered to that developer's contributions (files count reflects only files the dev touched).
+**Consolidated profile report.** When `scan --email me@company.com --report path.html` runs against a multi-repo dataset, the profile report renders a *Per-Repository Breakdown* section: commits, churn, files, active days, and share-of-total — all filtered to that developer's contributions (files count reflects only files the dev touched). The section is profile-only; the team report focuses on the aggregate across repos without a per-repo split (run `stats --input repo.jsonl` per-repo or read the `manifest.json` for that).
 
 **Flags worth knowing:**
 
@@ -505,7 +505,7 @@ gitcortex report --input data.jsonl --email alice@company.com --output alice.htm
 
 Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, legacy-hotspot, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
 
-When the input is multi-repo (from `gitcortex scan` or multiple `--input` files), both the team report and `--email` profile also render a *Per-Repository Breakdown* with commit/churn/files/active-days per repo and each repo's share of the total.
+When the input is multi-repo (from `gitcortex scan` or multiple `--input` files) AND `--email` is set, the profile report renders a *Per-Repository Breakdown* with commit/churn/files/active-days per repo, filtered to that developer's contributions. The team-view report intentionally omits this section — per-repo aggregates on a consolidated dataset reduce to raw git-history distribution, which is more usefully inspected via `manifest.json` or `stats --input X.jsonl` per repo.
 
 > The HTML activity heatmap is always monthly (year × 12 months grid). For day/week/year buckets, use `gitcortex stats --stat activity --granularity <unit>`.
 

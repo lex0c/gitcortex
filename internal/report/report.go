@@ -68,12 +68,6 @@ type ReportData struct {
 	TotalDirectories    int
 	TotalExtensions     int
 	TotalBusFactorFiles int
-
-	// Repos holds per-repository aggregates for multi-repo (scan) reports.
-	// Empty on single-repo runs — the template gates the section behind
-	// `{{if gt (len .Repos) 1}}` so single-repo callers keep their
-	// existing layout untouched.
-	Repos []stats.RepoStat
 }
 
 // htmlTreeDepth caps the repo-structure tree baked into the HTML report.
@@ -382,7 +376,6 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		TotalDirectories:     stats.DirectoryCount(ds),
 		TotalExtensions:      stats.ExtensionCount(ds),
 		TotalBusFactorFiles:  stats.BusFactorCount(ds),
-		Repos:                stats.RepoBreakdown(ds, ""),
 	}
 	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 

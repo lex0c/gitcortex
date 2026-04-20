@@ -78,18 +78,16 @@ func TestGenerate_SmokeRender(t *testing.T) {
 	}
 }
 
-// Regression: the Per-Repository Breakdown section emits a CSS width
-// for each repo's commit-share bar. The width has to be a numeric
-// literal — if the template feeds a string through printf "%.0f"
-// (e.g. via the string-returning pctFloat helper) html/template's
-// CSS sanitizer replaces it with `ZgotmplZ` and the bars render at
-// zero width. Exercise the multi-repo path end-to-end and assert
-// the rendered widths are clean.
-func TestGenerate_PerRepoBreakdownWidthsAreNumeric(t *testing.T) {
+// The Per-Repository Breakdown is a consolidation metric about the
+// developer's work, not about the repository set. It belongs on the
+// profile (--email) report where "3 of my commits in auth, 50 in
+// payments" tells a story; on the team report it would just restate
+// git-history distribution, which is tautological. Assert the team
+// render does NOT surface the section even with a multi-repo dataset.
+func TestGenerate_TeamReportOmitsPerRepoBreakdown(t *testing.T) {
 	dir := t.TempDir()
 	alpha := filepath.Join(dir, "alpha.jsonl")
 	beta := filepath.Join(dir, "beta.jsonl")
-	// Distinct SHAs and content so both repos appear in the breakdown.
 	alphaRow := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-01T00:00:00Z","additions":10,"deletions":0,"files_changed":1}
 {"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"a.go","additions":10,"deletions":0}
 `
@@ -111,37 +109,14 @@ func TestGenerate_PerRepoBreakdownWidthsAreNumeric(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Per-Repository Breakdown") {
-		t.Fatal("breakdown section missing from multi-repo report")
+	if strings.Contains(out, "Per-Repository Breakdown") {
+		t.Error("team report should not render the Per-Repository Breakdown; it's a profile-only metric")
 	}
-	if strings.Contains(out, "ZgotmplZ") {
-		t.Error("report contains ZgotmplZ — template fed a non-numeric value to a CSS context (likely printf'd a string)")
-	}
-	if strings.Contains(out, "%!f(string=") {
-		t.Error("report contains %!f(string=...) — printf was given a string where a float was expected")
-	}
-
-	// Stronger guard: the absence-of-markers check above would pass
-	// if a future bug rendered every bar at `width:0%`. The breakdown
-	// tile has a green fill (background:#216e39) — extract every
-	// rendered width for those tiles and assert at least one is
-	// non-zero. With alpha's 10-churn commit and beta's 25-churn
-	// commit producing distinct totals, the commit-share proportions
-	// can't all collapse to zero unless the template is broken.
-	widthRe := regexp.MustCompile(`width:([0-9]+(?:\.[0-9]+)?)%; background:#216e39`)
-	matches := widthRe.FindAllStringSubmatch(out, -1)
-	if len(matches) == 0 {
-		t.Fatal("no repo-breakdown bar widths found; template may have changed selector")
-	}
-	sawNonZero := false
-	for _, m := range matches {
-		if m[1] != "0" && m[1] != "0.0" {
-			sawNonZero = true
-			break
-		}
-	}
-	if !sawNonZero {
-		t.Errorf("every repo bar rendered with width:0 — proportions would be invisible in the UI; widths: %v", matches)
+	// Sanity: the scan JSONL prefix still shows up in file paths etc.
+	// — we didn't accidentally strip the repo context from the whole
+	// report.
+	if !strings.Contains(out, "alpha:") && !strings.Contains(out, "beta:") {
+		t.Error("expected repo-prefixed paths to appear somewhere in the team report; none found")
 	}
 }
 
