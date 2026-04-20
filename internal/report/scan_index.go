@@ -48,23 +48,38 @@ func HumanizeAgo(lastDate string) (label, bucket string) {
 // but takes an explicit "now" so tests can pin the reference time
 // and avoid drift.
 //
-// Future-commit policy: a date strictly in the past ("days >= 0
-// when measured against midnight-to-midnight") is labeled.
-// Anything earlier than today's date (even by one hour, via
-// committer-date clock skew or CI rewrite) yields empty — the
-// index exists to surface how stale each repo is, and "in 3d" on
-// a repo whose scanner clock drifted would be actively misleading.
-// Sub-day skew within TODAY lands in `days == 0 → "today"`, which
-// is the most reasonable fallback given the template's day
+// Future-commit policy: dates strictly AFTER today's UTC midnight
+// (e.g. tomorrow's YYYY-MM-DD due to clock skew or a future-dated
+// CI rewrite) yield empty — the index surfaces how STALE each repo
+// is, and labeling "in 3d" as "fresh" would actively mislead. Both
+// sides of the comparison reduce to UTC midnights so "tomorrow"
+// is detected even when the user's wall clock is mid-day; sub-day
+// committer-clock skew inside today's date still falls into
+// `days == 0 → "today"`, documented as the safe fallback at day
 // granularity.
+//
+// The earlier implementation computed `days` as
+// int(now.Sub(t).Hours() / 24), which truncates toward zero for
+// negative durations. A "tomorrow" date 12 hours ahead produced
+// days == 0 instead of -1, slipping past the future-date guard
+// and rendering "today" / fresh. Comparing the parsed date
+// directly against today's UTC midnight removes the truncation
+// gap.
 func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
 	t, err := time.Parse("2006-01-02", lastDate)
 	if err != nil {
 		return "", ""
 	}
-	days := int(now.Sub(t).Hours() / 24)
+	today := now.UTC().Truncate(24 * time.Hour)
+	if t.After(today) {
+		return "", ""
+	}
+	days := int(today.Sub(t).Hours() / 24)
 	switch {
 	case days < 0:
+		// Defensive: t.After(today) above already covered this, but
+		// keep the branch so a later refactor that moves the guard
+		// can't silently produce a negative-days label.
 		return "", ""
 	case days == 0:
 		label = "today"

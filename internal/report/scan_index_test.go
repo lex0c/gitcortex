@@ -39,10 +39,16 @@ func TestHumanizeAgoAt(t *testing.T) {
 		// Future dates (clock skew) yield empty — we don't label "in 3d"
 		// on an index that exists to surface recency of PAST commits.
 		{"full-day future", "2026-05-01", "", ""},
+		// Regression for the truncation-gap bug: tomorrow (~12h ahead
+		// of `now`) used to yield int(-0.5) == 0 and silently render
+		// as "today" / fresh. Comparing UTC date midnights instead
+		// of raw durations rejects it correctly.
+		{"tomorrow (sub-24h future)", "2026-04-21", "", ""},
+		{"two days future", "2026-04-22", "", ""},
 		// Sub-day future (committer-date hours ahead of scanner clock)
 		// lands in days==0 → "today". Documented: the index works at
 		// day granularity and "today" is the least-misleading fallback
-		// for intra-day skew.
+		// for intra-day skew within today's date.
 		{"same-day future (sub-day skew)", "2026-04-20", "today", "fresh"},
 	}
 	for _, c := range cases {
