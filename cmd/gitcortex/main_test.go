@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,6 +294,89 @@ func TestRenderScanReportDir_MixedStatuses(t *testing.T) {
 	if strings.Contains(index, `href="broken.html"`) || strings.Contains(index, `href="skipped.html"`) {
 		t.Error("index links to a non-existent per-repo HTML for a non-ok entry")
 	}
+}
+
+// Index order is a triage view: failed first (actionable), then
+// pending (skipped work, less urgent), then ok ranked by commit
+// count desc (heaviest healthy repos first). Slug asc breaks ties
+// everywhere.
+func TestRenderScanReportDir_IndexOrderFailedFirstThenByCommits(t *testing.T) {
+	dir := t.TempDir()
+	// One JSONL with 50 commits, one with 5 — lets us see the
+	// ok-bucket reorder from the "small -> big" alphabetical slug
+	// order to "big -> small" commit-count order.
+	bigJSONL := filepath.Join(dir, "big.jsonl")
+	smallJSONL := filepath.Join(dir, "small.jsonl")
+	if err := os.WriteFile(bigJSONL, []byte(manyCommitsJSONL(50)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(smallJSONL, []byte(manyCommitsJSONL(5)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: dir,
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				// Slug asc would give: big, broken, pending, small.
+				// Triage order expected: broken (failed), pending, big (50c), small (5c).
+				{Slug: "big", Path: "/x/big", Status: "ok", JSONL: bigJSONL},
+				{Slug: "broken", Path: "/x/broken", Status: "failed", Error: "explode"},
+				{Slug: "pending", Path: "/x/pending", Status: "pending"},
+				{Slug: "small", Path: "/x/small", Status: "ok", JSONL: smallJSONL},
+			},
+		},
+	}
+
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+
+	// Each card renders `<div class="path">{{.Path}}</div>` with the
+	// unique filesystem path. Finding each path's offset gives the
+	// render order; ok entries also include an anchor but failed /
+	// pending do not, so the `.path` cell is the stable locator.
+	idxOf := func(p string) int { return strings.Index(out, p) }
+	brokenIdx := idxOf("/x/broken")
+	pendingIdx := idxOf("/x/pending")
+	bigIdx := idxOf("/x/big")
+	smallIdx := idxOf("/x/small")
+	for name, i := range map[string]int{"broken": brokenIdx, "pending": pendingIdx, "big": bigIdx, "small": smallIdx} {
+		if i < 0 {
+			t.Fatalf("%q path not found in index output", name)
+		}
+	}
+	if !(brokenIdx < pendingIdx && pendingIdx < bigIdx && bigIdx < smallIdx) {
+		t.Errorf("triage order failed: broken=%d pending=%d big=%d small=%d — want broken < pending < big < small",
+			brokenIdx, pendingIdx, bigIdx, smallIdx)
+	}
+}
+
+// manyCommitsJSONL returns n valid commit+file rows, each with a
+// distinct SHA so LoadJSONL counts them as N commits.
+func manyCommitsJSONL(n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		sha := fmt.Sprintf("%040x", i+1)
+		fmt.Fprintf(&sb,
+			`{"type":"commit","sha":"%s","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-%02dT00:00:00Z","additions":10,"deletions":0,"files_changed":1}`+"\n",
+			sha, (i%28)+1)
+		fmt.Fprintf(&sb,
+			`{"type":"commit_file","commit":"%s","path_current":"f%d.go","additions":10,"deletions":0}`+"\n",
+			sha, i)
+	}
+	return sb.String()
 }
 
 // Render with zero successful repos must still emit an index

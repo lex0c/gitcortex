@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -872,6 +873,25 @@ func reportCmd() *cobra.Command {
 	return cmd
 }
 
+// scanIndexStatusRank maps a ManifestRepo.Status to a sort bucket
+// used by the index page ordering. Lower rank renders first; failed
+// entries float to the top so operators spot them immediately,
+// pending/skipped land in the middle, and ok entries make up the
+// "everything else" tail ranked by commit count inside
+// renderScanReportDir.
+func scanIndexStatusRank(status string) int {
+	switch status {
+	case "failed":
+		return 0
+	case "pending", "skipped":
+		return 1
+	case "ok":
+		return 2
+	default:
+		return 3
+	}
+}
+
 // renderScanReportDir is `scan --report-dir` in one place: for each
 // successful repo in the manifest, load only that repo's JSONL as a
 // standalone dataset, run the normal `report` pipeline into
@@ -960,6 +980,25 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 
 		entries = append(entries, entry)
 	}
+
+	// Order the index as a triage view rather than by discovery's
+	// alphabetical slug order. Failed entries come first (they need
+	// attention and their absence of metrics makes the red border
+	// the only signal), then pending/skipped, then ok entries
+	// ranked by commit count desc so the heaviest repos surface at
+	// the top of the "healthy" section. Slug asc is the tiebreaker
+	// in every bucket so scans with identical shapes still produce
+	// identical page order.
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := scanIndexStatusRank(entries[i].Status), scanIndexStatusRank(entries[j].Status)
+		if a != b {
+			return a < b
+		}
+		if entries[i].Status == "ok" && entries[i].Commits != entries[j].Commits {
+			return entries[i].Commits > entries[j].Commits
+		}
+		return entries[i].Slug < entries[j].Slug
+	})
 
 	indexPath := filepath.Join(dir, "index.html")
 	f, err := os.Create(indexPath)
