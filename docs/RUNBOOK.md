@@ -171,6 +171,17 @@ Section headers go to stderr, data to stdout. To capture only data:
 
 Supported units: `d` (days), `w` (weeks), `m` (months), `y` (years).
 
+For a **closed window** (arbitrary start/end dates, e.g. a past quarter), use `--from` and `--to` instead of `--since` on both `stats` and `report`:
+
+```bash
+./gitcortex stats  --from 2026-01-01 --to 2026-03-31 --stat contributors   # Q1 contributors
+./gitcortex report --from 2026-01-01 --to 2026-03-31 --output q1.html      # Q1 HTML report
+./gitcortex stats  --from 2025-06-01                                       # from date X onward
+./gitcortex report --to 2024-12-31 --output pre-2025.html                  # up to date Y
+```
+
+Dates are `YYYY-MM-DD` and **both boundaries are inclusive** — `--from 2026-01-01 --to 2026-03-31` captures every commit on 2026-01-01 through 2026-03-31 at UTC day boundaries. `--since` and `--from`/`--to` are mutually exclusive (they both specify a window, combining them is ambiguous).
+
 ### Output formats
 
 ```bash

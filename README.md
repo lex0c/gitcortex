@@ -233,6 +233,12 @@ gitcortex stats --input data.jsonl --stat activity --granularity week
 gitcortex stats --since 7d                    # last 7 days
 gitcortex stats --since 3m --stat contributors # last 3 months
 gitcortex report --since 30d --output monthly.html
+
+# Closed window (arbitrary start/end — e.g. past quarter)
+gitcortex stats  --from 2026-01-01 --to 2026-03-31 --stat contributors
+gitcortex report --from 2026-01-01 --to 2026-03-31 --output q1.html
+gitcortex report --from 2025-06-01 --output post-release.html  # open-ended forward
+gitcortex report --to 2024-12-31 --output pre-2025.html        # open-ended backward
 ```
 
 Available stats:

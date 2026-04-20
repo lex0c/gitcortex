@@ -120,6 +120,8 @@ type statsFlags struct {
 	granularity        string
 	stat               string
 	since              string
+	from               string
+	to                 string
 	couplingMaxFiles   int
 	couplingMinChanges int
 	churnHalfLife      int
@@ -140,6 +142,8 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().IntVar(&sf.networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
 	cmd.Flags().StringVar(&sf.email, "email", "", "Filter by developer email (for profile stat)")
 	cmd.Flags().StringVar(&sf.since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
+	cmd.Flags().StringVar(&sf.from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
+	cmd.Flags().StringVar(&sf.to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
 	cmd.Flags().IntVar(&sf.treeDepth, "tree-depth", 3, "Max depth for --stat structure (0 = unlimited)")
 }
 
@@ -152,6 +156,18 @@ func validateStatsFlags(sf *statsFlags) error {
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
 		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure", sf.stat)
+	}
+	if sf.since != "" && (sf.from != "" || sf.to != "") {
+		return fmt.Errorf("--since cannot be combined with --from/--to; pick one window spec")
+	}
+	if err := validateDate(sf.from, "--from"); err != nil {
+		return err
+	}
+	if err := validateDate(sf.to, "--to"); err != nil {
+		return err
+	}
+	if sf.from != "" && sf.to != "" && sf.from > sf.to {
+		return fmt.Errorf("--from (%s) must be on or before --to (%s)", sf.from, sf.to)
 	}
 	return nil
 }
@@ -167,13 +183,18 @@ func statsCmd() *cobra.Command {
 				return err
 			}
 
-			sinceDate, err := parseSince(sf.since)
-			if err != nil {
-				return err
+			fromDate := sf.from
+			if sf.since != "" {
+				d, err := parseSince(sf.since)
+				if err != nil {
+					return err
+				}
+				fromDate = d
 			}
 
 			ds, err := stats.LoadMultiJSONL(sf.inputs, stats.LoadOptions{
-				From:         sinceDate,
+				From:         fromDate,
+				To:           sf.to,
 				HalfLifeDays: sf.churnHalfLife,
 				CoupMaxFiles: sf.couplingMaxFiles,
 			})
@@ -666,6 +687,22 @@ func printCIJSON(violations []ciViolation) {
 	enc.Encode(violations)
 }
 
+// validateDate accepts "" (treated as "no bound") or a YYYY-MM-DD
+// literal. The stats loader compares dates as strings — ISO-8601 date
+// literals sort lexicographically, so comparison semantics don't need
+// a time.Time round-trip. Parse is still used here to reject
+// garbage like "2024-13-40" up front with a clear CLI error instead
+// of silently loading an empty window.
+func validateDate(s, flag string) error {
+	if s == "" {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", s); err != nil {
+		return fmt.Errorf("invalid %s %q; expected YYYY-MM-DD", flag, s)
+	}
+	return nil
+}
+
 func parseSince(s string) (string, error) {
 	if s == "" {
 		return "", nil
@@ -738,6 +775,8 @@ func reportCmd() *cobra.Command {
 		topN               int
 		email              string
 		since              string
+		from               string
+		to                 string
 		couplingMaxFiles   int
 		couplingMinChanges int
 		churnHalfLife      int
@@ -748,13 +787,36 @@ func reportCmd() *cobra.Command {
 		Use:   "report",
 		Short: "Generate a self-contained HTML report",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sinceDate, err := parseSince(since)
-			if err != nil {
+			// --since and --from/--to express overlapping intent
+			// (select a window); combining them is ambiguous — does
+			// --since push the start past --from, or does --from
+			// override? Reject the combination explicitly instead of
+			// picking one silently.
+			if since != "" && (from != "" || to != "") {
+				return fmt.Errorf("--since cannot be combined with --from/--to; pick one window spec")
+			}
+			if err := validateDate(from, "--from"); err != nil {
 				return err
+			}
+			if err := validateDate(to, "--to"); err != nil {
+				return err
+			}
+			if from != "" && to != "" && from > to {
+				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+
+			fromDate := from
+			if since != "" {
+				d, err := parseSince(since)
+				if err != nil {
+					return err
+				}
+				fromDate = d
 			}
 
 			ds, err := stats.LoadJSONL(input, stats.LoadOptions{
-				From:         sinceDate,
+				From:         fromDate,
+				To:           to,
 				HalfLifeDays: churnHalfLife,
 				CoupMaxFiles: couplingMaxFiles,
 			})
@@ -802,6 +864,8 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay")
 	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges")
 	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
+	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
+	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
 
 	return cmd
 }
