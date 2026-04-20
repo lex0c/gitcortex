@@ -273,11 +273,16 @@ func TestRenderScanReportDir_MixedStatuses(t *testing.T) {
 		t.Error("failed entry's error message missing from index")
 	}
 
-	// Status pills render for each entry. Grep for the pill classes.
-	for _, want := range []string{"status-ok", "status-failed", "status-pending"} {
+	// Status pills render only for non-ok entries (ok is implicit
+	// given the link itself and the presence of metric cells). Assert
+	// the two non-ok pills exist and the ok one does not.
+	for _, want := range []string{"status-failed", "status-pending"} {
 		if !strings.Contains(index, want) {
-			t.Errorf("index missing %q pill — a status branch lost its style", want)
+			t.Errorf("index missing %q pill — status branch lost its style", want)
 		}
+	}
+	if strings.Contains(index, `class="status-pill status-ok"`) {
+		t.Error("ok entries should not render a status pill — redundant with the link and metric cells")
 	}
 
 	// Only OK entries carry an href; failed/pending must not link to

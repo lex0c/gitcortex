@@ -116,7 +116,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div>
     <div class="name">
       {{if .ReportHref}}<a href="{{.ReportHref}}">{{.Slug}}</a>{{else}}{{.Slug}}{{end}}
-      <span class="status-pill status-{{.Status}}">{{.Status}}</span>
+      {{if ne .Status "ok"}}<span class="status-pill status-{{.Status}}">{{.Status}}</span>{{end}}
     </div>
     <div class="path">{{.Path}}</div>
     {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
@@ -148,7 +148,6 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{if eq .Status "ok"}}
 <div class="bar-container" style="margin:-4px 0 12px 20px; max-width:600px;">
   <div class="bar-outer"><div class="bar-inner" style="width:{{if gt $max 0}}{{pctInt .Commits $max}}%{{else}}0%{{end}};"></div></div>
-  <span style="font-size:11px; color:#656d76; font-family: 'SF Mono', Consolas, monospace; white-space:nowrap;">{{humanize .Commits}} / {{humanize $max}} max</span>
 </div>
 {{end}}
 {{end}}
