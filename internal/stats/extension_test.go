@@ -118,6 +118,220 @@ func TestExtensionStatsAggregation(t *testing.T) {
 	}
 }
 
+// Regression: a file renamed across extensions (foo.js → foo.ts)
+// collapses onto one canonical path after applyRenames. Bucketing on
+// that canonical path alone would assign ALL historical churn to .ts
+// and zero to .js — an ugly skew in migration-heavy repos. The fix
+// uses fileEntry.byExt (populated at per-change time) to split the
+// lineage back across both buckets.
+func TestExtensionStatsHonorsPerEraSplit(t *testing.T) {
+	ds := &Dataset{
+		Latest: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+		files: map[string]*fileEntry{
+			// Simulates what reader.go produces post-applyRenames: one
+			// canonical key ("foo.ts") with churn split across the two
+			// extensions the file held during its lifetime.
+			"foo.ts": {
+				additions: 1200, deletions: 300,
+				recentChurn: 900,
+				devLines:    map[string]int64{"alice@x": 900, "bob@x": 600},
+				byExt: map[string]*extContribution{
+					".js": {
+						churn:       1000,
+						recentChurn: 200, // old era, decayed
+						firstChange: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+						lastChange:  time.Date(2024, 2, 15, 0, 0, 0, 0, time.UTC),
+					},
+					".ts": {
+						churn:       500,
+						recentChurn: 700, // recent migration, less decay
+						firstChange: time.Date(2024, 2, 16, 0, 0, 0, 0, time.UTC),
+						lastChange:  time.Date(2024, 5, 30, 0, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+		},
+	}
+
+	result := ExtensionStats(ds, 0)
+	if len(result) != 2 {
+		t.Fatalf("got %d buckets, want 2 (.js + .ts)", len(result))
+	}
+
+	var js, ts *ExtensionStat
+	for i := range result {
+		switch result[i].Ext {
+		case ".js":
+			js = &result[i]
+		case ".ts":
+			ts = &result[i]
+		}
+	}
+	if js == nil || ts == nil {
+		t.Fatalf("missing .js or .ts bucket; result=%+v", result)
+	}
+
+	// Churn must reflect the per-era split, NOT be lumped into .ts.
+	if js.Churn != 1000 || ts.Churn != 500 {
+		t.Errorf("churn split wrong: .js=%d (want 1000), .ts=%d (want 500)", js.Churn, ts.Churn)
+	}
+	// RecentChurn similarly preserved per-era.
+	if js.RecentChurn != 200 || ts.RecentChurn != 700 {
+		t.Errorf("recent churn split wrong: .js=%.1f, .ts=%.1f", js.RecentChurn, ts.RecentChurn)
+	}
+	// One file lineage, but counts once per ext it held.
+	if js.Files != 1 || ts.Files != 1 {
+		t.Errorf("files per bucket: .js=%d, .ts=%d, want 1/1 (lineage counts in each bucket it held)", js.Files, ts.Files)
+	}
+	// Dates: each ext reports the range from its own era, not the whole
+	// file's range. .js ended when the migration started; .ts starts
+	// the day after.
+	if js.LastSeen != "2024-02-15" {
+		t.Errorf(".js LastSeen = %q, want 2024-02-15 (migration cutoff, not post-rename activity)", js.LastSeen)
+	}
+	if ts.FirstSeen != "2024-02-16" {
+		t.Errorf(".ts FirstSeen = %q, want 2024-02-16 (post-rename era start)", ts.FirstSeen)
+	}
+}
+
+// Regression: applyRenames calls mergeFileEntry when two fileEntries
+// collapse onto the same canonical path (foo.js → foo.ts). If the
+// byExt merge drops an entry, sums dates incorrectly, or clobbers an
+// overlapping bucket, ExtensionStats silently loses per-era
+// attribution and the TestExtensionStatsHonorsPerEraSplit consumer-
+// side guard wouldn't catch it — that test hand-builds byExt and
+// never exercises the merger.
+func TestMergeFileEntryByExt(t *testing.T) {
+	// dst covers two extensions; src covers one that overlaps (.js)
+	// and one that's new to dst (.md). After merge: .js aggregates,
+	// .md is transferred, .ts is untouched.
+	dst := &fileEntry{
+		devLines:   map[string]int64{"alice@x": 10},
+		devCommits: map[string]int{"alice@x": 1},
+		monthChurn: map[string]int64{},
+		byExt: map[string]*extContribution{
+			".js": {
+				churn:       300,
+				recentChurn: 100,
+				firstChange: time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC),
+				lastChange:  time.Date(2023, 6, 1, 0, 0, 0, 0, time.UTC),
+			},
+			".ts": {
+				churn:       500,
+				recentChurn: 400,
+				firstChange: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				lastChange:  time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	src := &fileEntry{
+		devLines:   map[string]int64{"bob@x": 20},
+		devCommits: map[string]int{"bob@x": 2},
+		monthChurn: map[string]int64{},
+		byExt: map[string]*extContribution{
+			".js": {
+				// Earlier first + later last than dst — both bounds
+				// should widen after merge.
+				churn:       100,
+				recentChurn: 50,
+				firstChange: time.Date(2022, 6, 1, 0, 0, 0, 0, time.UTC),
+				lastChange:  time.Date(2023, 12, 1, 0, 0, 0, 0, time.UTC),
+			},
+			".md": {
+				churn:       40,
+				recentChurn: 10,
+				firstChange: time.Date(2023, 3, 1, 0, 0, 0, 0, time.UTC),
+				lastChange:  time.Date(2023, 8, 1, 0, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	mergeFileEntry(dst, src)
+
+	if len(dst.byExt) != 3 {
+		t.Fatalf("dst.byExt size = %d, want 3 (.js .ts .md)", len(dst.byExt))
+	}
+
+	// Overlapping bucket: churn and recentChurn add; dates widen.
+	js := dst.byExt[".js"]
+	if js.churn != 400 {
+		t.Errorf(".js churn = %d, want 400 (300+100)", js.churn)
+	}
+	if js.recentChurn != 150 {
+		t.Errorf(".js recentChurn = %.1f, want 150 (100+50)", js.recentChurn)
+	}
+	if !js.firstChange.Equal(time.Date(2022, 6, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf(".js firstChange = %v, want 2022-06-01 (src's earlier date won)", js.firstChange)
+	}
+	if !js.lastChange.Equal(time.Date(2023, 12, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf(".js lastChange = %v, want 2023-12-01 (src's later date won)", js.lastChange)
+	}
+
+	// Non-overlapping bucket transferred from src: must be present
+	// with src's values preserved verbatim.
+	md := dst.byExt[".md"]
+	if md == nil {
+		t.Fatal(".md bucket missing after merge — src entry dropped")
+	}
+	if md.churn != 40 || md.recentChurn != 10 {
+		t.Errorf(".md = %+v, want churn=40 recentChurn=10", md)
+	}
+
+	// dst-only bucket untouched.
+	ts := dst.byExt[".ts"]
+	if ts.churn != 500 || ts.recentChurn != 400 {
+		t.Errorf(".ts = %+v, want churn=500 recentChurn=400 (dst value preserved)", ts)
+	}
+}
+
+// mergeFileEntry must lazily create dst.byExt when dst started nil —
+// covers the case where a long-lived file without extension history
+// collides with a newly-seen one that carries a byExt map.
+func TestMergeFileEntryByExtNilDst(t *testing.T) {
+	dst := &fileEntry{
+		devLines:   map[string]int64{},
+		devCommits: map[string]int{},
+		monthChurn: map[string]int64{},
+	}
+	src := &fileEntry{
+		devLines:   map[string]int64{},
+		devCommits: map[string]int{},
+		monthChurn: map[string]int64{},
+		byExt: map[string]*extContribution{
+			".go": {churn: 10, recentChurn: 5},
+		},
+	}
+	mergeFileEntry(dst, src)
+	if dst.byExt == nil {
+		t.Fatal("dst.byExt still nil after merging from non-nil src")
+	}
+	if got := dst.byExt[".go"]; got == nil || got.churn != 10 {
+		t.Errorf("dst.byExt[.go] = %+v, want churn=10", got)
+	}
+}
+
+// Inverse case: src has no byExt (e.g. legacy or hand-built). Merge
+// must be a no-op on dst.byExt and not panic.
+func TestMergeFileEntryByExtNilSrc(t *testing.T) {
+	dst := &fileEntry{
+		devLines:   map[string]int64{},
+		devCommits: map[string]int{},
+		monthChurn: map[string]int64{},
+		byExt: map[string]*extContribution{
+			".rs": {churn: 7},
+		},
+	}
+	src := &fileEntry{
+		devLines:   map[string]int64{},
+		devCommits: map[string]int{},
+		monthChurn: map[string]int64{},
+	}
+	mergeFileEntry(dst, src)
+	if len(dst.byExt) != 1 || dst.byExt[".rs"].churn != 7 {
+		t.Errorf("dst.byExt mutated by nil-src merge: %+v", dst.byExt)
+	}
+}
+
 func TestExtensionStatsTopN(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{

@@ -441,6 +441,26 @@ func extractExtension(path string) string {
 // is O(F + E log E) where F is the number of tracked files and E is
 // the number of distinct extensions — trivial compared to the stats
 // that compute Herfindahl indices or per-commit coupling pairs.
+//
+// Attribution uses fileEntry.byExt, which tracks churn per extension
+// as it existed at each change. A file renamed across extensions
+// (foo.js → foo.ts) contributes to both buckets proportionally to
+// its pre- and post-rename history; bucketing on the canonical path's
+// current extension alone would misattribute the entire lineage to
+// the final extension. A file that touched two extensions counts once
+// in each — "files" is "distinct lineages that ever held this
+// extension". Totals across buckets therefore exceed len(ds.files) in
+// repos with migrations.
+//
+// UniqueDevs is per-file-union: any dev who touched a file contributes
+// to every extension bucket that file ever held. This over-counts on
+// migration: a dev who only touched foo.js pre-rename will also
+// appear under ".ts" if the file was migrated. Accepting this as a
+// bounded caveat — splitting devs per era would require per-commit
+// dev tracking that doesn't exist on fileEntry.
+//
+// Falls back to the canonical path's extension when fe.byExt is nil
+// (hand-built fileEntries in unit tests never populate it).
 func ExtensionStats(ds *Dataset, n int) []ExtensionStat {
 	type extAcc struct {
 		files       int
@@ -450,29 +470,55 @@ func ExtensionStats(ds *Dataset, n int) []ExtensionStat {
 		first, last time.Time
 	}
 
-	buckets := make(map[string]*extAcc)
-	for path, fe := range ds.files {
-		ext := extractExtension(path)
+	getBucket := func(buckets map[string]*extAcc, ext string) *extAcc {
 		b, ok := buckets[ext]
 		if !ok {
 			b = &extAcc{devs: make(map[string]struct{})}
 			buckets[ext] = b
 		}
-		b.files++
-		b.churn += fe.additions + fe.deletions
-		b.recentChurn += fe.recentChurn
-		for email := range fe.devLines {
-			b.devs[email] = struct{}{}
+		return b
+	}
+
+	buckets := make(map[string]*extAcc)
+	for path, fe := range ds.files {
+		// Real path: use the rename-aware per-ext split captured at
+		// ingest. Fallback: if byExt is nil (legacy data / test
+		// dataset), synthesize a single-bucket split from the
+		// canonical path's extension + current file aggregate.
+		if fe.byExt == nil {
+			ext := extractExtension(path)
+			b := getBucket(buckets, ext)
+			b.files++
+			b.churn += fe.additions + fe.deletions
+			b.recentChurn += fe.recentChurn
+			for email := range fe.devLines {
+				b.devs[email] = struct{}{}
+			}
+			if !fe.firstChange.IsZero() && (b.first.IsZero() || fe.firstChange.Before(b.first)) {
+				b.first = fe.firstChange
+			}
+			if !fe.lastChange.IsZero() && fe.lastChange.After(b.last) {
+				b.last = fe.lastChange
+			}
+			continue
 		}
-		// Mirror-shape for first/last: only adopt non-zero inputs so
-		// we never stamp a zero-value time onto a previously-valid
-		// aggregate. Before/After both behave as expected across zero
-		// times but the explicit IsZero guard reads cleaner.
-		if !fe.firstChange.IsZero() && (b.first.IsZero() || fe.firstChange.Before(b.first)) {
-			b.first = fe.firstChange
-		}
-		if !fe.lastChange.IsZero() && fe.lastChange.After(b.last) {
-			b.last = fe.lastChange
+		for ext, ec := range fe.byExt {
+			b := getBucket(buckets, ext)
+			b.files++
+			b.churn += ec.churn
+			b.recentChurn += ec.recentChurn
+			// Dev attribution uses the per-file dev set (see doc comment
+			// — we accept the cross-era over-count rather than a coarser
+			// approximation).
+			for email := range fe.devLines {
+				b.devs[email] = struct{}{}
+			}
+			if !ec.firstChange.IsZero() && (b.first.IsZero() || ec.firstChange.Before(b.first)) {
+				b.first = ec.firstChange
+			}
+			if !ec.lastChange.IsZero() && ec.lastChange.After(b.last) {
+				b.last = ec.lastChange
+			}
 		}
 	}
 

@@ -266,11 +266,11 @@ File extensions aggregated from `ds.files`, ranked by **recent churn** (decay-we
 - Extensions lowercased so `.PNG` and `.png` aggregate.
 
 **Per-bucket fields**:
-- `files` — distinct file paths.
-- `churn` — lifetime additions + deletions.
-- `recent_churn` — decay-weighted aggregate (same half-life as other stats, set at load time). Leads the sort so a dormant extension with high lifetime churn won't displace an active one.
-- `unique_devs` — distinct emails that contributed any line.
-- `first_seen` / `last_seen` — min/max across the bucket's files (UTC date).
+- `files` — distinct file lineages that ever held this extension. A file renamed across extensions (foo.js → foo.ts) counts once in each bucket; totals across buckets can therefore exceed the dataset's file count in migration-heavy repos.
+- `churn` — lifetime additions + deletions attributed to this extension specifically. A foo.js → foo.ts migration with 1000 lines of pre-rename churn and 500 post-rename does **not** collapse all 1500 onto `.ts`; `.js` keeps its 1000 and `.ts` gets 500. The attribution comes from capturing the path's extension at each change before `applyRenames` merges the lineage.
+- `recent_churn` — same per-era semantics, decay-weighted (same half-life as other stats, set at load time). Leads the sort so a dormant extension with high lifetime churn won't displace an active one.
+- `unique_devs` — distinct emails that touched any file that ever held this extension. **Over-counts across migrations**: a dev who only worked on `foo.js` pre-migration still appears under `.ts` if that file was migrated. Splitting devs per era would need per-commit dev tracking that `fileEntry` does not retain. Read this as "people with context on files that at some point were this extension" rather than "active contributors in this extension".
+- `first_seen` / `last_seen` — min/max within the bucket's era, UTC date. For the `.js` bucket in a TypeScript migration, `last_seen` is the migration cutoff, not today's date.
 
 **Reading signals**:
 - `.yaml` recent churn high + unique_devs low → config owned by one person; schedule handoff before they leave.
