@@ -1,6 +1,8 @@
 package stats
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -107,6 +109,54 @@ func TestRepoBreakdown_SurvivesRename(t *testing.T) {
 	}
 	if breakdown[0].Commits != 2 {
 		t.Errorf("want 2 commits, got %d", breakdown[0].Commits)
+	}
+}
+
+// Regression: when two repos share a commit SHA (fork / mirror /
+// cherry-pick) the ingest map ds.commits drops one side. Without a
+// separate per-repo record, RepoBreakdown would silently under-count
+// the repo ingested first and the consolidated report would show
+// wrong percentages. Must preserve both.
+func TestRepoBreakdown_SurvivesCrossRepoSHACollision(t *testing.T) {
+	dir := t.TempDir()
+	// Two repos with IDENTICAL commit rows — different churn per row
+	// so we can verify both contribute to the breakdown. In real
+	// life this maps to a cherry-picked or mirrored commit where the
+	// SHA matches but the files and stats land in different repos.
+	commitRow := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_date":"2024-01-01T00:00:00Z","author_email":"me@x.com","author_name":"Me","additions":10,"deletions":0,"files_changed":1}`
+	alphaFile := `{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"a.go","additions":10,"deletions":0}`
+	betaFile := `{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"b.go","additions":10,"deletions":0}`
+
+	alpha := filepath.Join(dir, "alpha.jsonl")
+	beta := filepath.Join(dir, "beta.jsonl")
+	if err := os.WriteFile(alpha, []byte(commitRow+"\n"+alphaFile+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beta, []byte(commitRow+"\n"+betaFile+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ds, err := LoadMultiJSONL([]string{alpha, beta})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+
+	breakdown := RepoBreakdown(ds, "")
+	if len(breakdown) != 2 {
+		t.Fatalf("want breakdown across both alpha AND beta despite SHA collision, got %d rows: %+v", len(breakdown), breakdown)
+	}
+	got := map[string]int{}
+	for _, b := range breakdown {
+		got[b.Repo] = b.Commits
+	}
+	if got["alpha"] != 1 || got["beta"] != 1 {
+		t.Errorf("each repo should keep its commit; got alpha=%d beta=%d", got["alpha"], got["beta"])
+	}
+	// Sanity on percentage — each repo is 50% of the 2 collided commits.
+	for _, b := range breakdown {
+		if b.PctOfTotalCommits != 50 {
+			t.Errorf("repo %s: want 50%% commits, got %.1f", b.Repo, b.PctOfTotalCommits)
+		}
 	}
 }
 

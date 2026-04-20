@@ -28,22 +28,26 @@ type RepoStat struct {
 	PctOfTotalChurn   float64
 }
 
-// RepoBreakdown groups commits by their repo tag (set during ingest from
-// the LoadMultiJSONL pathPrefix) and returns one row per repo, sorted by
-// commit count descending. When emailFilter is non-empty, only commits
-// authored by that email are counted — this is the "show my work across
-// repos" lens used by the scan report.
+// RepoBreakdown groups commits by repo and returns one row per repo,
+// sorted by commit count descending. When emailFilter is non-empty,
+// only commits authored by that email are counted — this is the
+// "show my work across repos" lens used by the scan report.
 //
-// On single-repo datasets (no prefix tag, repo == ""), the function
-// returns a single row labeled "(repo)" so callers can still render
-// without a special case.
+// Source of truth is ds.commitsByRepo, a per-repository slice
+// populated at ingest. The SHA-keyed ds.commits map cannot be used
+// directly because two repos that share a commit SHA (fork, mirror,
+// cherry-pick) would lose the earlier ingest to the later one,
+// under-counting one repo's totals. Iterating commitsByRepo sidesteps
+// that collision.
 //
-// Caveat: the underlying ds.commits map is keyed by SHA. If two repos
-// share a commit SHA (cherry-pick, mirror, fork) the second one ingested
-// overwrites the first, and the breakdown will report only the
-// surviving repo. In practice this only matters for forked / mirrored
-// repos under a single scan root — for those, scan and aggregate
-// separately if exact attribution matters.
+// Fallback: test datasets that hand-build ds.commits without
+// populating commitsByRepo still work — we detect the empty slice
+// and bucket ds.commits by repo as before. Production ingest always
+// populates commitsByRepo.
+//
+// On single-repo datasets (no prefix tag), the function returns a
+// single row labeled "(repo)" so callers can render without a special
+// case.
 func RepoBreakdown(ds *Dataset, emailFilter string) []RepoStat {
 	type acc struct {
 		commits     int
@@ -56,13 +60,9 @@ func RepoBreakdown(ds *Dataset, emailFilter string) []RepoStat {
 	repos := make(map[string]*acc)
 	emailLower := strings.ToLower(strings.TrimSpace(emailFilter))
 
-	for _, c := range ds.commits {
+	visit := func(key string, c *commitEntry) {
 		if emailLower != "" && strings.ToLower(strings.TrimSpace(c.email)) != emailLower {
-			continue
-		}
-		key := c.repo
-		if key == "" {
-			key = "(repo)"
+			return
 		}
 		a, ok := repos[key]
 		if !ok {
@@ -86,6 +86,25 @@ func RepoBreakdown(ds *Dataset, emailFilter string) []RepoStat {
 			if c.date.After(a.last) {
 				a.last = c.date
 			}
+		}
+	}
+
+	if len(ds.commitsByRepo) > 0 {
+		for repo, entries := range ds.commitsByRepo {
+			for _, c := range entries {
+				visit(repo, c)
+			}
+		}
+	} else {
+		// Fallback for hand-built test datasets that populate
+		// ds.commits directly. Production ingest always goes through
+		// streamLoadInto and populates commitsByRepo.
+		for _, c := range ds.commits {
+			key := c.repo
+			if key == "" {
+				key = "(repo)"
+			}
+			visit(key, c)
 		}
 	}
 
