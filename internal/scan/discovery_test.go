@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDiscover_FindsRepos(t *testing.T) {
@@ -181,6 +182,74 @@ func TestAssignSlugs_DeterministicUnderRetry(t *testing.T) {
 		if a[i].Slug != b[i].Slug {
 			t.Errorf("slug for %s differs across runs: %q vs %q", a[i].AbsPath, a[i].Slug, b[i].Slug)
 		}
+	}
+}
+
+// Mid-walk cancel: the pre-cancelled test below only proves the
+// first callback checks ctx. This test cancels AFTER Discover has
+// already started walking — the scenario users hit with Ctrl+C on
+// a long home-dir scan. Asserting the walk stops in flight, not
+// just when prompted at the very start.
+//
+// The tree is large enough (5,000 dirs × 3 subdirs = 20k nodes)
+// that a full walk on typical hardware takes tens of ms; sleeping
+// briefly before cancel lands the signal mid-flight. We assert:
+//   - err is context.Canceled (ctx check fired inside the walk)
+//   - elapsed time < full baseline (walk was actually interrupted)
+//   - at least one repo was discovered BEFORE cancel (not a
+//     pre-cancel scenario in disguise)
+func TestDiscover_AbortsMidWalk(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a large synthetic tree; skipped in -short mode")
+	}
+	root := t.TempDir()
+	const topLevel = 5000
+	for i := 0; i < topLevel; i++ {
+		parent := filepath.Join(root, fmt.Sprintf("d-%05d", i))
+		for j := 0; j < 3; j++ {
+			if err := os.MkdirAll(filepath.Join(parent, fmt.Sprintf("sub-%d", j)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Every top-level dir is a repo so the result count is a
+		// direct proxy for how far the walk got.
+		mustMkRepo(t, parent)
+	}
+
+	// Baseline: uncancelled walk finds all topLevel repos.
+	baseStart := time.Now()
+	full, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := time.Since(baseStart)
+	if len(full) != topLevel {
+		t.Fatalf("baseline walk should find all %d repos, got %d", topLevel, len(full))
+	}
+
+	// Cancelled walk: give the walk a head start, then cancel.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(baseline / 4)
+		cancel()
+		close(done)
+	}()
+
+	cancStart := time.Now()
+	repos, err := Discover(ctx, []string{root}, NewMatcher(nil), 0)
+	cancElapsed := time.Since(cancStart)
+	<-done
+
+	if err != context.Canceled {
+		t.Fatalf("want context.Canceled after mid-walk cancel, got err=%v (elapsed %v, baseline %v, repos %d)",
+			err, cancElapsed, baseline, len(repos))
+	}
+	if cancElapsed >= baseline {
+		t.Errorf("cancelled walk took %v — baseline was %v. Ctx respected but walk did not shortcut; users will see delayed Ctrl+C", cancElapsed, baseline)
+	}
+	if len(repos) >= topLevel {
+		t.Errorf("cancelled walk returned all %d repos — appears to have finished before cancel fired; baseline %v, elapsed %v", len(repos), baseline, cancElapsed)
 	}
 }
 

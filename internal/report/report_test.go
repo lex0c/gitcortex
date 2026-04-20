@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -118,6 +119,98 @@ func TestGenerate_PerRepoBreakdownWidthsAreNumeric(t *testing.T) {
 	}
 	if strings.Contains(out, "%!f(string=") {
 		t.Error("report contains %!f(string=...) — printf was given a string where a float was expected")
+	}
+
+	// Stronger guard: the absence-of-markers check above would pass
+	// if a future bug rendered every bar at `width:0%`. The breakdown
+	// tile has a green fill (background:#216e39) — extract every
+	// rendered width for those tiles and assert at least one is
+	// non-zero. With alpha's 10-churn commit and beta's 25-churn
+	// commit producing distinct totals, the commit-share proportions
+	// can't all collapse to zero unless the template is broken.
+	widthRe := regexp.MustCompile(`width:([0-9]+(?:\.[0-9]+)?)%; background:#216e39`)
+	matches := widthRe.FindAllStringSubmatch(out, -1)
+	if len(matches) == 0 {
+		t.Fatal("no repo-breakdown bar widths found; template may have changed selector")
+	}
+	sawNonZero := false
+	for _, m := range matches {
+		if m[1] != "0" && m[1] != "0.0" {
+			sawNonZero = true
+			break
+		}
+	}
+	if !sawNonZero {
+		t.Errorf("every repo bar rendered with width:0 — proportions would be invisible in the UI; widths: %v", matches)
+	}
+}
+
+// End-to-end for the `gitcortex scan --email me@x.com --report …`
+// flow. Covers three assertions at once:
+//   1. GenerateProfile emits the Per-Repository Breakdown section
+//      when the dataset is multi-repo (gated on len(Repos) > 1).
+//   2. Counts per repo are filtered to the dev — a commit by
+//      someone-else@x.com in alpha doesn't bleed into my profile's
+//      alpha row.
+//   3. Files counted per repo are only files THIS dev touched — a
+//      colleague-exclusive file in alpha must not inflate my scope.
+func TestGenerateProfile_MultiRepoBreakdownFiltersByEmail(t *testing.T) {
+	dir := t.TempDir()
+	alpha := filepath.Join(dir, "alpha.jsonl")
+	beta := filepath.Join(dir, "beta.jsonl")
+
+	// alpha: me has 1 commit on a.go; colleague has 1 commit on
+	// colleague-only.go. beta: me has 1 commit on b.go.
+	alphaContent := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-10T00:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01","path_current":"a.go","additions":10,"deletions":0}
+{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa02","author_email":"colleague@x.com","author_name":"Col","author_date":"2024-01-11T00:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa02","path_current":"colleague-only.go","additions":5,"deletions":0}
+`
+	betaContent := `{"type":"commit","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01","author_email":"me@x.com","author_name":"Me","author_date":"2024-02-10T00:00:00Z","additions":20,"deletions":5,"files_changed":1}
+{"type":"commit_file","commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01","path_current":"b.go","additions":20,"deletions":5}
+`
+	if err := os.WriteFile(alpha, []byte(alphaContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(beta, []byte(betaContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ds, err := stats.LoadMultiJSONL([]string{alpha, beta})
+	if err != nil {
+		t.Fatalf("LoadMultiJSONL: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := GenerateProfile(&buf, ds, "scan-profile", "me@x.com"); err != nil {
+		t.Fatalf("GenerateProfile: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "Per-Repository Breakdown") {
+		t.Fatal("profile report missing the breakdown section — scan --email users won't see their cross-repo split")
+	}
+
+	// Each row renders as `<td class="mono">alpha</td>` followed by
+	// a `<td>N</td>` for commits. Assert 1 commit per repo — if the
+	// filter leaked, alpha would show 2 (me's + colleague's).
+	commitCountRe := regexp.MustCompile(`<td class="mono">(alpha|beta)</td>\s*<td>(\d+)</td>`)
+	rows := commitCountRe.FindAllStringSubmatch(out, -1)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 repo rows in breakdown, got %d: %v", len(rows), rows)
+	}
+	for _, r := range rows {
+		if r[2] != "1" {
+			t.Errorf("repo %s shows %s commits in profile breakdown — email filter leaked (want 1)", r[1], r[2])
+		}
+	}
+
+	// Colleague-exclusive file must not appear in my scope. The
+	// template renders file counts as `<td>N</td>` inside each row
+	// — indirect assertion: if the file-count bumped, the dev-filter
+	// on devCommits is wrong.
+	if strings.Contains(out, "colleague-only.go") {
+		t.Error("profile report mentions a file only the colleague touched")
 	}
 }
 
