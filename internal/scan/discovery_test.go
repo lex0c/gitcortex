@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -20,7 +21,7 @@ func TestDiscover_FindsRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestDiscover_RespectsIgnore(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "node_modules", "garbage"))
 
 	matcher := NewMatcher([]string{"node_modules"})
-	repos, err := Discover([]string{root}, matcher, 0)
+	repos, err := Discover(context.Background(), []string{root}, matcher, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestDiscover_HonorsNegatedDescendant(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "vendor", "keep"))
 
 	matcher := NewMatcher([]string{"vendor/", "!vendor/keep"})
-	repos, err := Discover([]string{root}, matcher, 0)
+	repos, err := Discover(context.Background(), []string{root}, matcher, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +184,36 @@ func TestAssignSlugs_DeterministicUnderRetry(t *testing.T) {
 	}
 }
 
+// A cancelled context must abort the walk — previously Discover
+// ignored ctx entirely, so Ctrl+C during the walk phase only took
+// effect after every directory had been stat'd. Test uses a
+// pre-cancelled context to trip the early-return on the very first
+// callback; no repos should be returned and the error should equal
+// ctx.Err().
+func TestDiscover_AbortsOnCancelledContext(t *testing.T) {
+	root := t.TempDir()
+	// Enough decoy directories that an un-aborted walk would still
+	// produce observable work — the assertion below fails loudly if
+	// the check is skipped.
+	for i := 0; i < 20; i++ {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("dir-%d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkRepo(t, filepath.Join(root, "would-be-found"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled
+
+	repos, err := Discover(ctx, []string{root}, NewMatcher(nil), 0)
+	if err != context.Canceled {
+		t.Fatalf("want context.Canceled, got err=%v", err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("want empty repo list after cancel, got %+v", repos)
+	}
+}
+
 func TestDiscover_IgnoredRepoNotRecorded_DescendantStillFound(t *testing.T) {
 	root := t.TempDir()
 	// `vendor` is itself a repo AND is ignored by `vendor/`.
@@ -191,7 +222,7 @@ func TestDiscover_IgnoredRepoNotRecorded_DescendantStillFound(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "vendor", "keep"))
 
 	matcher := NewMatcher([]string{"vendor/", "!vendor/keep"})
-	repos, err := Discover([]string{root}, matcher, 0)
+	repos, err := Discover(context.Background(), []string{root}, matcher, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +281,7 @@ func TestDiscover_HonorsGlobbedNegation(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "unrelated"))
 
 	matcher := NewMatcher([]string{"vendor*/", "!vendor*/keep"})
-	repos, err := Discover([]string{root}, matcher, 0)
+	repos, err := Discover(context.Background(), []string{root}, matcher, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +308,7 @@ func TestDiscover_DoesNotDescendIntoRepo(t *testing.T) {
 	// submodule and skipped — we don't double-count.
 	mustMkRepo(t, filepath.Join(parent, "submodule"))
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +322,7 @@ func TestDiscover_SlugCollisionGetsHashSuffix(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "a", "myrepo"))
 	mustMkRepo(t, filepath.Join(root, "b", "myrepo"))
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,11 +351,11 @@ func TestDiscover_SlugDeterministicAcrossRuns(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "a", "myrepo"))
 	mustMkRepo(t, filepath.Join(root, "b", "myrepo"))
 
-	first, err := Discover([]string{root}, NewMatcher(nil), 0)
+	first, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Discover([]string{root}, NewMatcher(nil), 0)
+	second, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +385,7 @@ func TestDiscover_RejectsSymlinkGit(t *testing.T) {
 	}
 	mustMkRepo(t, filepath.Join(root, "real"))
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +399,7 @@ func TestDiscover_MaxDepthHonored(t *testing.T) {
 	mustMkRepo(t, filepath.Join(root, "shallow"))
 	mustMkRepo(t, filepath.Join(root, "a", "b", "c", "deep"))
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 2)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +442,7 @@ func TestDiscover_FindsBareRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos, err := Discover([]string{root}, NewMatcher(nil), 0)
+	repos, err := Discover(context.Background(), []string{root}, NewMatcher(nil), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

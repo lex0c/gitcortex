@@ -80,7 +80,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 
-	repos, err := Discover(cfg.Roots, matcher, cfg.MaxDepth)
+	repos, err := Discover(ctx, cfg.Roots, matcher, cfg.MaxDepth)
 	if err != nil {
 		return nil, err
 	}

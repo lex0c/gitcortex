@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
@@ -29,14 +30,27 @@ type Repo struct {
 // unique across the full result so downstream JSONL files don't collide,
 // and the prefix LoadMultiJSONL derives (basename-minus-ext) still groups
 // correctly.
-func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
+//
+// A cancelled ctx aborts the walk promptly — important because on large
+// roots (home directory scans, monorepos of repos) discovery is often
+// the longest phase of scan and Ctrl+C needs to land in real time, not
+// "after the walk naturally finishes". Each filepath.WalkDir callback
+// checks ctx.Done() before doing any filesystem work, so the abort
+// window is bounded by the cost of one stat call per dir entry.
+func Discover(ctx context.Context, roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 	if matcher == nil {
 		matcher = NewMatcher(nil)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	var repos []Repo
 	seen := make(map[string]bool)
 
 	for _, root := range roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		abs, err := filepath.Abs(root)
 		if err != nil {
 			return nil, fmt.Errorf("resolve %s: %w", root, err)
@@ -50,6 +64,13 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 		}
 
 		err = filepath.WalkDir(abs, func(path string, d os.DirEntry, werr error) error {
+			// Return ctx.Err() (not SkipDir) so WalkDir short-circuits
+			// the entire walk. Without this check, a cancelled scan
+			// would keep stat'ing every directory in a large tree
+			// before the caller saw the interrupt.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if werr != nil {
 				// Permission errors on one subtree shouldn't abort the
 				// whole scan. Log and keep walking.
