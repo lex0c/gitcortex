@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -579,6 +580,55 @@ func TestDevProfileExtensionsTruncationSum(t *testing.T) {
 	}
 	if sum < 80.0 || sum > 86.0 {
 		t.Errorf("truncated Extensions sum = %.1f, want ~83.5 (5/6 buckets × 16.7%%)", sum)
+	}
+}
+
+// Regression at the INGEST level: a pure rename (commit_file with
+// additions=0 && deletions=0) used to create a zero-valued entry in
+// fe.devLines, which then made len(devFiles[email]) count that file
+// as "authored" by the renaming dev. The 50/50 symptom: Alice edits
+// one .go file (5 lines) and separately renames one .md file (0
+// lines); under the broken ingest she shows up with `.go (50%)` +
+// `.md (50%)` in the Extensions fingerprint even though she never
+// wrote a single line in .md. The fix skips the zero-line write
+// site so devLines stays the "lines this dev contributed" map.
+// devCommits is intentionally still bumped — that map preserves the
+// "dev appeared on this file" signal for any caller that wants it.
+func TestDevProfilePureRenamesNotAuthored(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"c1","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x","author_date":"2024-01-10T10:00:00Z","committer_name":"Alice","committer_email":"alice@x","committer_date":"2024-01-10T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c1","path_current":"src/main.go","path_previous":"src/main.go","status":"M","old_hash":"0","new_hash":"1","old_size":0,"new_size":0,"additions":5,"deletions":0}
+{"type":"commit","sha":"c2","tree":"t","parents":[],"author_name":"Alice","author_email":"alice@x","author_date":"2024-01-12T10:00:00Z","committer_name":"Alice","committer_email":"alice@x","committer_date":"2024-01-12T10:00:00Z","additions":0,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"c2","path_current":"docs/renamed.md","path_previous":"docs/old.md","status":"R100","old_hash":"0","new_hash":"2","old_size":0,"new_size":0,"additions":0,"deletions":0}
+`
+	ds, err := streamLoad(strings.NewReader(jsonl), LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	p := DevProfiles(ds, "alice@x", 0)[0]
+
+	// Only the .go edit counts as authored. The .md pure-rename must
+	// not show up in Extensions or Scope.
+	if len(p.Extensions) != 1 || p.Extensions[0].Ext != ".go" {
+		t.Errorf("Extensions = %+v, want single .go bucket", p.Extensions)
+	}
+	if p.Extensions[0].Pct != 100.0 {
+		t.Errorf(".go Pct = %.1f, want 100.0 (rename should not inflate denominator)", p.Extensions[0].Pct)
+	}
+	if len(p.Scope) != 1 || p.Scope[0].Dir != "src" {
+		t.Errorf("Scope = %+v, want single src/ bucket", p.Scope)
+	}
+	if p.Scope[0].Pct != 100.0 {
+		t.Errorf("src/ Pct = %.1f, want 100.0", p.Scope[0].Pct)
+	}
+
+	// Cross-check downstream stats that also consume fe.devLines:
+	// UniqueDevs on the renamed file must be 0 now (no one authored
+	// lines on it) — before the fix it would have been 1.
+	hotspots := FileHotspots(ds, 0)
+	for _, h := range hotspots {
+		if h.Path == "docs/renamed.md" && h.UniqueDevs != 0 {
+			t.Errorf("pure-renamed file unique devs = %d, want 0 (no line authors)", h.UniqueDevs)
+		}
 	}
 }
 
