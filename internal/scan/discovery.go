@@ -141,6 +141,12 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 	return repos, nil
 }
 
+// initialSlugHashLen controls the default hash-suffix length in hex
+// chars when two repos share a basename. Six chars (24 bits) gives
+// readable slugs in the common case; the retry loop in assignSlugs
+// grows the length if a truncation collision occurs.
+const initialSlugHashLen = 6
+
 // assignSlugs derives a unique slug per repo from its basename, falling
 // back to `<basename>-<shortHash(absPath)>` when two repos share a name.
 // The slug is also the JSONL filename stem and the persistence key
@@ -153,6 +159,15 @@ func Discover(roots []string, matcher *Matcher, maxDepth int) ([]Repo, error) {
 // base appears more than once anywhere in the result. This makes the
 // slug a pure function of (absPath, set of basenames seen), independent
 // of WalkDir traversal order.
+//
+// Short-hash truncation (6 hex = 24 bits) admits a small but nonzero
+// collision probability — two absolute paths whose SHA-1 digests share
+// the same 6-hex prefix would land on the same slug, and scan would
+// silently overwrite one repo's JSONL + state file with the other's.
+// The retry loop walks the proposed slug set; on any duplicate we
+// redo the pass with a longer hash. Grows up to the full 40 hex chars
+// before panicking — needing that much is a cryptographic event, not
+// a scan-time bug.
 func assignSlugs(repos []Repo) {
 	counts := make(map[string]int)
 	bases := make([]string, len(repos))
@@ -164,15 +179,33 @@ func assignSlugs(repos []Repo) {
 		bases[i] = base
 		counts[base]++
 	}
-	for i := range repos {
-		base := bases[i]
-		slug := base
-		if counts[base] > 1 {
-			h := sha1.Sum([]byte(repos[i].AbsPath))
-			slug = fmt.Sprintf("%s-%s", base, hex.EncodeToString(h[:])[:6])
+
+	for hashLen := initialSlugHashLen; hashLen <= 40; hashLen += 2 {
+		proposed := make([]string, len(repos))
+		seen := make(map[string]int, len(repos))
+		collided := false
+		for i := range repos {
+			base := bases[i]
+			slug := base
+			if counts[base] > 1 {
+				h := sha1.Sum([]byte(repos[i].AbsPath))
+				slug = fmt.Sprintf("%s-%s", base, hex.EncodeToString(h[:])[:hashLen])
+			}
+			if prev, ok := seen[slug]; ok && prev != i {
+				collided = true
+				break
+			}
+			seen[slug] = i
+			proposed[i] = slug
 		}
-		repos[i].Slug = slug
+		if !collided {
+			for i := range repos {
+				repos[i].Slug = proposed[i]
+			}
+			return
+		}
 	}
+	panic("scan: slug assignment failed to find unique hash within SHA-1 range")
 }
 
 // isBareRepo returns true when path is a bare git repository — i.e. the

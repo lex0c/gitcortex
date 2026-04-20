@@ -1,6 +1,9 @@
 package scan
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,6 +89,100 @@ func TestDiscover_HonorsNegatedDescendant(t *testing.T) {
 // negation's target can be visited. Previously the .git detection
 // ran unconditionally and both incorrectly recorded the ignored
 // parent AND SkipDir'd the child out of the walk.
+// With a 6-hex (24-bit) suffix, the birthday paradox predicts a
+// truncation collision around ~2^12 duplicates. Generating 10k paths
+// that share a basename makes collisions statistically near-certain
+// (expected count ≈ 3). The invariant "all resulting slugs are
+// distinct" forces assignSlugs's retry loop to grow the hash and
+// still produce a unique namespace — the exact corruption class the
+// extra iterations were added to prevent.
+func TestAssignSlugs_UniqueEvenUnderTruncationCollisions(t *testing.T) {
+	const n = 10000
+	repos := make([]Repo, n)
+	for i := 0; i < n; i++ {
+		repos[i] = Repo{AbsPath: fmt.Sprintf("/path/to/dir-%06d/myrepo", i)}
+	}
+	assignSlugs(repos)
+
+	slugs := make(map[string]int, n)
+	for i, r := range repos {
+		if prev, ok := slugs[r.Slug]; ok {
+			t.Fatalf("duplicate slug %q between repos[%d]=%s and repos[%d]=%s — JSONL + state files would collide",
+				r.Slug, prev, repos[prev].AbsPath, i, r.AbsPath)
+		}
+		slugs[r.Slug] = i
+	}
+}
+
+// Directly exercise the retry path with two paths constructed to
+// collide at initialSlugHashLen. Without the retry, both would get
+// slug "myrepo-<sameHex>" and the scan would silently overwrite one
+// repo's files with the other's. With the retry, the loop grows
+// the hash until the pair separates.
+func TestAssignSlugs_ResolvesFirstPrefixCollision(t *testing.T) {
+	a, b, found := findColliding6HexPaths(50000)
+	if !found {
+		t.Skip("no colliding pair found within search budget — astronomically unlikely, skip rather than flake")
+	}
+	repos := []Repo{{AbsPath: a}, {AbsPath: b}}
+	assignSlugs(repos)
+
+	if repos[0].Slug == repos[1].Slug {
+		t.Fatalf("retry failed: both repos got slug %q for colliding paths %s and %s", repos[0].Slug, a, b)
+	}
+	// Sanity: the slug suffix must be longer than the initial 6 hex,
+	// proving the retry branch actually fired.
+	const minLenAfterRetry = len("myrepo-") + initialSlugHashLen + 1
+	if len(repos[0].Slug) < minLenAfterRetry && len(repos[1].Slug) < minLenAfterRetry {
+		t.Errorf("expected at least one slug to have a longer hash after retry; got %q and %q", repos[0].Slug, repos[1].Slug)
+	}
+}
+
+// findColliding6HexPaths searches a deterministic sequence of
+// `myrepo` paths for any two whose SHA-1 digests share the first
+// initialSlugHashLen hex chars. At 24 bits of resolution the
+// birthday bound hits 50% around N≈4900, so maxAttempts=50000 is
+// overwhelmingly likely to yield a pair. Returns false only if no
+// collision was found — the test treats that as a skip, not a
+// failure, since the worst-case outcome is a missed opportunity to
+// exercise the retry, not a bug.
+func findColliding6HexPaths(maxAttempts int) (string, string, bool) {
+	seen := make(map[string]string, maxAttempts)
+	for i := 0; i < maxAttempts; i++ {
+		p := fmt.Sprintf("/search/path-%07d/myrepo", i)
+		h := sha1.Sum([]byte(p))
+		prefix := hex.EncodeToString(h[:])[:initialSlugHashLen]
+		if prev, ok := seen[prefix]; ok {
+			return prev, p, true
+		}
+		seen[prefix] = p
+	}
+	return "", "", false
+}
+
+// Same paths ingested twice must produce the same slugs — this is
+// what makes resume work across runs. Even with the retry loop
+// adjusting hash length under collisions, a deterministic input set
+// must yield a deterministic output.
+func TestAssignSlugs_DeterministicUnderRetry(t *testing.T) {
+	build := func() []Repo {
+		rs := make([]Repo, 5000)
+		for i := 0; i < 5000; i++ {
+			rs[i] = Repo{AbsPath: fmt.Sprintf("/work/p-%05d/myrepo", i)}
+		}
+		return rs
+	}
+	a := build()
+	b := build()
+	assignSlugs(a)
+	assignSlugs(b)
+	for i := range a {
+		if a[i].Slug != b[i].Slug {
+			t.Errorf("slug for %s differs across runs: %q vs %q", a[i].AbsPath, a[i].Slug, b[i].Slug)
+		}
+	}
+}
+
 func TestDiscover_IgnoredRepoNotRecorded_DescendantStillFound(t *testing.T) {
 	root := t.TempDir()
 	// `vendor` is itself a repo AND is ignored by `vendor/`.
