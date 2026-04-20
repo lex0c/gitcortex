@@ -376,6 +376,210 @@ func DirectoryStats(ds *Dataset, n int) []DirStat {
 	return result
 }
 
+// ExtensionStat rolls history up per file extension. The historical
+// lens is the point: "which extension is the team spending effort on"
+// answers a different question than "which extension exists in the
+// repo" — the latter is what cloc/tokei do from the filesystem.
+//
+// Ext is the normalized extension (leading dot, lowercased) — e.g.
+// ".go", ".yaml", ".gitignore". Files without a conventional extension
+// collapse into the bucket "(none)"; see extractExtension for the
+// policy (dotfiles kept verbatim, last-segment rule for the rest).
+//
+// RecentChurn is the decay-weighted aggregate from the same pipeline
+// as FileStat.RecentChurn (half-life set at Dataset load time), so a
+// dropped-yesterday extension won't outrank a still-active one just
+// because it accumulated more lifetime churn.
+type ExtensionStat struct {
+	Ext         string
+	Files       int
+	Churn       int64
+	RecentChurn float64
+	UniqueDevs  int
+	FirstSeen   string
+	LastSeen    string
+}
+
+// extractExtension returns the extension bucket for a path.
+// Policy:
+//   - Basename after the final "/" is the subject; directory prefix is
+//     ignored.
+//   - Multi-input prefix ("<stem>:") on root-level files is stripped
+//     first, so repo.v1:Makefile collapses to (none) instead of
+//     picking the dot inside the stem and emitting ".v1:makefile".
+//     LoadMultiJSONL is the only code path that injects ":" into
+//     tracked paths, so the presence of ":" in a basename is a strong
+//     signal of this prefix; the alternative — a real filename with
+//     ":" — is rare enough on POSIX/Windows that we accept the
+//     false-positive risk in exchange for correct multi-repo
+//     behaviour.
+//   - Single-dot dotfiles (".gitignore", ".env") keep their full name —
+//     they carry meaning as a group, and reducing them to "" would
+//     merge them with extension-less files (Makefile, LICENSE).
+//   - Multi-segment dotfiles (".env.local", ".eslintrc.json") report
+//     the last segment (".local", ".json"). Imperfect but keeps the
+//     rule "last segment after the final dot" consistent and explicit.
+//   - Files with no dot (or a trailing dot) collapse into "(none)".
+//   - Extensions are lowercased so ".PNG" and ".png" aggregate.
+func extractExtension(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		path = path[i+1:]
+	}
+	if path == "" {
+		return "(none)"
+	}
+	// Strip multi-input stem prefix. LoadMultiJSONL prepends "<stem>:"
+	// to paths; for nested files the slash-split above already
+	// discarded it, but root-level files still carry it and the dots
+	// inside a stem name (e.g. "repo.v1") would otherwise be mistaken
+	// for a real extension.
+	if i := strings.IndexByte(path, ':'); i >= 0 {
+		path = path[i+1:]
+		if path == "" {
+			return "(none)"
+		}
+	}
+	lastDot := strings.LastIndex(path, ".")
+	if lastDot <= 0 {
+		// No dot at all, or a name that begins with "." and has no
+		// second dot. Dotfiles get their full name (".gitignore" is a
+		// meaningful group); "." alone is degenerate and collapses
+		// like Makefile / LICENSE.
+		if len(path) > 1 && strings.HasPrefix(path, ".") {
+			return strings.ToLower(path)
+		}
+		return "(none)"
+	}
+	ext := path[lastDot:]
+	if ext == "." {
+		return "(none)" // trailing dot like "foo." — pathological but defined
+	}
+	return strings.ToLower(ext)
+}
+
+// ExtensionStats aggregates ds.files by extension bucket. Complexity
+// is O(F + E log E) where F is the number of tracked files and E is
+// the number of distinct extensions — trivial compared to the stats
+// that compute Herfindahl indices or per-commit coupling pairs.
+//
+// Attribution uses fileEntry.byExt, which tracks churn per extension
+// as it existed at each change. A file renamed across extensions
+// (foo.js → foo.ts) contributes to both buckets proportionally to
+// its pre- and post-rename history; bucketing on the canonical path's
+// current extension alone would misattribute the entire lineage to
+// the final extension. A file that touched two extensions counts once
+// in each — "files" is "distinct lineages that ever held this
+// extension". Totals across buckets therefore exceed len(ds.files) in
+// repos with migrations.
+//
+// UniqueDevs is per-file-union: any dev who touched a file contributes
+// to every extension bucket that file ever held. This over-counts on
+// migration: a dev who only touched foo.js pre-rename will also
+// appear under ".ts" if the file was migrated. Accepting this as a
+// bounded caveat — splitting devs per era would require per-commit
+// dev tracking that doesn't exist on fileEntry.
+//
+// Falls back to the canonical path's extension when fe.byExt is nil
+// (hand-built fileEntries in unit tests never populate it).
+func ExtensionStats(ds *Dataset, n int) []ExtensionStat {
+	type extAcc struct {
+		files       int
+		churn       int64
+		recentChurn float64
+		devs        map[string]struct{}
+		first, last time.Time
+	}
+
+	getBucket := func(buckets map[string]*extAcc, ext string) *extAcc {
+		b, ok := buckets[ext]
+		if !ok {
+			b = &extAcc{devs: make(map[string]struct{})}
+			buckets[ext] = b
+		}
+		return b
+	}
+
+	buckets := make(map[string]*extAcc)
+	for path, fe := range ds.files {
+		// Real path: use the rename-aware per-ext split captured at
+		// ingest. Fallback: if byExt is nil (legacy data / test
+		// dataset), synthesize a single-bucket split from the
+		// canonical path's extension + current file aggregate.
+		if fe.byExt == nil {
+			ext := extractExtension(path)
+			b := getBucket(buckets, ext)
+			b.files++
+			b.churn += fe.additions + fe.deletions
+			b.recentChurn += fe.recentChurn
+			for email := range fe.devLines {
+				b.devs[email] = struct{}{}
+			}
+			if !fe.firstChange.IsZero() && (b.first.IsZero() || fe.firstChange.Before(b.first)) {
+				b.first = fe.firstChange
+			}
+			if !fe.lastChange.IsZero() && fe.lastChange.After(b.last) {
+				b.last = fe.lastChange
+			}
+			continue
+		}
+		for ext, ec := range fe.byExt {
+			b := getBucket(buckets, ext)
+			b.files++
+			b.churn += ec.churn
+			b.recentChurn += ec.recentChurn
+			// Dev attribution uses the per-file dev set (see doc comment
+			// — we accept the cross-era over-count rather than a coarser
+			// approximation).
+			for email := range fe.devLines {
+				b.devs[email] = struct{}{}
+			}
+			if !ec.firstChange.IsZero() && (b.first.IsZero() || ec.firstChange.Before(b.first)) {
+				b.first = ec.firstChange
+			}
+			if !ec.lastChange.IsZero() && ec.lastChange.After(b.last) {
+				b.last = ec.lastChange
+			}
+		}
+	}
+
+	result := make([]ExtensionStat, 0, len(buckets))
+	for ext, b := range buckets {
+		es := ExtensionStat{
+			Ext:         ext,
+			Files:       b.files,
+			Churn:       b.churn,
+			RecentChurn: math.Round(b.recentChurn*10) / 10,
+			UniqueDevs:  len(b.devs),
+		}
+		if !b.first.IsZero() {
+			es.FirstSeen = b.first.UTC().Format("2006-01-02")
+		}
+		if !b.last.IsZero() {
+			es.LastSeen = b.last.UTC().Format("2006-01-02")
+		}
+		result = append(result, es)
+	}
+
+	// Deterministic ordering under ties: recent churn desc, files desc,
+	// ext asc. Recent churn leads so that "where is effort landing now"
+	// is what the reader sees first; files breaks ties between similar
+	// recent-churn levels by established footprint.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].RecentChurn != result[j].RecentChurn {
+			return result[i].RecentChurn > result[j].RecentChurn
+		}
+		if result[i].Files != result[j].Files {
+			return result[i].Files > result[j].Files
+		}
+		return result[i].Ext < result[j].Ext
+	})
+
+	if n > 0 && n < len(result) {
+		result = result[:n]
+	}
+	return result
+}
+
 func ActivityOverTime(ds *Dataset, granularity string) []ActivityBucket {
 	buckets := make(map[string]*ActivityBucket)
 	var order []string
@@ -1060,6 +1264,7 @@ type DevProfile struct {
 	LastDate        string
 	TopFiles        []DevFileContrib
 	Scope           []DirScope
+	Extensions      []DevExtContrib
 	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
@@ -1086,6 +1291,26 @@ type DevFileContrib struct {
 	Path    string
 	Commits int
 	Churn   int64
+}
+
+// DevExtContrib is a dev's footprint in a single extension bucket.
+// Churn is the summed per-file dev-lines (from fe.devLines), so it
+// reflects lines the dev personally added/removed across files that
+// currently carry this extension — NOT the file's lifetime churn.
+// Pct is the share of the dev's files (by count) that land in this
+// bucket, matching DirScope.Pct's semantics so the two read
+// consistently side by side.
+//
+// Caveat: the bucket is derived from the file's canonical post-rename
+// path. A dev who worked on foo.js pre-migration still shows up under
+// ".ts" if that file was later renamed. Per-era per-dev attribution
+// would need byExt to carry a dev dimension, which isn't tracked; see
+// METRICS.md for the full rationale.
+type DevExtContrib struct {
+	Ext   string
+	Files int
+	Churn int64
+	Pct   float64
 }
 
 // DevProfiles returns a profile for each developer (or a specific one if filterEmail is set).
@@ -1358,6 +1583,60 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			scope = scope[:5]
 		}
 
+		// Extensions: the dev's language/skill fingerprint. Aggregated
+		// from the same devFiles map used for Scope + TopFiles — each
+		// file contributes its dev-attributable churn (devLines[email])
+		// to the bucket picked via the file's canonical-path
+		// extension. The canonical-path simplification is documented
+		// in METRICS.md; per-era per-dev would need byExt to carry a
+		// dev dimension.
+		type extAccForDev struct {
+			files int
+			churn int64
+		}
+		extCount := make(map[string]*extAccForDev)
+		if files, ok := devFiles[email]; ok {
+			for path, fa := range files {
+				ext := extractExtension(path)
+				acc, ok := extCount[ext]
+				if !ok {
+					acc = &extAccForDev{}
+					extCount[ext] = acc
+				}
+				acc.files++
+				acc.churn += fa.churn
+			}
+		}
+		var extensions []DevExtContrib
+		for ext, acc := range extCount {
+			pct := 0.0
+			if cs.FilesTouched > 0 {
+				pct = math.Round(float64(acc.files)/float64(cs.FilesTouched)*1000) / 10
+			}
+			extensions = append(extensions, DevExtContrib{
+				Ext: ext, Files: acc.files, Churn: acc.churn, Pct: pct,
+			})
+		}
+		// Sort mirrors Scope: files desc first, so the displayed Pct
+		// (computed from files) is monotonic in CLI and the HTML bar
+		// widths — Pct-sorted = visually sorted. Tiebreak on churn
+		// desc keeps the "more investment wins" signal when two
+		// buckets hold the same number of files, then ext asc for
+		// determinism. The Churn field on each entry is still
+		// available for JSON consumers who want a churn-ranked view.
+		sort.Slice(extensions, func(i, j int) bool {
+			if extensions[i].Files != extensions[j].Files {
+				return extensions[i].Files > extensions[j].Files
+			}
+			if extensions[i].Churn != extensions[j].Churn {
+				return extensions[i].Churn > extensions[j].Churn
+			}
+			return extensions[i].Ext < extensions[j].Ext
+		})
+		if len(extensions) > 5 {
+			extensions = extensions[:5]
+		}
+
 		// Contribution type
 		contribRatio := 0.0
 		contribType := "growth"
@@ -1404,7 +1683,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			Commits: cs.Commits, Additions: cs.Additions, Deletions: cs.Deletions,
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
-			TopFiles: topFiles, Scope: scope, Specialization: specialization,
+			TopFiles: topFiles, Scope: scope, Extensions: extensions, Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs,
 			MonthlyActivity: monthly, WorkGrid: grid, WeekendPct: wpct,

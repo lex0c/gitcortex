@@ -159,6 +159,36 @@ func (f *Formatter) PrintDirectories(dirs []DirStat) error {
 	}
 }
 
+func (f *Formatter) PrintExtensions(exts []ExtensionStat) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(exts)
+	case "csv":
+		rows := make([][]string, len(exts))
+		for i, e := range exts {
+			rows[i] = []string{
+				e.Ext,
+				fmt.Sprintf("%d", e.Files),
+				fmt.Sprintf("%d", e.Churn),
+				fmt.Sprintf("%.1f", e.RecentChurn),
+				fmt.Sprintf("%d", e.UniqueDevs),
+				e.FirstSeen,
+				e.LastSeen,
+			}
+		}
+		return f.writeCSV([]string{"ext", "files", "churn", "recent_churn", "unique_devs", "first_seen", "last_seen"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "EXT\tFILES\tCHURN\tRECENT CHURN\tDEVS\tFIRST SEEN\tLAST SEEN\n")
+		fmt.Fprintf(tw, "---\t-----\t-----\t------------\t----\t----------\t---------\n")
+		for _, e := range exts {
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%.1f\t%d\t%s\t%s\n",
+				e.Ext, e.Files, e.Churn, e.RecentChurn, e.UniqueDevs, e.FirstSeen, e.LastSeen)
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintActivity(buckets []ActivityBucket) error {
 	switch f.format {
 	case "json":
@@ -438,6 +468,16 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintf(f.w, "%s (%.0f%%)", s.Dir, s.Pct)
 			}
 			fmt.Fprintln(f.w)
+			if len(p.Extensions) > 0 {
+				fmt.Fprintf(f.w, "  Extensions:    ")
+				for j, e := range p.Extensions {
+					if j > 0 {
+						fmt.Fprintf(f.w, ", ")
+					}
+					fmt.Fprintf(f.w, "%s (%.0f%%)", e.Ext, e.Pct)
+				}
+				fmt.Fprintln(f.w)
+			}
 			// %.3f (not %.2f): labels are assigned at thresholds 0.15 / 0.35
 			// / 0.7 using the unrounded float. With %.2f a value like
 			// 0.149 displays as "0.15" and the "broad generalist" label

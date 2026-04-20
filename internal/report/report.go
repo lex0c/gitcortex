@@ -26,6 +26,7 @@ type ReportData struct {
 	Contributors []stats.ContributorStat
 	Hotspots     []stats.FileStat
 	Directories  []stats.DirStat
+	Extensions   []stats.ExtensionStat
 	ActivityRaw    []stats.ActivityBucket
 	ActivityYears  []string
 	ActivityGrid   [][]ActivityCell // [year][month 0-11]
@@ -341,6 +342,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		Contributors:         stats.TopContributors(ds, topN),
 		Hotspots:             stats.FileHotspots(ds, topN),
 		Directories:          stats.DirectoryStats(ds, topN),
+		Extensions:           stats.ExtensionStats(ds, topN),
 		ActivityRaw:          actRaw,
 		ActivityYears:        actYears,
 		ActivityGrid:         actGrid,
@@ -390,6 +392,19 @@ func pctInt(val, max int) string {
 		return "0"
 	}
 	return fmt.Sprintf("%.1f", float64(val)/float64(max)*100)
+}
+
+// pctFloat is the float-domain sibling of pct. Needed for metrics like
+// RecentChurn that carry sub-1 fractional values after heavy decay
+// (small repos, or --since restricting the window): casting through
+// int64 truncates every bucket to 0 and the bar reads 0% across the
+// board even though the table shows non-zero churn. Accepting
+// float64 straight through preserves the relative scale.
+func pctFloat(val, max float64) string {
+	if max == 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%.1f", val/max*100)
 }
 
 func heatColor(val, max int) string {
@@ -451,6 +466,7 @@ func actColor(commits, max int) string {
 var funcMap = template.FuncMap{
 	"pct":       pct,
 	"pctInt":    pctInt,
+	"pctFloat":  pctFloat,
 	"heatColor": heatColor,
 	"joinDevs":  stats.JoinDevs,
 	"seq":       seq,

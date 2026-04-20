@@ -34,6 +34,21 @@ type fileEntry struct {
 	firstChange time.Time
 	lastChange  time.Time
 	monthChurn  map[string]int64 // key: "YYYY-MM"; used for trend classification
+	// byExt splits this file's churn across extensions as they appeared
+	// at each change, so a rename-across-extensions (foo.js → foo.ts)
+	// keeps per-era attribution correct even after applyRenames merges
+	// the lineage onto one canonical path. Populated at ingest in
+	// lockstep with additions/deletions/recentChurn; consumed only by
+	// ExtensionStats. nil for hand-built fileEntries in tests — the
+	// aggregator falls back to the canonical path's extension when so.
+	byExt map[string]*extContribution
+}
+
+type extContribution struct {
+	churn       int64
+	recentChurn float64
+	firstChange time.Time
+	lastChange  time.Time
 }
 
 type filePair struct{ a, b string }
@@ -334,6 +349,22 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			fe.additions += cf.Additions
 			fe.deletions += cf.Deletions
 
+			// byExt: attribute this change to the extension the path had
+			// AT THIS COMMIT, not the canonical post-rename extension.
+			// This is the only place the pre-rename path is still
+			// available; after applyRenames all entries collapse onto
+			// the final path and the split would be lost.
+			changeExt := extractExtension(path)
+			if fe.byExt == nil {
+				fe.byExt = make(map[string]*extContribution)
+			}
+			ec, ok := fe.byExt[changeExt]
+			if !ok {
+				ec = &extContribution{}
+				fe.byExt[changeExt] = ec
+			}
+			ec.churn += cf.Additions + cf.Deletions
+
 			cm := ds.commits[cf.Commit]
 			if cm != nil {
 				fe.devLines[cm.email] += cf.Additions + cf.Deletions
@@ -349,11 +380,18 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 					days := ds.Latest.Sub(cm.date).Hours() / 24
 					weight := math.Exp(-lambda * days)
 					fe.recentChurn += float64(cf.Additions+cf.Deletions) * weight
+					ec.recentChurn += float64(cf.Additions+cf.Deletions) * weight
 					if cm.date.After(fe.lastChange) {
 						fe.lastChange = cm.date
 					}
 					if fe.firstChange.IsZero() || cm.date.Before(fe.firstChange) {
 						fe.firstChange = cm.date
+					}
+					if cm.date.After(ec.lastChange) {
+						ec.lastChange = cm.date
+					}
+					if ec.firstChange.IsZero() || cm.date.Before(ec.firstChange) {
+						ec.firstChange = cm.date
 					}
 					fe.monthChurn[cm.date.UTC().Format("2006-01")] += cf.Additions + cf.Deletions
 				}
@@ -597,6 +635,31 @@ func mergeFileEntry(dst, src *fileEntry) {
 	}
 	if src.lastChange.After(dst.lastChange) {
 		dst.lastChange = src.lastChange
+	}
+
+	// byExt: merge per-ext buckets. When rename collapses foo.js → foo.ts,
+	// this preserves ".js" churn on the ts-keyed entry so ExtensionStats
+	// can split it back. Same bucket on both sides = add; new bucket =
+	// transfer the pointer (src is discarded afterwards so ownership
+	// transfer is safe).
+	if src.byExt != nil {
+		if dst.byExt == nil {
+			dst.byExt = make(map[string]*extContribution, len(src.byExt))
+		}
+		for ext, srcEC := range src.byExt {
+			if dstEC, ok := dst.byExt[ext]; ok {
+				dstEC.churn += srcEC.churn
+				dstEC.recentChurn += srcEC.recentChurn
+				if !srcEC.firstChange.IsZero() && (dstEC.firstChange.IsZero() || srcEC.firstChange.Before(dstEC.firstChange)) {
+					dstEC.firstChange = srcEC.firstChange
+				}
+				if srcEC.lastChange.After(dstEC.lastChange) {
+					dstEC.lastChange = srcEC.lastChange
+				}
+			} else {
+				dst.byExt[ext] = srcEC
+			}
+		}
 	}
 }
 

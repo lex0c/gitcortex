@@ -239,6 +239,27 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
+{{if .Extensions}}
+<h2>Extensions</h2>
+<p class="hint">File extensions ranked by <b>recent churn</b> — "where is the team spending effort now", not "what exists at HEAD". Cross-read with Directories: a repo with high <code>.yaml</code> recent churn concentrated in one dir is config-as-code; spread across many dirs is config sprawl. · {{docRef "extensions"}}</p>
+<table>
+<tr><th>Ext</th><th>Files</th><th>Churn</th><th>Recent Churn</th><th></th><th>Devs</th><th>First Seen</th><th>Last Seen</th></tr>
+{{$maxRecent := 0.0}}{{range .Extensions}}{{if gt .RecentChurn $maxRecent}}{{$maxRecent = .RecentChurn}}{{end}}{{end}}
+{{range .Extensions}}
+<tr>
+  <td class="mono">{{.Ext}}</td>
+  <td>{{thousands .Files}}</td>
+  <td>{{thousands .Churn}}</td>
+  <td>{{printf "%.1f" .RecentChurn}}</td>
+  <td style="width:20%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .RecentChurn $maxRecent}}%"></div></div></td>
+  <td>{{.UniqueDevs}}</td>
+  <td class="mono">{{.FirstSeen}}</td>
+  <td class="mono">{{.LastSeen}}</td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .ChurnRisk}}
 <h2>Churn Risk</h2>
 <p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
@@ -258,7 +279,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <td class="mono truncate">{{.Path}}</td>
   <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}{{if .AgePercentile}}<div style="font-size:10px; color:#656d76; margin-top:2px;">age P{{derefInt .AgePercentile}} · trend P{{derefInt .TrendPercentile}}</div>{{end}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
-  <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{printf "%.0f" (pct (int64 .RecentChurn) (int64 $maxChurn))}}%"></div></div></td>
+  <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .RecentChurn $maxChurn}}%"></div></div></td>
   <td>{{.BusFactor}}</td>
   <td>{{.AgeDays}}d</td>
   <td>{{if lt .Trend 0.5}}↓ {{printf "%.2f" .Trend}}{{else if gt .Trend 1.5}}↑ {{printf "%.2f" .Trend}}{{else}}→ {{printf "%.2f" .Trend}}{{end}}</td>
@@ -361,6 +382,11 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div style="display:grid; grid-template-columns:110px 1fr; gap:4px 12px; font-size:13px; margin-bottom:12px;">
     <span style="color:#656d76;">Scope</span>
     <span>{{range $i, $s := .Scope}}{{if $i}}, {{end}}<b>{{$s.Dir}}</b> ({{printf "%.0f" $s.Pct}}%){{end}}</span>
+
+    {{if .Extensions}}
+    <span style="color:#656d76;">Extensions</span>
+    <span>{{range $i, $e := .Extensions}}{{if $i}}, {{end}}<b>{{$e.Ext}}</b> ({{printf "%.0f" $e.Pct}}%){{end}}</span>
+    {{end}}
 
     <span style="color:#656d76;">Specialization</span>
     <span>{{printf "%.3f" .Specialization}} <span style="color:#656d76;">({{if lt .Specialization 0.15}}broad generalist{{else if lt .Specialization 0.35}}balanced{{else if lt .Specialization 0.7}}focused specialist{{else}}narrow specialist{{end}})</span></span>

@@ -436,6 +436,35 @@ func TestBuildLabelCountListOmitsEmpty(t *testing.T) {
 	}
 }
 
+// Regression: pct(int64(x), int64(y)) collapsed every sub-1 float to
+// 0 before this helper existed, so extension/churn-risk bars all
+// rendered as 0% on datasets with heavily decayed RecentChurn (small
+// repos, aggressive --since filters). pctFloat preserves the relative
+// scale.
+func TestPctFloat(t *testing.T) {
+	cases := []struct {
+		val, max float64
+		want     string
+	}{
+		// Sub-1 values: relative scale preserved (would all be 0 under int64 cast).
+		{0.5, 1.0, "50.0"},
+		{0.25, 0.5, "50.0"},
+		{0.1, 0.9, "11.1"},
+		// Mixed small + large.
+		{50.0, 200.0, "25.0"},
+		// max at zero → safe zero string, no NaN or division by zero.
+		{5.0, 0.0, "0"},
+		{0.0, 0.0, "0"},
+		// val > max (can happen under rounding noise in sort+display).
+		{10.0, 5.0, "200.0"},
+	}
+	for _, c := range cases {
+		if got := pctFloat(c.val, c.max); got != c.want {
+			t.Errorf("pctFloat(%v, %v) = %q, want %q", c.val, c.max, got, c.want)
+		}
+	}
+}
+
 func TestThousands(t *testing.T) {
 	cases := []struct {
 		in   interface{}

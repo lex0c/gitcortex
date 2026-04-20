@@ -215,6 +215,7 @@ Per-developer report combining multiple metrics.
 | Pace | commits / active_days (smooths bursts — a dev with 100 commits on 2 days and silence for 28 shows pace=50, which reads as a steady rate but isn't) |
 | Weekend % | commits on Saturday+Sunday / total commits × 100 |
 | Scope | Top 5 directories by unique file count, as % of total files touched |
+| Extensions | Top 5 file extensions the dev touched, sorted by **files desc** (tiebreak churn desc, then ext asc) so the displayed `Pct` is monotonic with the sort order and HTML bar widths read correctly. `Pct` is `Files/FilesTouched * 100`; the raw dev-attributable `Churn` (sum of `devLines[email]` across bucket files) is kept on the struct for JSON consumers who want a churn-ranked view. Answers the "language/skill fingerprint" question (`.go` + `.yaml` → backend+infra; `.tsx` + `.ts` + `.css` → frontend). **Caveats:** (1) bucket is derived from the file's canonical (post-rename) path — a dev who worked on `foo.js` pre-migration still shows up under `.ts` if it was later renamed; per-era per-dev attribution would need `byExt` to carry a dev dimension, which isn't tracked. (2) `Pct` values may sum to less than 100% when the dev appears as a contributor on files without adding lines (pure-rename contributions), since the extension aggregation only walks files with non-zero `devLines[email]`. |
 | Specialization | Herfindahl index over the **full** per-directory file-count distribution: Σ pᵢ² where pᵢ is the share of the dev's files in directory i. 1 = all files in one directory (narrow specialist); 1/N for a uniform spread across N directories; approaches 0 as the distribution widens. Computed before the top-5 Scope truncation so it reflects actual breadth. Labels (see `specBroadGeneralistMax`, `specBalancedMax`, `specFocusedMax` constants): `< 0.15` broad generalist, `< 0.35` balanced, `< 0.7` focused specialist, `≥ 0.7` narrow specialist. Herfindahl, not Gini, because Gini would collapse "1 file in 1 dir" and "1 file in each of 5 dirs" to the same value (both have zero inequality among buckets), which misses the specialization distinction. **Measures file distribution, not domain expertise** — see caveat below. **Display vs raw:** CLI and HTML show the value rounded to 3 decimals (`%.3f`) for readability; JSON output preserves the full float64. Band classification runs against the raw float, so a value like 0.149 lands in `broad generalist` even though %.2f would have rounded it to `0.15`. JSON consumers that reproduce the banding must use the raw value, not a rounded version. |
 | Contribution type | Based on del/add ratio: growth (<0.4), balanced (0.4-0.8), refactor (>0.8) |
 | Collaborators | Top 5 devs sharing code with this dev. Ranked by `shared_lines` (Σ min(linesA, linesB) across shared files), tiebreak `shared_files`, then email. Same `shared_lines` semantics as the Developer Network metric — discounts trivial one-line touches so "collaborator" reflects real overlap. |
@@ -253,6 +254,31 @@ Two dev lenses are surfaced because commit count alone is a flawed proxy for con
 - total == 0 (no commits, or no churn for the churn lens): no data (neutral marker)
 
 **How to interpret**: "20 files concentrate 80% of all churn" describes where change lands — it can indicate a healthy core module under active development, or a bottleneck if combined with low bus factor. Cross-reference with the Churn Risk section before drawing conclusions.
+
+## Extensions
+
+File extensions aggregated from `ds.files`, ranked by **recent churn** (decay-weighted — see "Recent churn" below). The historical lens is the point: `cloc`/`tokei` answer "what languages exist on disk"; this answers "which extensions is the team spending effort on right now".
+
+**Extraction policy** (`extractExtension`):
+- Last path segment (after the final `/`).
+- Multi-dot names report the final segment: `foo.tar.gz` → `.gz`, `.eslintrc.json` → `.json`.
+- Single-dot dotfiles keep their full name: `.gitignore` → `.gitignore`, `.env` → `.env`. Merging these into "(none)" would erase a meaningful group.
+- No-dot names collapse into the `(none)` bucket: `Makefile`, `LICENSE`, `bin/run`.
+- Extensions lowercased so `.PNG` and `.png` aggregate.
+
+**Per-bucket fields**:
+- `files` — distinct file lineages that ever held this extension. A file renamed across extensions (foo.js → foo.ts) counts once in each bucket; totals across buckets can therefore exceed the dataset's file count in migration-heavy repos.
+- `churn` — lifetime additions + deletions attributed to this extension specifically. A foo.js → foo.ts migration with 1000 lines of pre-rename churn and 500 post-rename does **not** collapse all 1500 onto `.ts`; `.js` keeps its 1000 and `.ts` gets 500. The attribution comes from capturing the path's extension at each change before `applyRenames` merges the lineage.
+- `recent_churn` — same per-era semantics, decay-weighted (same half-life as other stats, set at load time). Leads the sort so a dormant extension with high lifetime churn won't displace an active one.
+- `unique_devs` — distinct emails that touched any file that ever held this extension. **Over-counts across migrations**: a dev who only worked on `foo.js` pre-migration still appears under `.ts` if that file was migrated. Splitting devs per era would need per-commit dev tracking that `fileEntry` does not retain. Read this as "people with context on files that at some point were this extension" rather than "active contributors in this extension".
+- `first_seen` / `last_seen` — min/max within the bucket's era, UTC date. For the `.js` bucket in a TypeScript migration, `last_seen` is the migration cutoff, not today's date.
+
+**Reading signals**:
+- `.yaml` recent churn high + unique_devs low → config owned by one person; schedule handoff before they leave.
+- `.md` recent churn high → docs-heavy phase (release prep?) or churn-heavy README thrash.
+- Cross-read with Directories: `.yaml` concentrated in one dir is config-as-code; `.yaml` spread across many dirs is config sprawl.
+
+**What it does not do**: no language-family grouping (`.js`+`.ts`+`.tsx` stay distinct). Aggregate downstream if you need "frontend vs backend"; the tool does not prescribe the taxonomy. Generated-file buckets (`.lock`, `.pb.go`, `.min.js`) will dominate unless filtered via `--ignore` at extract time — the suspect-paths warning flags these.
 
 ## Repo Structure
 

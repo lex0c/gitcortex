@@ -91,6 +91,19 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   </div>
 </div>
 
+{{if .Profile.Extensions}}
+<div style="margin-bottom:16px;">
+  <div style="font-size:13px; font-weight:600; margin-bottom:2px;">Extensions</div>
+  <div class="hint" style="margin-bottom:6px;">The dev's language/skill fingerprint by share of files touched. Extension attribution uses the file's current canonical path, so cross-extension renames (e.g. <code>.js → .ts</code>) credit pre-rename work to the new extension. · {{docRef "profile"}}</div>
+  <div style="display:flex; height:28px; border-radius:4px; overflow:hidden; gap:1px;">
+    {{range $i, $e := .Profile.Extensions}}<div style="flex:{{printf "%.0f" $e.Pct}}; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}}; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; min-width:30px; overflow:hidden;" title="{{$e.Ext}} — {{$e.Files}} files ({{printf "%.0f" $e.Pct}}%)">{{if gt $e.Pct 8.0}}{{$e.Ext}} {{printf "%.0f" $e.Pct}}%{{end}}</div>{{end}}
+  </div>
+  <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:4px; font-size:11px; color:#656d76;">
+    {{range $i, $e := .Profile.Extensions}}<span><span style="display:inline-block; width:8px; height:8px; border-radius:2px; background:{{index (list "#0969da" "#2da44e" "#8250df" "#bf8700" "#cf222e") $i}};"></span> {{$e.Ext}} ({{printf "%.0f" $e.Pct}}%)</span>{{end}}
+  </div>
+</div>
+{{end}}
+
 <div style="margin-bottom:16px; font-size:13px;">
   <div style="margin-bottom:2px;">
     <span style="font-weight:600;">Contribution</span>
