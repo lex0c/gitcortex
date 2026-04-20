@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lex0c/gitcortex/internal/extract"
@@ -349,6 +350,62 @@ func TestCollectAllSuggestionsCoversUnshownBuckets(t *testing.T) {
 		counts[s]++
 		if counts[s] > 1 {
 			t.Errorf("suggestion %q appears %d times; expected dedup", s, counts[s])
+		}
+	}
+}
+
+// When paths come from LoadMultiJSONL they carry a `<repo>:` prefix.
+// Those prefixes leak into directory-glob suggestions and make the
+// copy-pasted `extract --ignore` / `scan --extract-ignore` command
+// a no-op on real repo paths (which never carry the prefix).
+// CollectAllSuggestions must strip the prefix and collapse duplicates
+// that only differed in which repo they came from.
+func TestCollectAllSuggestionsStripsRepoPrefix(t *testing.T) {
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			// Two repos with the same offending shape — suggestions
+			// collapse to one canonical "dist/*" glob.
+			"repoA:js/dist/a.min.js":  {additions: 400, deletions: 400},
+			"repoB:css/dist/b.min.css": {additions: 400, deletions: 400},
+			// A single-repo path stays untouched (no prefix).
+			"vendor/c.go": {additions: 400, deletions: 400},
+		},
+	}
+	buckets, _ := DetectSuspectFiles(ds)
+	got := CollectAllSuggestions(buckets)
+
+	for _, s := range got {
+		if strings.Contains(s, ":") {
+			t.Errorf("suggestion %q still carries a repo prefix — users can't copy-paste this into extract --ignore", s)
+		}
+	}
+	has := func(want string) bool {
+		for _, s := range got {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{"js/dist/*", "css/dist/*", "vendor/*"} {
+		if !has(want) {
+			t.Errorf("expected suggestion %q in %v", want, got)
+		}
+	}
+}
+
+func TestStripRepoPrefix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"repoA:wp-includes/dist/*", "wp-includes/dist/*"},
+		{"dist/*", "dist/*"},                          // no prefix
+		{"*.min.js", "*.min.js"},                      // no prefix
+		{"vendor/*", "vendor/*"},                      // no prefix (no colon)
+		{"src/weird:name.go", "src/weird:name.go"},    // colon after slash = not a prefix
+		{"glob*prefix:foo/bar", "glob*prefix:foo/bar"}, // metachar before colon = not a prefix
+	}
+	for _, c := range cases {
+		if got := stripRepoPrefix(c.in); got != c.want {
+			t.Errorf("stripRepoPrefix(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

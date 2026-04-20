@@ -211,11 +211,23 @@ func ShellQuoteSingle(s string) string {
 // trimming suggestions to just the displayed subset would leave
 // unshown suspects untouched and cause the warning to persist after
 // the suggested fix.
+//
+// Multi-repo note: LoadMultiJSONL prefixes file paths with `<repo>:`
+// so every consumer (hotspots, directories, suspect detector) can
+// attribute paths back to their source. The suggestion strings
+// inherit that prefix from suggestDirGlob, but `extract --ignore` and
+// `scan --extract-ignore` both consume bare repo-relative globs —
+// neither understands the `<repo>:` notation. Strip it here so the
+// copy-pasted remediation command actually matches the offending
+// paths. Same-shaped globs from different repos collapse via the
+// dedup below (e.g. `dist/*` appearing under multiple repos becomes
+// one suggestion, which is what the user wants).
 func CollectAllSuggestions(buckets []SuspectBucket) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	for _, b := range buckets {
 		for _, s := range b.Suggestions {
+			s = stripRepoPrefix(s)
 			if _, ok := seen[s]; ok {
 				continue
 			}
@@ -224,4 +236,22 @@ func CollectAllSuggestions(buckets []SuspectBucket) []string {
 		}
 	}
 	return out
+}
+
+// stripRepoPrefix removes a leading `<repo>:` from a suggestion glob
+// when present. Conservative: the prefix is only recognized when the
+// segment before the colon has no slash or glob metacharacters, which
+// matches the LoadMultiJSONL convention and avoids misinterpreting
+// legitimate colons inside paths (rare but possible on some
+// filesystems). Single-repo datasets have no prefix and pass through
+// unchanged.
+func stripRepoPrefix(s string) string {
+	i := strings.Index(s, ":")
+	if i < 0 {
+		return s
+	}
+	if strings.ContainsAny(s[:i], "/*?[") {
+		return s
+	}
+	return s[i+1:]
 }
