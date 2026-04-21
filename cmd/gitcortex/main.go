@@ -873,6 +873,35 @@ func reportCmd() *cobra.Command {
 	return cmd
 }
 
+// profileScanLabel builds the `RepoName` header string for
+// `scan --report --email`. The profile dataset aggregates commits
+// from every successful repo across all --root values, so titling
+// the report after roots[0] alone would mislead readers into
+// thinking the scope is a single root's work.
+//
+// Label policy:
+//   - 1 root → root basename (the default case, unchanged).
+//   - 2-3 roots → joined with " + " so the scope is visible at a glance.
+//   - 4+ roots → "N roots" because joining many basenames bloats
+//     the H1 and the exact set is available in the scan log and
+//     manifest anyway.
+func profileScanLabel(roots []string) string {
+	switch len(roots) {
+	case 0:
+		return "scan"
+	case 1:
+		return filepath.Base(absPath(roots[0]))
+	case 2, 3:
+		parts := make([]string, len(roots))
+		for i, r := range roots {
+			parts[i] = filepath.Base(absPath(r))
+		}
+		return strings.Join(parts, " + ")
+	default:
+		return fmt.Sprintf("%d roots", len(roots))
+	}
+}
+
 // scanIndexStatusRank maps a ManifestRepo.Status to a sort bucket
 // used by the index page ordering. Lower rank renders first; failed
 // entries float to the top so operators spot them immediately,
@@ -1228,7 +1257,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 				}
 				defer f.Close()
 
-				repoLabel := filepath.Base(absPath(cfg.Roots[0]))
+				repoLabel := profileScanLabel(cfg.Roots)
 				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email); err != nil {
 					return fmt.Errorf("generate profile report: %w", err)
 				}

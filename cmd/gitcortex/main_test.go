@@ -517,6 +517,38 @@ func makeRepoWithCommit(t *testing.T, dir, file, contents string) {
 	run("commit", "-q", "-m", "initial")
 }
 
+// The profile report title used to echo roots[0] even when the
+// scan aggregated many roots, so "gitcortex scan --root ~/work
+// --root ~/oss --report me.html --email me@x.com" produced a
+// report titled "· work" that readers interpreted as belonging
+// only to the first root. Ensure the label reflects the actual
+// scope.
+func TestProfileScanLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		roots []string
+		want  string
+	}{
+		{"no roots", nil, "scan"},
+		{"single root uses basename", []string{"/home/me/work"}, "work"},
+		// Two and three-root scans join with " + " so the scope is
+		// visible at a glance rather than being summarised as a number.
+		{"two roots joined", []string{"/home/me/work", "/home/me/personal"}, "work + personal"},
+		{"three roots joined", []string{"/a/one", "/b/two", "/c/three"}, "one + two + three"},
+		// Large scans fall back to a count — joining 50 basenames
+		// would bloat the H1; the exact set lives in the scan log
+		// and manifest.
+		{"many roots use count", []string{"/a/x", "/b/x", "/c/x", "/d/x", "/e/x"}, "5 roots"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := profileScanLabel(c.roots); got != c.want {
+				t.Errorf("profileScanLabel(%v) = %q, want %q", c.roots, got, c.want)
+			}
+		})
+	}
+}
+
 func TestValidateDate(t *testing.T) {
 	cases := []struct {
 		in      string
