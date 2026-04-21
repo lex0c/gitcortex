@@ -110,7 +110,7 @@ Files ranked by recency-weighted churn, **classified into actionable labels** so
 
 ### Ranking
 
-Sort order: **label priority** first, then `recent_churn` descending within the same label, then lower `bus_factor` first, then path ascending. Label priority runs `legacy-hotspot` → `silo` → `active-core` → `active` → `cold`, so the named actionable classifications always lead the table. Sorting by `recent_churn` alone used to bury `legacy-hotspot` files behind very active code (declining trend is part of the classification, so recent churn is low by definition) — a user running `--top 20` on a mature repo would see unremarkable active files and zero flagged risks.
+Sort order: **label priority** first, then `recent_churn` descending within the same label, then lower `bus_factor` first, then path ascending. Label priority runs `fading-silo` → `silo` → `active-core` → `active` → `cold`, so the named actionable classifications always lead the table. Sorting by `recent_churn` alone used to bury `fading-silo` files behind very active code (declining trend is part of the classification, so recent churn is low by definition) — a user running `--top 20` on a mature repo would see unremarkable active files and zero flagged risks.
 
 `recent_churn` uses exponential decay:
 ```
@@ -135,39 +135,39 @@ rows implicitly assume the earlier rows didn't match.
 | 1 | **cold** | `recent_churn ≤ 0.5 × median(recent_churn)` | Ignore. |
 | 2 | **active** | `bus_factor ≥ 3` | Healthy, shared. |
 | 3 | **active-core** | `bus_factor ≤ 2` and `age < oldAgeThreshold` | New code, single author is expected. |
-| 4 | **legacy-hotspot** | `bus_factor ≤ 2`, `age ≥ oldAgeThreshold`, and `trend < decliningTrendThreshold` | **Urgent.** Old + concentrated + declining. |
+| 4 | **fading-silo** | `bus_factor ≤ 2`, `age ≥ oldAgeThreshold`, and `trend < decliningTrendThreshold` | **Urgent.** Old + concentrated + declining. |
 | 5 | **silo** | default (everything the rules above didn't catch) | Knowledge bottleneck — plan transfer. |
 
 Where:
 - `age = days between firstChange and latest commit in dataset`
-- `trend = churn_last_3_months / churn_earlier`. Edge cases: empty history returns 1 (no signal); recent-only history returns 2 (grew from nothing); earlier-only history returns 0 (declined to nothing — the strongest `legacy-hotspot` signal); short-span datasets whose entire window fits inside the trend window return 1 to avoid false "growing" reports
+- `trend = churn_last_3_months / churn_earlier`. Edge cases: empty history returns 1 (no signal); recent-only history returns 2 (grew from nothing); earlier-only history returns 0 (declined to nothing — the strongest `fading-silo` signal); short-span datasets whose entire window fits inside the trend window return 1 to avoid false "growing" reports
 
 ### Adaptive thresholds (per-dataset calibration)
 
 `oldAgeThreshold` and `decliningTrendThreshold` are not fixed constants: they are derived from the dataset's own distribution each run. With at least `classifyMinSample` (8) files present:
 - `oldAgeThreshold` = **P75** of file ages in this dataset
-- `decliningTrendThreshold` = **P25** of file trends in this dataset, clamped to at least `adaptiveDecliningTrendFloor` (0.01). The floor matters on mature repos where ≥25% of files are dormant (trend=0 via the earlier-only path): P25 would otherwise collapse to 0 and the strict `trend < threshold` check would never fire, silently misclassifying every dormant concentrated file as `silo` instead of `legacy-hotspot`. The floor keeps the threshold strictly positive so the trend=0 signal — the strongest legacy-hotspot alarm — still reaches the rule.
+- `decliningTrendThreshold` = **P25** of file trends in this dataset, clamped to at least `adaptiveDecliningTrendFloor` (0.01). The floor matters on mature repos where ≥25% of files are dormant (trend=0 via the earlier-only path): P25 would otherwise collapse to 0 and the strict `trend < threshold` check would never fire, silently misclassifying every dormant concentrated file as `silo` instead of `fading-silo`. The floor keeps the threshold strictly positive so the trend=0 signal — the strongest fading-silo alarm — still reaches the rule.
 
-This makes "old" mean "older than 75% of tracked files in this repo" instead of an absolute 180 days. A 4-year-old file in a 12-year-old codebase was previously tagged `legacy-hotspot` even though it was newer than most of the repo — now the same file lands in `active-core`. Below the sample threshold, the absolute fallbacks `classifyOldAgeDays` and `classifyDecliningTrend` apply so tiny repos still produce labels.
+This makes "old" mean "older than 75% of tracked files in this repo" instead of an absolute 180 days. A 4-year-old file in a 12-year-old codebase was previously tagged `fading-silo` even though it was newer than most of the repo — now the same file lands in `active-core`. Below the sample threshold, the absolute fallbacks `classifyOldAgeDays` and `classifyDecliningTrend` apply so tiny repos still produce labels.
 
-Each `ChurnRiskResult` also exposes `AgePercentile` and `TrendPercentile` (0-100) showing where the file sits in the distribution. The fields are nil (omitted from JSON, empty in CSV) when the fallback path ran. The CLI and HTML surface these alongside the label — `legacy-hotspot (age P92, trend P08)` tells you the file is both old and sharply declining relative to peers; `legacy-hotspot (age P76, trend P24)` barely qualifies. Distance from the classification boundary is now readable, not hidden.
+Each `ChurnRiskResult` also exposes `AgePercentile` and `TrendPercentile` (0-100) showing where the file sits in the distribution. The fields are nil (omitted from JSON, empty in CSV) when the fallback path ran. The CLI and HTML surface these alongside the label — `fading-silo (age P92, trend P08)` tells you the file is both old and sharply declining relative to peers; `fading-silo (age P76, trend P24)` barely qualifies. Distance from the classification boundary is now readable, not hidden.
 
-> **Degenerate trend distribution.** When every file's entire history fits inside the trend window (e.g. a repo with <3 months of commits), `churnTrend` returns the flat-signal sentinel `1.0` for all of them. The adaptive P25 then lands on `1.0` too, and the `trend < P25` predicate matches nobody — no file reaches `legacy-hotspot` through the trend check. Old + concentrated files fall through to `silo` instead. This is mathematically correct (there's no variation to classify on) but can surprise readers of short-lived repos. Pinned by `TestChurnRiskAdaptiveDegenerateTrendDistribution` so future refactors don't silently flip it.
+> **Degenerate trend distribution.** When every file's entire history fits inside the trend window (e.g. a repo with <3 months of commits), `churnTrend` returns the flat-signal sentinel `1.0` for all of them. The adaptive P25 then lands on `1.0` too, and the `trend < P25` predicate matches nobody — no file reaches `fading-silo` through the trend check. Old + concentrated files fall through to `silo` instead. This is mathematically correct (there's no variation to classify on) but can surprise readers of short-lived repos. Pinned by `TestChurnRiskAdaptiveDegenerateTrendDistribution` so future refactors don't silently flip it.
 
-> **Sensitivity note.** Files touched a single time long ago and never again correctly route to `legacy-hotspot` via the earlier-only trend=0 path. On large mature repos this pattern is the common case, not the exception — e.g. validation on a kubernetes snapshot classified ~29k files this way. If the label distribution looks heavy on `legacy-hotspot` for a long-lived codebase, that is usually diagnosing real dormant code, not a bug.
+> **Sensitivity note.** Files touched a single time long ago and never again correctly route to `fading-silo` via the earlier-only trend=0 path. On large mature repos this pattern is the common case, not the exception — e.g. validation on a kubernetes snapshot classified ~29k files this way. If the label distribution looks heavy on `fading-silo` for a long-lived codebase, that is usually diagnosing real dormant code, not a bug.
 
 ### Additional columns
 
 | Column | Meaning |
 |--------|---------|
-| `risk_score` | `recent_churn / bus_factor` — legacy composite. Still consumed by `gitcortex ci --fail-on-churn-risk N`. Not used for ranking. May diverge from the label (a file can have low `risk_score` but be classified `legacy-hotspot`, and vice versa). |
+| `risk_score` | `recent_churn / bus_factor` — legacy composite. Still consumed by `gitcortex ci --fail-on-churn-risk N`. Not used for ranking. May diverge from the label (a file can have low `risk_score` but be classified `fading-silo`, and vice versa). |
 | `first_change`, `last_change` | Bounds of the file's activity in the dataset (UTC) |
 | `age_days` | `latest - first_change` in days |
 | `trend` | Ratio described above |
 
 ### How to interpret
 
-- **legacy-hotspot** is the alarm — investigate first.
+- **fading-silo** is the alarm — investigate first.
 - **silo** suggests pairing / documentation work, not panic.
 - **active-core** is usually fine, but watch for `bus_factor=1` + growing.
 - **active** with growing trend may indicate a healthy shared module or a collision of too many cooks.
@@ -214,7 +214,7 @@ Per-developer report combining multiple metrics.
 | Active days | Unique dates with at least one commit |
 | Pace | commits / active_days (smooths bursts — a dev with 100 commits on 2 days and silence for 28 shows pace=50, which reads as a steady rate but isn't) |
 | Weekend % | commits on Saturday+Sunday / total commits × 100 |
-| Scope | Top 5 directories by unique file count, as % of the dev's **authored** files — i.e. files where the dev added or removed at least one line. Pure renames (file appears in the dev's change set with zero line changes) are excluded from both numerator and denominator so the visible Pct values sum to 100% (modulo the top-5 truncation). Same denominator is used for Extensions and for the Herfindahl specialization index, keeping the three consistent. |
+| Scope | Top 5 directories by unique file count, as % of the dev's **authored** files — i.e. files where the dev added or removed at least one line. Pure renames (file appears in the dev's change set with zero line changes) are excluded from both numerator and denominator so the visible Pct values sum to 100% (modulo the top-5 truncation). Same denominator is used for Extensions and for the Herfindahl specialization index, keeping the three consistent. **Multi-repo:** the `<slug>:` prefix that `LoadMultiJSONL` adds to avoid filename collisions is stripped before bucketing, so `cmd/` in three repos aggregates into one `cmd` bucket instead of fragmenting into `repoA:cmd`, `repoB:cmd`, `repoC:cmd`. Without the strip, Scope burns the top-5 slots on repo-×-dir pairs and Specialization deflates toward "generalist" for anyone whose area of work happens to exist in several repos. The per-repo split is still surfaced by the Per-Repository Breakdown section when a profile report is multi-repo. |
 | Extensions | Top 5 file extensions the dev touched, sorted by **files desc** (tiebreak churn desc, then ext asc) so the displayed `Pct` is monotonic with the sort order and HTML bar widths read correctly. `Pct` is `Files / authored * 100` where `authored` is the count of files the dev added or removed at least one line on — same denominator as Scope, so Pcts sum to 100% modulo top-5 truncation. The raw dev-attributable `Churn` (sum of `devLines[email]` across bucket files) is kept on the struct for JSON consumers who want a churn-ranked view. Answers the "language/skill fingerprint" question (`.go` + `.yaml` → backend+infra; `.tsx` + `.ts` + `.css` → frontend). **Attribution caveat:** bucket is derived from the file's canonical (post-rename) path — a dev who worked on `foo.js` pre-migration still shows up under `.ts` if it was later renamed; per-era per-dev attribution would need `byExt` to carry a dev dimension, which isn't tracked. |
 | Specialization | Herfindahl index over the **full** per-directory file-count distribution: Σ pᵢ² where pᵢ is the share of the dev's files in directory i. 1 = all files in one directory (narrow specialist); 1/N for a uniform spread across N directories; approaches 0 as the distribution widens. Computed before the top-5 Scope truncation so it reflects actual breadth. Labels (see `specBroadGeneralistMax`, `specBalancedMax`, `specFocusedMax` constants): `< 0.15` broad generalist, `< 0.35` balanced, `< 0.7` focused specialist, `≥ 0.7` narrow specialist. Herfindahl, not Gini, because Gini would collapse "1 file in 1 dir" and "1 file in each of 5 dirs" to the same value (both have zero inequality among buckets), which misses the specialization distinction. **Measures file distribution, not domain expertise** — see caveat below. **Display vs raw:** CLI and HTML show the value rounded to 3 decimals (`%.3f`) for readability; JSON output preserves the full float64. Band classification runs against the raw float, so a value like 0.149 lands in `broad generalist` even though %.2f would have rounded it to `0.15`. JSON consumers that reproduce the banding must use the raw value, not a rounded version. |
 | Contribution type | Based on del/add ratio: growth (<0.4), balanced (0.4-0.8), refactor (>0.8) |
@@ -342,7 +342,7 @@ Every classification boundary is a named constant in `internal/stats/stats.go`. 
 | `classifyOldAgeDays` | `180` | **Fallback only** (dataset < `classifyMinSample` files). Adaptive path uses P75 of the dataset's own age distribution. |
 | `classifyDecliningTrend` | `0.5` | **Fallback only**. Adaptive path uses P25 of the dataset's own trend distribution. |
 | `classifyMinSample` | `8` | Below this many files, percentile estimates are too noisy to trust and the two thresholds above revert to absolutes. |
-| `adaptiveDecliningTrendFloor` | `0.01` | Minimum value for the adaptive `decliningTrendThreshold`. Prevents P25 from collapsing to 0 on mature repos where dormant files dominate, which would hide every legacy-hotspot. |
+| `adaptiveDecliningTrendFloor` | `0.01` | Minimum value for the adaptive `decliningTrendThreshold`. Prevents P25 from collapsing to 0 on mature repos where dormant files dominate, which would hide every fading-silo. |
 | `suspectWarningMinChurnRatio` | `0.10` | Vendor/generated path warning fires only when matched paths together exceed this fraction of total repo churn — prevents a single incidental `.lock` file from triggering noise. |
 | `classifyTrendWindowMonths` | `3` | Window (months, relative to latest commit) for the recent vs earlier split in `trend`. |
 | `contribRefactorRatio` | `0.8` | `del/add ≥ this` → dev profile `contribType = refactor`. |
@@ -368,7 +368,7 @@ Every ranking function has an explicit tiebreaker so the same input produces the
 | `directories` | file_touches | dir asc |
 | `busfactor` | bus_factor (asc) | path asc |
 | `coupling` | co_changes | coupling_pct |
-| `churn-risk` | label priority (legacy-hotspot → silo → active-core → active → cold) | recent_churn desc, then bus_factor asc |
+| `churn-risk` | label priority (fading-silo → silo → active-core → active → cold) | recent_churn desc, then bus_factor asc |
 | `top-commits` | lines_changed | sha asc |
 | `dev-network` | shared_lines | shared_files |
 | `profile` | commits | email asc |

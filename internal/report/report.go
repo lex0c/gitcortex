@@ -44,8 +44,8 @@ type ReportData struct {
 	MaxPattern     int
 
 	// Label distribution for the Churn Risk section — counted over the
-	// full classified set so the reader can tell "top 20, all legacy-
-	// hotspot" from "there are 48 legacy-hotspots in total". Populated
+	// full classified set so the reader can tell "top 20, all fading-
+	// silo" from "there are 48 fading-silos in total". Populated
 	// alongside ChurnRisk in Generate().
 	ChurnRiskLabelCounts []LabelCount
 
@@ -383,11 +383,11 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 }
 
 // churnRiskLabelCounts aggregates the per-label totals for the Churn
-// Risk distribution strip. Ordering matches the table below: legacy-
-// hotspot first (most actionable), cold last. Labels with zero files
+// Risk distribution strip. Ordering matches the table below: fading-
+// silo first (most actionable), cold last. Labels with zero files
 // are omitted so the strip doesn't show empty chips on small repos.
 func buildLabelCountList(counts map[string]int) []LabelCount {
-	order := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
+	order := []string{"fading-silo", "silo", "active-core", "active", "cold"}
 	var result []LabelCount
 	for i, lbl := range order {
 		if n := counts[lbl]; n > 0 {

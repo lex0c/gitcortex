@@ -38,7 +38,7 @@ tr:last-child td { border-bottom: none; }
 footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
 .churn-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .churn-chips .chip { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; white-space: nowrap; }
-.chip-legacy-hotspot { background: #cf222e; color: #fff; }
+.chip-fading-silo { background: #9a3412; color: #fff; }
 .chip-silo { background: #bf8700; color: #fff; }
 .chip-active-core { background: #0969da; color: #fff; }
 .chip-active { background: #2da44e; color: #fff; }
@@ -61,7 +61,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 <details class="accordion">
   <summary>Glossary — what do these terms mean?</summary>
-  <p style="font-size:12px; color:#24292f; margin:0 0 10px; line-height:1.5;">gitcortex is a <b>repository behavior analyzer</b>, not a code analyzer. These metrics describe what people and processes did in git — who touched what, when, and with whom — not the quality of the source code itself. A file classified as <b>silo</b> or <b>legacy-hotspot</b> reveals a human or process pattern; it is not a judgment on the code (a well-written library maintained by one person will classify as silo regardless of how good it is). Labels point at where to look, not what to conclude.</p>
+  <p style="font-size:12px; color:#24292f; margin:0 0 10px; line-height:1.5;">gitcortex is a <b>repository behavior analyzer</b>, not a code analyzer. These metrics describe what people and processes did in git — who touched what, when, and with whom — not the quality of the source code itself. A file classified as <b>silo</b> or <b>fading-silo</b> reveals a human or process pattern; it is not a judgment on the code (a well-written library maintained by one person will classify as silo regardless of how good it is). Labels point at where to look, not what to conclude.</p>
   <dl>
     <dt>Bus factor</dt>
     <dd>How many developers would need to leave before critical knowledge is lost. A file with bus factor 1 has a single owner — losing that person means losing the context.</dd>
@@ -69,14 +69,14 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     <dd>Total lines added plus lines removed. High churn files are heavily modified — often where bugs accumulate.</dd>
     <dt>Recent churn</dt>
     <dd>Churn weighted so recent changes count more. Default half-life is 90 days — a change loses half its weight every 90 days, so a change from a year ago (≈4 half-lives) is worth ~1/16 of a change today.</dd>
-    <dt>Legacy-hotspot</dt>
-    <dd>An old file with concentrated ownership and declining activity — deprecated code still being touched. Usually the most urgent refactor target.</dd>
+    <dt>Fading-silo</dt>
+    <dd>An old file with concentrated ownership whose activity is cooling — a silo whose owner is drifting away. Usually the most urgent refactor target.</dd>
     <dt>Silo</dt>
     <dd>Old, concentrated, and still stable or growing — a knowledge bottleneck. Plan transfer before the owner moves on.</dd>
     <dt>Active-core</dt>
     <dd>Newer code with a single main author. Often fine during early development; revisit if it ages without spreading ownership.</dd>
     <dt>Trend</dt>
-    <dd>Ratio of recent churn to older churn for a file. Below 0.5 means activity is declining sharply; around 1 is stable; above 1.5 is growing. The declining case is what flips an old concentrated file from <b>silo</b> to <b>legacy-hotspot</b>.</dd>
+    <dd>Ratio of recent churn to older churn for a file. Below 0.5 means activity is declining sharply; around 1 is stable; above 1.5 is growing. The declining case is what flips an old concentrated file from <b>silo</b> to <b>fading-silo</b>.</dd>
     <dt>Age P__ / Trend P__</dt>
     <dd>Percentile suffixes on Churn Risk labels show where this file sits in the repo's own distribution. <b>Age P90</b> = older than 90% of tracked files; <b>Trend P10</b> = declining more sharply than 90%. Useful to separate a borderline classification (P76/P24) from a real alarm (P98/P03).</dd>
     <dt>Coupling</dt>
@@ -262,7 +262,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 
 {{if .ChurnRisk}}
 <h2>Churn Risk{{if lt (len .ChurnRisk) .Summary.TotalFiles}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .ChurnRisk)}} of {{thousands .Summary.TotalFiles}}</span>{{end}}</h2>
-<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>legacy-hotspot</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
+<p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>fading-silo</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
 {{if .ChurnRiskLabelCounts}}
 <div class="churn-chips">
   {{range .ChurnRiskLabelCounts}}
@@ -277,7 +277,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{range .ChurnRisk}}
 <tr>
   <td class="mono truncate">{{.Path}}</td>
-  <td>{{if eq .Label "legacy-hotspot"}}<span style="background:#cf222e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🔴 {{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}{{if .AgePercentile}}<div style="font-size:10px; color:#656d76; margin-top:2px;">age P{{derefInt .AgePercentile}} · trend P{{derefInt .TrendPercentile}}</div>{{end}}</td>
+  <td>{{if eq .Label "fading-silo"}}<span style="background:#9a3412; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "silo"}}<span style="background:#bf8700; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">🟡 {{.Label}}</span>{{else if eq .Label "active-core"}}<span style="background:#0969da; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else if eq .Label "active"}}<span style="background:#2da44e; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{else}}<span style="background:#eaeef2; color:#656d76; padding:2px 8px; border-radius:10px; font-size:11px;">{{.Label}}</span>{{end}}{{if .AgePercentile}}<div style="font-size:10px; color:#656d76; margin-top:2px;">age P{{derefInt .AgePercentile}} · trend P{{derefInt .TrendPercentile}}</div>{{end}}</td>
   <td>{{printf "%.1f" .RecentChurn}}</td>
   <td style="width:18%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .RecentChurn $maxChurn}}%"></div></div></td>
   <td>{{.BusFactor}}</td>

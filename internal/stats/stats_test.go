@@ -651,10 +651,10 @@ func TestChurnRisk(t *testing.T) {
 
 func TestChurnRiskLabelPriority(t *testing.T) {
 	// Labels must sort in this actionability order regardless of
-	// RecentChurn — a legacy-hotspot with RC=50 outranks an active file
+	// RecentChurn — a fading-silo with RC=50 outranks an active file
 	// with RC=50000. See the sort comment in stats.go.
 	want := []string{
-		"legacy-hotspot", "silo", "active-core", "active", "cold",
+		"fading-silo", "silo", "active-core", "active", "cold",
 	}
 	for i := 1; i < len(want); i++ {
 		if churnRiskLabelPriority(want[i-1]) >= churnRiskLabelPriority(want[i]) {
@@ -671,13 +671,13 @@ func TestChurnRiskLabelPriority(t *testing.T) {
 }
 
 func TestChurnRiskSortLegacyBeatsActiveDespiteHigherChurn(t *testing.T) {
-	// A legacy-hotspot with low RecentChurn must rank above an active
+	// A fading-silo with low RecentChurn must rank above an active
 	// file with huge RecentChurn — otherwise the top-N display hides the
 	// classified risks behind unremarkable active code (the WordPress bug
 	// that motivated the label-first sort).
 	results := []ChurnRiskResult{
 		{Path: "active.go", Label: "active", RecentChurn: 10000, BusFactor: 4},
-		{Path: "legacy.go", Label: "legacy-hotspot", RecentChurn: 50, BusFactor: 1},
+		{Path: "legacy.go", Label: "fading-silo", RecentChurn: 50, BusFactor: 1},
 	}
 	sort.Slice(results, func(i, j int) bool {
 		pi, pj := churnRiskLabelPriority(results[i].Label), churnRiskLabelPriority(results[j].Label)
@@ -690,7 +690,7 @@ func TestChurnRiskSortLegacyBeatsActiveDespiteHigherChurn(t *testing.T) {
 		return results[i].Path < results[j].Path
 	})
 	if results[0].Path != "legacy.go" {
-		t.Errorf("legacy-hotspot must outrank active file, got top=%q", results[0].Path)
+		t.Errorf("fading-silo must outrank active file, got top=%q", results[0].Path)
 	}
 }
 
@@ -737,7 +737,7 @@ func TestClassifyFile(t *testing.T) {
 		{"active-core: new code, single author", 200, 50, 1, 30, 1.0, "active-core"},
 		{"silo: old + concentrated + stable", 200, 50, 2, 365, 1.0, "silo"},
 		{"silo: old + concentrated + growing", 200, 50, 2, 365, 2.0, "silo"},
-		{"legacy-hotspot: old + concentrated + declining", 200, 50, 1, 365, 0.3, "legacy-hotspot"},
+		{"fading-silo: old + concentrated + declining", 200, 50, 1, 365, 0.3, "fading-silo"},
 		{"cold wins over everything when churn low", 10, 50, 1, 365, 0.1, "cold"},
 	}
 	// Use defaultBands so the old absolute constants (180d age, 0.5 trend)
@@ -884,7 +884,7 @@ func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
 	// earlier-only path), half are active. Without the declining-trend
 	// floor, P25 collapses to 0 and `trend < 0` never fires — dormant
 	// concentrated files would silently be misclassified as silo
-	// instead of legacy-hotspot, hiding the strongest alarm.
+	// instead of fading-silo, hiding the strongest alarm.
 	//
 	// The floor guarantees the threshold is strictly positive so the
 	// signal survives the adaptive-mode switch.
@@ -930,7 +930,7 @@ func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
 	var legacyCount int
 	var dormantLabels []string
 	for _, r := range results {
-		if r.Label == "legacy-hotspot" {
+		if r.Label == "fading-silo" {
 			legacyCount++
 		}
 		if strings.HasPrefix(r.Path, "dormant/") {
@@ -938,13 +938,13 @@ func TestChurnRiskAdaptiveDormantP25ZeroFlooring(t *testing.T) {
 		}
 	}
 	if legacyCount == 0 {
-		t.Errorf("expected dormant+concentrated files to be flagged legacy-hotspot; got 0 "+
+		t.Errorf("expected dormant+concentrated files to be flagged fading-silo; got 0 "+
 			"(dormant labels: %v). P25 likely collapsed to 0 without the floor.", dormantLabels)
 	}
-	// Sanity: every dormant file (bf=1, old, trend=0) should be legacy-hotspot.
+	// Sanity: every dormant file (bf=1, old, trend=0) should be fading-silo.
 	for _, lbl := range dormantLabels {
-		if lbl != "legacy-hotspot" {
-			t.Errorf("dormant file got label %q, want legacy-hotspot", lbl)
+		if lbl != "fading-silo" {
+			t.Errorf("dormant file got label %q, want fading-silo", lbl)
 		}
 	}
 }
@@ -965,8 +965,8 @@ func TestClassifyFileFloorBoundary(t *testing.T) {
 		trend float64
 		want  string
 	}{
-		{"trend 0 (dormant, earlier-only) → declining", 0.0, "legacy-hotspot"},
-		{"trend 0.001 below floor → declining", 0.001, "legacy-hotspot"},
+		{"trend 0 (dormant, earlier-only) → declining", 0.0, "fading-silo"},
+		{"trend 0.001 below floor → declining", 0.001, "fading-silo"},
 		{"trend exactly at floor 0.01 → NOT declining", 0.01, "silo"},
 		{"trend 0.011 above floor → NOT declining", 0.011, "silo"},
 		{"trend 1.0 flat → NOT declining", 1.0, "silo"},
@@ -984,7 +984,7 @@ func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
 	// trend window (earlier bucket is empty), so churnTrend returns the
 	// sentinel 1.0 for all of them. The adaptive P25 then collapses onto
 	// 1.0 and the "declining" check (`trend < 1.0`) matches nobody — no
-	// file can reach legacy-hotspot via the trend predicate. Old +
+	// file can reach fading-silo via the trend predicate. Old +
 	// concentrated files fall through to silo.
 	//
 	// This test pins that behavior so future refactors don't silently
@@ -1022,15 +1022,15 @@ func TestChurnRiskAdaptiveDegenerateTrendDistribution(t *testing.T) {
 	legacyCount, siloCount := 0, 0
 	for _, r := range results {
 		switch r.Label {
-		case "legacy-hotspot":
+		case "fading-silo":
 			legacyCount++
 		case "silo":
 			siloCount++
 		}
 		// Trend of 1.0 means P25 of a constant-1 distribution is also 1,
 		// so `trend < 1.0` never fires and no file is declining.
-		if r.Label == "legacy-hotspot" {
-			t.Errorf("%s: unexpected legacy-hotspot — trend distribution is degenerate (all 1.0), "+
+		if r.Label == "fading-silo" {
+			t.Errorf("%s: unexpected fading-silo — trend distribution is degenerate (all 1.0), "+
 				"no file should be classified as declining", r.Path)
 		}
 	}
@@ -1073,10 +1073,10 @@ func TestLabelWithPercentile(t *testing.T) {
 		age, trend          *int
 		want                string
 	}{
-		{"both nil → bare label", "legacy-hotspot", nil, nil, "legacy-hotspot"},
+		{"both nil → bare label", "fading-silo", nil, nil, "fading-silo"},
 		{"age nil → bare label", "silo", nil, p(10), "silo"},
 		{"trend nil → bare label", "active", p(75), nil, "active"},
-		{"both set → suffix", "legacy-hotspot", p(92), p(8), "legacy-hotspot (age P92, trend P8)"},
+		{"both set → suffix", "fading-silo", p(92), p(8), "fading-silo (age P92, trend P8)"},
 		{"zero values render", "active-core", p(0), p(0), "active-core (age P0, trend P0)"},
 		{"three-digit value renders unpadded", "active", p(100), p(100), "active (age P100, trend P100)"},
 	}
@@ -1159,7 +1159,7 @@ func TestChurnTrend(t *testing.T) {
 	// Single-month histories used to short-circuit to 1 via len(monthChurn)<2,
 	// silencing the two strongest trend signals: earlier-only (declined to
 	// nothing) and recent-only (grew from nothing). Both must now come
-	// through so old concentrated files can be classified as legacy-hotspot.
+	// through so old concentrated files can be classified as fading-silo.
 
 	// Earlier-only: a single month well before the cutoff.
 	earlierOnly := map[string]int64{"2023-05": 500}
@@ -1182,11 +1182,11 @@ func TestChurnTrend(t *testing.T) {
 	}
 }
 
-func TestChurnRiskLegacyHotspotFromSingleOldMonth(t *testing.T) {
+func TestChurnRiskFadingSiloFromSingleOldMonth(t *testing.T) {
 	// Integration: file touched only in one old month, bf=1, age > 180.
 	// Before the churnTrend fix (len<2 guard), this file returned
 	// trend=1 (stable) and landed at label=silo. After the fix,
-	// trend=0 (declined to nothing) routes it through the legacy-hotspot
+	// trend=0 (declined to nothing) routes it through the fading-silo
 	// branch. Pins the end-to-end wiring so a future regression in
 	// churnTrend, classifyFile, or ChurnRisk can't silently send such
 	// files back to silo.
@@ -1211,8 +1211,8 @@ func TestChurnRiskLegacyHotspotFromSingleOldMonth(t *testing.T) {
 		t.Fatalf("len = %d, want 1", len(results))
 	}
 	r := results[0]
-	if r.Label != "legacy-hotspot" {
-		t.Errorf("Label = %q, want legacy-hotspot (single-old-month + bf=1 + age>180)", r.Label)
+	if r.Label != "fading-silo" {
+		t.Errorf("Label = %q, want fading-silo (single-old-month + bf=1 + age>180)", r.Label)
 	}
 	if r.Trend != 0 {
 		t.Errorf("Trend = %.2f, want 0 (earlier-only — the fix)", r.Trend)
@@ -2717,6 +2717,111 @@ func TestDevProfilesSpecializationRootFilesBucket(t *testing.T) {
 	}
 	if p.Scope[0].Files != 4 {
 		t.Errorf("Scope[0].Files = %d, want 4", p.Scope[0].Files)
+	}
+}
+
+func TestDevProfilesScopeAggregatesAcrossMultiRepoPrefix(t *testing.T) {
+	// LoadMultiJSONL prepends `<slug>:` to every path so repos with
+	// colliding basenames (cmd/, src/, …) don't merge at the file
+	// level. Scope and Specialization operate on the *developer's*
+	// directory distribution, not the file universe — a dev who
+	// works on `cmd/` across three repos is a cmd specialist
+	// regardless of how the loader namespaced the paths. Strip the
+	// prefix before bucketing so the top-5 truncation isn't
+	// fragmented, the Herfindahl index reflects area-of-work
+	// (not area-×-repo), and the HTML bar avoids awkward
+	// `slug:dir` labels. Per-repo split is already surfaced by
+	// Per-Repository Breakdown below the scope section.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	// commitsByRepo must carry multiple slugs so DevProfiles recognizes
+	// the dataset as multi-repo and enables prefix stripping. Without
+	// this, the gate in stats.go skips the strip (correct behavior for
+	// single-repo datasets with legit ":" in path segments) and the
+	// test would assert fragmentation.
+	c1 := &commitEntry{email: "dev@x", date: t1, add: 50, del: 0, files: 5, repo: "repoA"}
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": c1},
+		commitsByRepo: map[string][]*commitEntry{
+			"repoA": {c1},
+			"repoB": {},
+			"repoC": {},
+		},
+		contributors: map[string]*ContributorStat{
+			"dev@x": {Email: "dev@x", Name: "D", Commits: 1, ActiveDays: 1, FilesTouched: 5, Additions: 50},
+		},
+		files: map[string]*fileEntry{
+			"repoA:cmd/main.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoA:cmd/run.go":   {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoB:cmd/serve.go": {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoC:cmd/boot.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoA:pkg/util.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "", 0)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	// Scope: two aggregated buckets — `cmd` (4 files across 3 repos)
+	// and `pkg` (1 file). Without prefix stripping there would be 4
+	// entries (`repoA:cmd` with 2, three others with 1 each).
+	if len(p.Scope) != 2 {
+		t.Fatalf("Scope = %d entries (%+v), want 2 (cmd, pkg) after cross-repo aggregation", len(p.Scope), p.Scope)
+	}
+	if p.Scope[0].Dir != "cmd" || p.Scope[0].Files != 4 {
+		t.Errorf("Scope[0] = %+v, want {cmd, 4}", p.Scope[0])
+	}
+	if p.Scope[1].Dir != "pkg" || p.Scope[1].Files != 1 {
+		t.Errorf("Scope[1] = %+v, want {pkg, 1}", p.Scope[1])
+	}
+	// Specialization: Herfindahl over {4,1} = 17/25 = 0.68
+	// (focused specialist). Without aggregation it would be
+	// (4+1+1+1)/25 = 0.28 (broad generalist) — a regression that
+	// misclassifies every cross-repo specialist.
+	if got, want := p.Specialization, 0.68; got < want-0.01 || got > want+0.01 {
+		t.Errorf("Specialization = %.3f, want ~%.2f (focused specialist over {cmd:4, pkg:1})", got, want)
+	}
+}
+
+func TestDevProfilesScopePreservesColonDirsInSingleRepo(t *testing.T) {
+	// Regression: stripRepoPrefix drops everything before the first ":"
+	// when the preceding segment has no slash, which would wrongly
+	// collapse a legitimate top-level dir like `ops:core` into `core`
+	// in a single-repo dataset. The multi-repo gate in DevProfiles
+	// guards against this — a dataset with a single entry in
+	// commitsByRepo must keep the raw path, so `ops:core/main.go`
+	// stays in the `ops:core` bucket and Specialization sees the dir
+	// the dev actually works in.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	c1 := &commitEntry{email: "dev@x", date: t1, add: 20, del: 0, files: 2, repo: "(repo)"}
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": c1},
+		commitsByRepo: map[string][]*commitEntry{
+			"(repo)": {c1},
+		},
+		contributors: map[string]*ContributorStat{
+			"dev@x": {Email: "dev@x", Name: "D", Commits: 1, ActiveDays: 1, FilesTouched: 2, Additions: 20},
+		},
+		files: map[string]*fileEntry{
+			"ops:core/main.go": {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"ops:core/run.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "", 0)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	if len(p.Scope) != 1 {
+		t.Fatalf("Scope = %d entries (%+v), want 1 — single-repo paths must not be stripped", len(p.Scope), p.Scope)
+	}
+	if p.Scope[0].Dir != "ops:core" {
+		t.Errorf("Scope[0].Dir = %q, want %q (stripRepoPrefix fired in single-repo mode and dropped the legit ops: segment)", p.Scope[0].Dir, "ops:core")
+	}
+	if p.Scope[0].Files != 2 {
+		t.Errorf("Scope[0].Files = %d, want 2", p.Scope[0].Files)
 	}
 }
 

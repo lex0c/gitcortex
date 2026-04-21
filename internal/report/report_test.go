@@ -507,15 +507,15 @@ func TestHumanize(t *testing.T) {
 
 func TestBuildLabelCountList(t *testing.T) {
 	counts := map[string]int{
-		"active":         2,
-		"legacy-hotspot": 1,
-		"cold":           1,
-		"silo":           1,
-		"active-core":    3,
+		"active":      2,
+		"fading-silo": 1,
+		"cold":        1,
+		"silo":        1,
+		"active-core": 3,
 	}
 	got := buildLabelCountList(counts)
 
-	wantOrder := []string{"legacy-hotspot", "silo", "active-core", "active", "cold"}
+	wantOrder := []string{"fading-silo", "silo", "active-core", "active", "cold"}
 	if len(got) != len(wantOrder) {
 		t.Fatalf("got %d entries, want %d: %+v", len(got), len(wantOrder), got)
 	}

@@ -22,10 +22,10 @@ const (
 	// adaptiveDecliningTrendFloor keeps the P25-derived "declining"
 	// threshold strictly positive. churnTrend clamps its output at 0
 	// for files with earlier-only history (the strongest
-	// legacy-hotspot signal). In mature repos where ≥25% of files are
+	// fading-silo signal). In mature repos where ≥25% of files are
 	// dormant, P25 collapses to 0; without this floor, `trend < 0`
 	// never fires and every dormant concentrated file is misrouted to
-	// silo instead of legacy-hotspot — the exact signal the rule is
+	// silo instead of fading-silo — the exact signal the rule is
 	// supposed to surface. Epsilon is small enough not to widen the
 	// declining band past the fallback (0.5) even in the pathological
 	// case, large enough that 0.0 ≠ threshold under float compare.
@@ -131,13 +131,13 @@ type ChurnRiskResult struct {
 	FirstChangeDate string
 	AgeDays         int
 	Trend           float64 // recent 3mo churn / earlier churn; 1 = flat, <0.5 declining, >1.5 growing
-	Label           string  // "cold" | "active" | "active-core" | "silo" | "legacy-hotspot"
+	Label           string  // "cold" | "active" | "active-core" | "silo" | "fading-silo"
 	// AgePercentile and TrendPercentile report where this file lands in the
 	// per-dataset distribution (0-100). Nil when the fallback path ran
 	// (dataset below classifyMinSample) so JSON consumers see the field
 	// omitted rather than a `-1` sentinel. Surfacing these alongside the
 	// label makes the distance from the classification boundary visible:
-	// `legacy-hotspot (age P92, trend P08)` vs a file that barely crossed.
+	// `fading-silo (age P92, trend P08)` vs a file that barely crossed.
 	// Tag form `json:",omitempty"` (with the leading comma) keeps Go's
 	// default PascalCase name — AgePercentile / TrendPercentile — so the
 	// field names match every other field on this struct. Without it
@@ -977,12 +977,12 @@ func rankFloat(sorted []float64, v float64) int {
 
 // churnRiskLabelPriority returns a sort key for ChurnRisk labels where
 // lower values rise to the top. Order reflects actionability: named
-// risks (legacy-hotspot, silo) first, then young concentrated code
+// risks (fading-silo, silo) first, then young concentrated code
 // (active-core), then healthy active code, then cold. Any unrecognized
 // label sorts last so the primary labels always lead the table.
 func churnRiskLabelPriority(label string) int {
 	switch label {
-	case "legacy-hotspot":
+	case "fading-silo":
 		return 0
 	case "silo":
 		return 1
@@ -1011,7 +1011,7 @@ func classifyFile(recentChurn, lowChurn float64, bf, ageDays int, trend float64,
 		return "active-core" // new code, single author is expected
 	}
 	if trend < bands.DecliningTrend {
-		return "legacy-hotspot" // old + concentrated + declining → urgent
+		return "fading-silo" // old + concentrated + declining → urgent
 	}
 	return "silo" // old + concentrated + stable/growing → knowledge bottleneck
 }
@@ -1206,7 +1206,7 @@ func ChurnRisk(ds *Dataset, n int) []ChurnRiskResult {
 		})
 	}
 
-	// Primary sort: label priority — legacy-hotspot and silo are the
+	// Primary sort: label priority — fading-silo and silo are the
 	// actionable classifications (old + concentrated, with diverging
 	// trend). Sorting by RecentChurn alone buried them behind very
 	// active files, so a user running `--top 20` on a mature repo would
@@ -1622,12 +1622,33 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		// otherwise a dev who only touches README, Makefile, go.mod, etc.
 		// appears as a broad generalist across N pseudo-dirs instead of
 		// a narrow specialist on the repo root.
+		//
+		// Multi-repo: strip the `<slug>:` prefix added by LoadMultiJSONL
+		// so a dev who works on `cmd/` across several repos aggregates
+		// into a single `cmd` bucket instead of `repoA:cmd`, `repoB:cmd`,
+		// ... — which would fragment the top-5 truncation, deflate the
+		// Herfindahl specialization index toward "generalist", and show
+		// awkward `slug:dir` labels in the HTML bar. The per-repo split
+		// is still visible in the Per-Repository Breakdown section below.
+		//
+		// The strip is gated on multi-repo mode (len(commitsByRepo) > 1)
+		// because stripRepoPrefix alone is too aggressive in single-repo
+		// datasets: a legitimate top-level dir containing ":" — say
+		// `ops:core/main.go` committed to a single repo — would be
+		// wrongly collapsed to `core/main.go`, silently moving files
+		// between buckets. The multi-repo gate guarantees we only strip
+		// paths that actually carry a LoadMultiJSONL prefix.
+		multiRepo := len(ds.commitsByRepo) > 1
 		dirCount := make(map[string]int)
 		if files, ok := devFiles[email]; ok {
 			for path := range files {
+				p := path
+				if multiRepo {
+					p = stripRepoPrefix(path)
+				}
 				dir := "."
-				if idx := strings.LastIndex(path, "/"); idx >= 0 {
-					dir = path[:idx]
+				if idx := strings.LastIndex(p, "/"); idx >= 0 {
+					dir = p[:idx]
 				}
 				dirCount[dir]++
 			}
