@@ -1630,10 +1630,22 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		// Herfindahl specialization index toward "generalist", and show
 		// awkward `slug:dir` labels in the HTML bar. The per-repo split
 		// is still visible in the Per-Repository Breakdown section below.
+		//
+		// The strip is gated on multi-repo mode (len(commitsByRepo) > 1)
+		// because stripRepoPrefix alone is too aggressive in single-repo
+		// datasets: a legitimate top-level dir containing ":" — say
+		// `ops:core/main.go` committed to a single repo — would be
+		// wrongly collapsed to `core/main.go`, silently moving files
+		// between buckets. The multi-repo gate guarantees we only strip
+		// paths that actually carry a LoadMultiJSONL prefix.
+		multiRepo := len(ds.commitsByRepo) > 1
 		dirCount := make(map[string]int)
 		if files, ok := devFiles[email]; ok {
 			for path := range files {
-				p := stripRepoPrefix(path)
+				p := path
+				if multiRepo {
+					p = stripRepoPrefix(path)
+				}
 				dir := "."
 				if idx := strings.LastIndex(p, "/"); idx >= 0 {
 					dir = p[:idx]

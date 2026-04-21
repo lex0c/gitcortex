@@ -2733,9 +2733,20 @@ func TestDevProfilesScopeAggregatesAcrossMultiRepoPrefix(t *testing.T) {
 	// `slug:dir` labels. Per-repo split is already surfaced by
 	// Per-Repository Breakdown below the scope section.
 	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	// commitsByRepo must carry multiple slugs so DevProfiles recognizes
+	// the dataset as multi-repo and enables prefix stripping. Without
+	// this, the gate in stats.go skips the strip (correct behavior for
+	// single-repo datasets with legit ":" in path segments) and the
+	// test would assert fragmentation.
+	c1 := &commitEntry{email: "dev@x", date: t1, add: 50, del: 0, files: 5, repo: "repoA"}
 	ds := &Dataset{
 		Earliest: t1, Latest: t1,
-		commits: map[string]*commitEntry{"c1": {email: "dev@x", date: t1, add: 50, del: 0, files: 5}},
+		commits: map[string]*commitEntry{"c1": c1},
+		commitsByRepo: map[string][]*commitEntry{
+			"repoA": {c1},
+			"repoB": {},
+			"repoC": {},
+		},
 		contributors: map[string]*ContributorStat{
 			"dev@x": {Email: "dev@x", Name: "D", Commits: 1, ActiveDays: 1, FilesTouched: 5, Additions: 50},
 		},
@@ -2770,6 +2781,47 @@ func TestDevProfilesScopeAggregatesAcrossMultiRepoPrefix(t *testing.T) {
 	// misclassifies every cross-repo specialist.
 	if got, want := p.Specialization, 0.68; got < want-0.01 || got > want+0.01 {
 		t.Errorf("Specialization = %.3f, want ~%.2f (focused specialist over {cmd:4, pkg:1})", got, want)
+	}
+}
+
+func TestDevProfilesScopePreservesColonDirsInSingleRepo(t *testing.T) {
+	// Regression: stripRepoPrefix drops everything before the first ":"
+	// when the preceding segment has no slash, which would wrongly
+	// collapse a legitimate top-level dir like `ops:core` into `core`
+	// in a single-repo dataset. The multi-repo gate in DevProfiles
+	// guards against this — a dataset with a single entry in
+	// commitsByRepo must keep the raw path, so `ops:core/main.go`
+	// stays in the `ops:core` bucket and Specialization sees the dir
+	// the dev actually works in.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	c1 := &commitEntry{email: "dev@x", date: t1, add: 20, del: 0, files: 2, repo: "(repo)"}
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": c1},
+		commitsByRepo: map[string][]*commitEntry{
+			"(repo)": {c1},
+		},
+		contributors: map[string]*ContributorStat{
+			"dev@x": {Email: "dev@x", Name: "D", Commits: 1, ActiveDays: 1, FilesTouched: 2, Additions: 20},
+		},
+		files: map[string]*fileEntry{
+			"ops:core/main.go": {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"ops:core/run.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "", 0)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	if len(p.Scope) != 1 {
+		t.Fatalf("Scope = %d entries (%+v), want 1 — single-repo paths must not be stripped", len(p.Scope), p.Scope)
+	}
+	if p.Scope[0].Dir != "ops:core" {
+		t.Errorf("Scope[0].Dir = %q, want %q (stripRepoPrefix fired in single-repo mode and dropped the legit ops: segment)", p.Scope[0].Dir, "ops:core")
+	}
+	if p.Scope[0].Files != 2 {
+		t.Errorf("Scope[0].Files = %d, want 2", p.Scope[0].Files)
 	}
 }
 
