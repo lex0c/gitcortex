@@ -343,7 +343,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <tr><th>SHA</th><th>Author</th><th>Date</th><th>Lines</th><th>Files</th>{{if and (gt (len .TopCommits) 0) (index .TopCommits 0).Message}}<th>Message</th>{{end}}</tr>
 {{range .TopCommits}}
 <tr>
-  <td class="mono">{{slice .SHA 0 12}}</td>
+  <td class="mono">{{printf "%.12s" .SHA}}</td>
   <td>{{.AuthorName}}</td>
   <td class="mono">{{.Date}}</td>
   <td>{{thousands .LinesChanged}}</td>

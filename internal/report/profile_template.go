@@ -191,21 +191,22 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Profile.TopCommits}}
+{{$hasMsg := (index .Profile.TopCommits 0).Message}}
 <h2>Top Commits</h2>
 <p class="hint">This developer's largest individual commits by lines changed (additions + deletions). A handful of outsized commits (vendored drops, bulk renames, generated code) reads very differently from a steady stream of medium-sized ones, even when the totals match.</p>
 <table>
-<tr><th>SHA</th><th>Date</th><th>Lines</th><th>Files</th><th>Message</th></tr>
+<tr><th>SHA</th><th>Date</th><th>Lines</th><th>Files</th>{{if $hasMsg}}<th>Message</th>{{end}}</tr>
 {{range .Profile.TopCommits}}
 <tr>
   <td class="mono">{{printf "%.12s" .SHA}}</td>
   <td class="mono" style="font-size:11px;">{{.Date}}</td>
   <td>{{thousands .LinesChanged}}</td>
   <td>{{thousands .FilesChanged}}</td>
-  <td class="truncate">{{.Message}}</td>
+  {{if $hasMsg}}<td class="truncate">{{.Message}}</td>{{end}}
 </tr>
 {{end}}
 {{if gt .Profile.TopCommitsHidden 0}}
-<tr><td colspan="5" style="color:#656d76; font-style:italic; text-align:center;">+{{.Profile.TopCommitsHidden}} more commits not shown</td></tr>
+<tr><td colspan="{{if $hasMsg}}5{{else}}4{{end}}" style="color:#656d76; font-style:italic; text-align:center;">+{{.Profile.TopCommitsHidden}} more commits not shown</td></tr>
 {{end}}
 </table>
 {{end}}
