@@ -190,6 +190,26 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
+{{if .Profile.TopCommits}}
+<h2>Top Commits</h2>
+<p class="hint">This developer's largest individual commits by lines changed (additions + deletions). A handful of outsized commits (vendored drops, bulk renames, generated code) reads very differently from a steady stream of medium-sized ones, even when the totals match.</p>
+<table>
+<tr><th>SHA</th><th>Date</th><th>Lines</th><th>Files</th><th>Message</th></tr>
+{{range .Profile.TopCommits}}
+<tr>
+  <td class="mono">{{slice .SHA 0 12}}</td>
+  <td class="mono" style="font-size:11px;">{{.Date}}</td>
+  <td>{{thousands .LinesChanged}}</td>
+  <td>{{thousands .FilesChanged}}</td>
+  <td class="truncate">{{.Message}}</td>
+</tr>
+{{end}}
+{{if gt .Profile.TopCommitsHidden 0}}
+<tr><td colspan="5" style="color:#656d76; font-style:italic; text-align:center;">+{{.Profile.TopCommitsHidden}} more commits not shown</td></tr>
+{{end}}
+</table>
+{{end}}
+
 {{if .ActivityYears}}
 <h2 style="display:flex; justify-content:space-between; align-items:center;">Activity <button onclick="var h=document.getElementById('prof-act-heatmap'),t=document.getElementById('prof-act-table');h.hidden=!h.hidden;t.hidden=!t.hidden;this.textContent=h.hidden?'heatmap':'table'" style="font-size:11px; font-weight:normal; padding:2px 10px; border:1px solid #d0d7de; border-radius:4px; background:#f6f8fa; color:#24292f; cursor:pointer;">table</button></h2>
 <p class="hint">Monthly commit heatmap. Darker = more commits. Gaps = inactive periods; steady cadence signals healthy pace. Hover for details; toggle to table for exact numbers. · {{docRef "activity"}}</p>

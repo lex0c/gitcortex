@@ -1958,6 +1958,142 @@ func TestDevProfilesContribType(t *testing.T) {
 	}
 }
 
+func TestDevProfilesTopCommits(t *testing.T) {
+	// Three devs × varying commit sizes. alice has 12 commits so the
+	// top-10 cap fires; bob has 3; carol has 1. The fixture deliberately
+	// includes two same-sized alice commits to exercise the SHA-asc
+	// tiebreak, a long-message commit to exercise the 80-char truncation,
+	// and a large bob commit to verify ranking is per-dev, not global.
+	ds := &Dataset{
+		commits:      map[string]*commitEntry{},
+		contributors: map[string]*ContributorStat{},
+		files:        map[string]*fileEntry{},
+	}
+	// Alice: 12 commits. Lines = 10*(i+1) except a tie at idx 4,5 both 500.
+	ds.contributors["alice@x"] = &ContributorStat{Name: "Alice", Email: "alice@x", Commits: 12, ActiveDays: 12}
+	for i := 0; i < 12; i++ {
+		sha := fmt.Sprintf("alice-%02d", i)
+		lines := int64(10 * (i + 1))
+		if i == 5 {
+			lines = 50 // alice-04 (idx 4) stays 50; force idx 5 to same so
+			// alice-04 and alice-05 tie on 50 lines.
+		}
+		ds.commits[sha] = &commitEntry{
+			email: "alice@x",
+			date:  time.Date(2024, 1, 1+i, 10, 0, 0, 0, time.UTC),
+			add:   lines, del: 0, files: 1,
+		}
+	}
+	// Long-message commit: 120 chars, should truncate to 77 + "..." (80 total).
+	longMsg := strings.Repeat("x", 120)
+	ds.commits["alice-LONG"] = &commitEntry{
+		email: "alice@x",
+		date:  time.Date(2024, 2, 1, 10, 0, 0, 0, time.UTC),
+		add:   9999, del: 0, files: 5,
+		message: longMsg,
+	}
+	ds.contributors["alice@x"].Commits = 13
+
+	// Bob: 3 small commits, plus one huge (9000 lines) that must NOT
+	// appear in alice's TopCommits even though it's globally the biggest
+	// after alice-LONG.
+	ds.contributors["bob@x"] = &ContributorStat{Name: "Bob", Email: "bob@x", Commits: 4, ActiveDays: 4}
+	for i := 0; i < 3; i++ {
+		sha := fmt.Sprintf("bob-%02d", i)
+		ds.commits[sha] = &commitEntry{
+			email: "bob@x",
+			date:  time.Date(2024, 3, 1+i, 10, 0, 0, 0, time.UTC),
+			add:   5, del: 0, files: 1,
+		}
+	}
+	ds.commits["bob-BIG"] = &commitEntry{
+		email: "bob@x",
+		date:  time.Date(2024, 4, 1, 10, 0, 0, 0, time.UTC),
+		add:   9000, del: 0, files: 3,
+	}
+
+	profiles := DevProfiles(ds, "", 0)
+	var alice, bob *DevProfile
+	for i := range profiles {
+		switch profiles[i].Email {
+		case "alice@x":
+			alice = &profiles[i]
+		case "bob@x":
+			bob = &profiles[i]
+		}
+	}
+	if alice == nil || bob == nil {
+		t.Fatalf("missing profile: alice=%v bob=%v", alice, bob)
+	}
+
+	// Top-10 cap: alice has 13 commits → TopCommits=10, Hidden=3.
+	if len(alice.TopCommits) != 10 {
+		t.Fatalf("alice TopCommits len = %d, want 10", len(alice.TopCommits))
+	}
+	if alice.TopCommitsHidden != 3 {
+		t.Errorf("alice TopCommitsHidden = %d, want 3", alice.TopCommitsHidden)
+	}
+
+	// Ranking: LinesChanged desc. alice-LONG is the biggest (9999).
+	if alice.TopCommits[0].SHA != "alice-LONG" {
+		t.Errorf("alice[0] = %q, want alice-LONG", alice.TopCommits[0].SHA)
+	}
+	for i := 1; i < len(alice.TopCommits); i++ {
+		if alice.TopCommits[i-1].LinesChanged < alice.TopCommits[i].LinesChanged {
+			t.Errorf("alice not lines-desc at idx %d: %d < %d",
+				i, alice.TopCommits[i-1].LinesChanged, alice.TopCommits[i].LinesChanged)
+		}
+	}
+
+	// Message truncation: 77 + "..." = 80 chars.
+	if len(alice.TopCommits[0].Message) != 80 {
+		t.Errorf("long message len = %d, want 80 (77+...)", len(alice.TopCommits[0].Message))
+	}
+	if !strings.HasSuffix(alice.TopCommits[0].Message, "...") {
+		t.Errorf("long message missing ellipsis: %q", alice.TopCommits[0].Message)
+	}
+
+	// Per-dev isolation: no bob commits in alice's list.
+	for _, c := range alice.TopCommits {
+		if strings.HasPrefix(c.SHA, "bob-") {
+			t.Errorf("alice contains bob commit %q", c.SHA)
+		}
+	}
+
+	// Bob has 4 commits, no truncation needed.
+	if len(bob.TopCommits) != 4 {
+		t.Errorf("bob TopCommits len = %d, want 4", len(bob.TopCommits))
+	}
+	if bob.TopCommitsHidden != 0 {
+		t.Errorf("bob TopCommitsHidden = %d, want 0", bob.TopCommitsHidden)
+	}
+	if bob.TopCommits[0].SHA != "bob-BIG" {
+		t.Errorf("bob[0] = %q, want bob-BIG", bob.TopCommits[0].SHA)
+	}
+
+	// Tiebreak: when LinesChanged ties, SHA asc wins. alice-04 and
+	// alice-05 both carry 50 lines. alice-04 must come first.
+	var tieIdx04, tieIdx05 = -1, -1
+	for i, c := range alice.TopCommits {
+		if c.SHA == "alice-04" {
+			tieIdx04 = i
+		}
+		if c.SHA == "alice-05" {
+			tieIdx05 = i
+		}
+	}
+	if tieIdx04 >= 0 && tieIdx05 >= 0 && tieIdx04 > tieIdx05 {
+		t.Errorf("tiebreak broken: alice-04 at %d, alice-05 at %d (want 04 < 05)", tieIdx04, tieIdx05)
+	}
+
+	// LinesChanged field equals add+del.
+	for _, c := range alice.TopCommits {
+		if c.LinesChanged != c.Additions+c.Deletions {
+			t.Errorf("%s: LinesChanged=%d, add+del=%d", c.SHA, c.LinesChanged, c.Additions+c.Deletions)
+		}
+	}
+}
+
 func TestRenameMergesHistory(t *testing.T) {
 	// JSONL newest-first (as git log emits). Historical sequence:
 	// 1) 2024-01 c1 creates old.go

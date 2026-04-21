@@ -520,6 +520,18 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				}
 			}
 
+			if len(p.TopCommits) > 0 {
+				fmt.Fprintln(f.w)
+				fmt.Fprintln(f.w, "  Top commits:")
+				for _, tc := range p.TopCommits {
+					fmt.Fprintf(f.w, "    %s  %s  %6d lines  %3d files  %s\n",
+						tc.SHA[:12], tc.Date, tc.LinesChanged, tc.FilesChanged, tc.Message)
+				}
+				if p.TopCommitsHidden > 0 {
+					fmt.Fprintf(f.w, "    ... (+%d more commits not shown)\n", p.TopCommitsHidden)
+				}
+			}
+
 			if len(p.MonthlyActivity) > 0 {
 				fmt.Fprintln(f.w, "  Activity:")
 				maxCommits := 0
