@@ -26,7 +26,7 @@ See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks, including gitcortex 
 
 **This is the biggest practical distortion in every stat.** Line-count metrics treat a 50k-line `generated.pb.go` the same as a 50k-line hand-written module. Lock files like `package-lock.json` regenerate with every dependency bump. Vendored dependencies inflate churn whenever they're updated. OpenAPI specs, minified JS, `bindata.go`-style embeds — all common, all inflate churn and bus factor without reflecting real human contribution.
 
-Run gitcortex on kubernetes without filtering and the top legacy-hotspots are `vendor/golang.org/x/tools/…/manifest.go`, `api/openapi-spec/v3/…v1alpha3_openapi.json`, and `staging/…/generated.pb.go` — technically correct per the data, practically useless for decision-making.
+Run gitcortex on kubernetes without filtering and the top fading-silos are `vendor/golang.org/x/tools/…/manifest.go`, `api/openapi-spec/v3/…v1alpha3_openapi.json`, and `staging/…/generated.pb.go` — technically correct per the data, practically useless for decision-making.
 
 Mitigate with `--ignore` glob patterns at extract time. Files matched are dropped from the JSONL entirely, so **every downstream stat** (hotspots, churn-risk, bus factor, coupling, dev-network, profiles) reflects only hand-authored code:
 
@@ -251,7 +251,7 @@ Available stats:
 | `activity` | Commits and line changes bucketed by day, week, month, or year |
 | `busfactor` | Files with lowest bus factor (fewest developers owning 80%+ of changes) |
 | `coupling` | Files that frequently change together, revealing hidden architectural dependencies |
-| `churn-risk` | Files ranked by recent churn, classified into `cold` / `active` / `active-core` / `silo` / `legacy-hotspot` |
+| `churn-risk` | Files ranked by recent churn, classified into `cold` / `active` / `active-core` / `silo` / `fading-silo` |
 | `working-patterns` | Commit heatmap by hour and day of week |
 | `dev-network` | Developer collaboration graph based on shared file ownership |
 | `profile` | Per-developer report: scope, specialization index, contribution type, pace, collaboration, top files |
@@ -266,7 +266,7 @@ Output formats: `table` (default, human-readable), `csv` (single clean table per
 
 ```bash
 gitcortex stats --input data.jsonl --stat churn-risk --top 0 --format json \
-  | jq '.churn_risk[] | select(.Label == "legacy-hotspot")'
+  | jq '.churn_risk[] | select(.Label == "fading-silo")'
 ```
 
 CSV output also carries a stable header on line 1, but paths containing commas (font filenames, generated assets) are standard-quoted — a naive `awk -F','` will mis-split on those rows. For CSV pipelines use a proper parser (`csvkit`, `mlr`) or stick with the JSON path above.
@@ -340,15 +340,15 @@ advanced/Scripts/utils.sh              active-core (age P27, trend P94)         
 | `active` | Shared ownership (bus factor ≥ 3). Healthy. |
 | `active-core` | New code (younger than most of the repo), single author. Usually fine. |
 | `silo` | Old + concentrated + stable/growing. Knowledge bottleneck — plan transfer. |
-| `legacy-hotspot` | **Urgent.** Old + concentrated + declining. Deprecated paths still being touched. |
+| `fading-silo` | **Urgent.** Old + concentrated + declining. A silo whose owner is drifting away. |
 
-Sort order is **label priority** (legacy-hotspot → silo → active-core → active → cold), then `recent_churn` descending within the same label. The label answers "is this activity a problem?" and leads the table so the actionable classifications surface at the top — without this, a mature repo's `--top 20` would be dominated by unremarkable active files and the flagged risks would scroll off. The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
+Sort order is **label priority** (fading-silo → silo → active-core → active → cold), then `recent_churn` descending within the same label. The label answers "is this activity a problem?" and leads the table so the actionable classifications surface at the top — without this, a mature repo's `--top 20` would be dominated by unremarkable active files and the flagged risks would scroll off. The composite `risk_score` field (`recent_churn / bus_factor`) is still emitted for CI gate back-compat.
 
-**The `(age PXX, trend PYY)` suffix** reports where the file sits in this repo's distribution: `age P90` = older than 90% of tracked files, `trend P08` = declining more sharply than 92%. Classification thresholds are not absolute — they adapt to each dataset (P75 age and P25 trend, with a fallback to fixed constants for repos under 8 files). A `legacy-hotspot` with `(age P76, trend P24)` barely qualifies; one at `(age P98, trend P03)` is the real alarm. Distance from the boundary is now visible instead of hidden. See `docs/METRICS.md` for the adaptive-thresholds section.
+**The `(age PXX, trend PYY)` suffix** reports where the file sits in this repo's distribution: `age P90` = older than 90% of tracked files, `trend P08` = declining more sharply than 92%. Classification thresholds are not absolute — they adapt to each dataset (P75 age and P25 trend, with a fallback to fixed constants for repos under 8 files). A `fading-silo` with `(age P76, trend P24)` barely qualifies; one at `(age P98, trend P03)` is the real alarm. Distance from the boundary is now visible instead of hidden. See `docs/METRICS.md` for the adaptive-thresholds section.
 
 `--churn-half-life` controls how fast old changes lose weight (default 90 days = changes lose half their weight every 90 days).
 
-The HTML report precedes the Churn Risk table with a colored distribution strip — `48 legacy-hotspot · 1 silo · 2,330 active-core · 1,404 active · 4,585 cold` — counted over the full classified set. The truncated table below shows only the top N by label priority, so a reader glancing at "all 20 rows are legacy-hotspot" can still tell whether the repo has 20 legacy files or 20,000 before drawing a conclusion. To inspect the full list, use `--top 0 --format json` from the CLI and filter with `jq`.
+The HTML report precedes the Churn Risk table with a colored distribution strip — `48 fading-silo · 1 silo · 2,330 active-core · 1,404 active · 4,585 cold` — counted over the full classified set. The truncated table below shows only the top N by label priority, so a reader glancing at "all 20 rows are fading-silo" can still tell whether the repo has 20 legacy files or 20,000 before drawing a conclusion. To inspect the full list, use `--top 0 --format json` from the CLI and filter with `jq`.
 
 ### Working patterns
 
@@ -509,7 +509,7 @@ gitcortex report --input data.jsonl --output report.html --top 30
 gitcortex report --input data.jsonl --email alice@company.com --output alice.html
 ```
 
-Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, legacy-hotspot, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
+Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, fading-silo, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
 
 When the input is multi-repo (from `gitcortex scan` or multiple `--input` files) AND `--email` is set, the profile report renders a *Per-Repository Breakdown* with commit/churn/files/active-days per repo, filtered to that developer's contributions. The team-view report intentionally omits this section — per-repo aggregates on a consolidated dataset reduce to raw git-history distribution, which is more usefully inspected via `manifest.json` or `stats --input X.jsonl` per repo.
 
@@ -537,7 +537,7 @@ Output formats: `text` (default), `github-actions` (annotations), `gitlab` (Code
 
 Exit code 1 when violations are found, 0 when clean.
 
-> `--fail-on-churn-risk` evaluates the legacy `risk_score = recent_churn / bus_factor` field, not the new label classification surfaced by `stats --stat churn-risk`. The two can disagree — a file might have `risk_score` below the threshold yet still classify as `legacy-hotspot`. Use the stat command for triage; use the CI gate as a coarse threshold alarm.
+> `--fail-on-churn-risk` evaluates the legacy `risk_score = recent_churn / bus_factor` field, not the new label classification surfaced by `stats --stat churn-risk`. The two can disagree — a file might have `risk_score` below the threshold yet still classify as `fading-silo`. Use the stat command for triage; use the CI gate as a coarse threshold alarm.
 
 ## Architecture
 
