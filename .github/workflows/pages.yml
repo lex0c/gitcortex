@@ -31,7 +31,7 @@ jobs:
         run: make build
 
       - name: Extract
-        run: ./gitcortex extract --output data.jsonl --ignore "go.sum"
+        run: ./gitcortex extract --output data.jsonl --ignore "go.sum" --include-commit-messages
 
       - name: Generate report
         run: |
