@@ -2720,6 +2720,59 @@ func TestDevProfilesSpecializationRootFilesBucket(t *testing.T) {
 	}
 }
 
+func TestDevProfilesScopeAggregatesAcrossMultiRepoPrefix(t *testing.T) {
+	// LoadMultiJSONL prepends `<slug>:` to every path so repos with
+	// colliding basenames (cmd/, src/, …) don't merge at the file
+	// level. Scope and Specialization operate on the *developer's*
+	// directory distribution, not the file universe — a dev who
+	// works on `cmd/` across three repos is a cmd specialist
+	// regardless of how the loader namespaced the paths. Strip the
+	// prefix before bucketing so the top-5 truncation isn't
+	// fragmented, the Herfindahl index reflects area-of-work
+	// (not area-×-repo), and the HTML bar avoids awkward
+	// `slug:dir` labels. Per-repo split is already surfaced by
+	// Per-Repository Breakdown below the scope section.
+	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	ds := &Dataset{
+		Earliest: t1, Latest: t1,
+		commits: map[string]*commitEntry{"c1": {email: "dev@x", date: t1, add: 50, del: 0, files: 5}},
+		contributors: map[string]*ContributorStat{
+			"dev@x": {Email: "dev@x", Name: "D", Commits: 1, ActiveDays: 1, FilesTouched: 5, Additions: 50},
+		},
+		files: map[string]*fileEntry{
+			"repoA:cmd/main.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoA:cmd/run.go":   {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoB:cmd/serve.go": {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoC:cmd/boot.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+			"repoA:pkg/util.go":  {commits: 1, devLines: map[string]int64{"dev@x": 10}, devCommits: map[string]int{"dev@x": 1}, monthChurn: map[string]int64{}},
+		},
+	}
+	profiles := DevProfiles(ds, "", 0)
+	if len(profiles) != 1 {
+		t.Fatalf("profiles = %d", len(profiles))
+	}
+	p := profiles[0]
+	// Scope: two aggregated buckets — `cmd` (4 files across 3 repos)
+	// and `pkg` (1 file). Without prefix stripping there would be 4
+	// entries (`repoA:cmd` with 2, three others with 1 each).
+	if len(p.Scope) != 2 {
+		t.Fatalf("Scope = %d entries (%+v), want 2 (cmd, pkg) after cross-repo aggregation", len(p.Scope), p.Scope)
+	}
+	if p.Scope[0].Dir != "cmd" || p.Scope[0].Files != 4 {
+		t.Errorf("Scope[0] = %+v, want {cmd, 4}", p.Scope[0])
+	}
+	if p.Scope[1].Dir != "pkg" || p.Scope[1].Files != 1 {
+		t.Errorf("Scope[1] = %+v, want {pkg, 1}", p.Scope[1])
+	}
+	// Specialization: Herfindahl over {4,1} = 17/25 = 0.68
+	// (focused specialist). Without aggregation it would be
+	// (4+1+1+1)/25 = 0.28 (broad generalist) — a regression that
+	// misclassifies every cross-repo specialist.
+	if got, want := p.Specialization, 0.68; got < want-0.01 || got > want+0.01 {
+		t.Errorf("Specialization = %.3f, want ~%.2f (focused specialist over {cmd:4, pkg:1})", got, want)
+	}
+}
+
 func TestDevProfilesSpecializationEdgeCases(t *testing.T) {
 	t1 := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 

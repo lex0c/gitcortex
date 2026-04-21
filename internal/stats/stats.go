@@ -1622,12 +1622,21 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		// otherwise a dev who only touches README, Makefile, go.mod, etc.
 		// appears as a broad generalist across N pseudo-dirs instead of
 		// a narrow specialist on the repo root.
+		//
+		// Multi-repo: strip the `<slug>:` prefix added by LoadMultiJSONL
+		// so a dev who works on `cmd/` across several repos aggregates
+		// into a single `cmd` bucket instead of `repoA:cmd`, `repoB:cmd`,
+		// ... — which would fragment the top-5 truncation, deflate the
+		// Herfindahl specialization index toward "generalist", and show
+		// awkward `slug:dir` labels in the HTML bar. The per-repo split
+		// is still visible in the Per-Repository Breakdown section below.
 		dirCount := make(map[string]int)
 		if files, ok := devFiles[email]; ok {
 			for path := range files {
+				p := stripRepoPrefix(path)
 				dir := "."
-				if idx := strings.LastIndex(path, "/"); idx >= 0 {
-					dir = path[:idx]
+				if idx := strings.LastIndex(p, "/"); idx >= 0 {
+					dir = p[:idx]
 				}
 				dirCount[dir]++
 			}
