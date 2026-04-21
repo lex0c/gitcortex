@@ -2644,6 +2644,39 @@ func TestHerfindahlHelper(t *testing.T) {
 	}
 }
 
+func TestPrintProfilesTopCommitsShortSHA(t *testing.T) {
+	// Regression: the Top commits block used to slice tc.SHA[:12]
+	// unconditionally, which panics when the dataset carries short
+	// SHAs. LoadJSONL does not validate SHA length, so hand-built
+	// fixtures (or a future ingest path that emits abbreviated SHAs)
+	// would crash profile text output. The formatter must clamp to
+	// min(len(sha), 12) instead of fixed slicing.
+	p := DevProfile{
+		Name: "N", Email: "n@x", Commits: 1, ActiveDays: 1,
+		FirstDate: "2024-01-01", LastDate: "2024-01-01",
+		TopCommits: []DevCommit{
+			{SHA: "c1", Date: "2024-01-01", LinesChanged: 10, FilesChanged: 1},
+			{SHA: "abcdef", Date: "2024-01-02", LinesChanged: 20, FilesChanged: 2},
+			{SHA: "abcdef1234567890", Date: "2024-01-03", LinesChanged: 30, FilesChanged: 3},
+		},
+	}
+	var buf bytes.Buffer
+	f := NewFormatter(&buf, "table")
+	if err := f.PrintProfiles([]DevProfile{p}); err != nil {
+		t.Fatalf("PrintProfiles: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"c1", "abcdef", "abcdef123456"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output should contain %q (short-SHA rendering), got:\n%s", want, out)
+		}
+	}
+	// 16-char SHA must be truncated to 12, so the trailing "7890" disappears.
+	if strings.Contains(out, "abcdef1234567890") {
+		t.Errorf("16-char SHA should have been truncated to 12, got:\n%s", out)
+	}
+}
+
 func TestPrintProfilesSpecializationDisplayPrecision(t *testing.T) {
 	// The Specialization display must show enough decimals that the
 	// rendered number is self-consistent with the band label. At %.2f a

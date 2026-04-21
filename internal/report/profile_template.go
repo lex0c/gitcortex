@@ -197,7 +197,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 <tr><th>SHA</th><th>Date</th><th>Lines</th><th>Files</th><th>Message</th></tr>
 {{range .Profile.TopCommits}}
 <tr>
-  <td class="mono">{{slice .SHA 0 12}}</td>
+  <td class="mono">{{printf "%.12s" .SHA}}</td>
   <td class="mono" style="font-size:11px;">{{.Date}}</td>
   <td>{{thousands .LinesChanged}}</td>
   <td>{{thousands .FilesChanged}}</td>
