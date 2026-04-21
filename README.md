@@ -296,6 +296,7 @@ Each profile includes:
 - **Collaboration**: top devs sharing the same files (ranked by `shared_lines` = Σ min(linesA, linesB))
 - **Weekend %**: off-hours work ratio
 - **Top files**: most impacted files by churn
+- **Top commits**: the dev's largest individual commits by lines changed (additions + deletions); surfaces vendored drops and bulk rewrites that can skew the totals
 
 ### Coupling analysis
 

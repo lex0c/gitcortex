@@ -520,6 +520,29 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				}
 			}
 
+			if len(p.TopCommits) > 0 {
+				fmt.Fprintln(f.w)
+				fmt.Fprintln(f.w, "  Top commits:")
+				for _, tc := range p.TopCommits {
+					// Defensive slice: LoadJSONL does not validate SHA
+					// length, so hand-built fixtures (e.g. "c1") or a
+					// future ingest path that emits abbreviated SHAs
+					// would panic on a fixed tc.SHA[:12]. The other SHA
+					// slice sites in this file (TopCommits / LatestCommits)
+					// carry the same latent risk and are left as-is so
+					// this change stays scoped to the new Top-commits block.
+					sha := tc.SHA
+					if len(sha) > 12 {
+						sha = sha[:12]
+					}
+					fmt.Fprintf(f.w, "    %s  %s  %6d lines  %3d files  %s\n",
+						sha, tc.Date, tc.LinesChanged, tc.FilesChanged, tc.Message)
+				}
+				if p.TopCommitsHidden > 0 {
+					fmt.Fprintf(f.w, "    ... (+%d more commits not shown)\n", p.TopCommitsHidden)
+				}
+			}
+
 			if len(p.MonthlyActivity) > 0 {
 				fmt.Fprintln(f.w, "  Activity:")
 				maxCommits := 0

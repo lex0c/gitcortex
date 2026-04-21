@@ -256,6 +256,58 @@ func TestGenerateProfile_SmokeRender(t *testing.T) {
 	}
 }
 
+func TestProfileTmpl_TopCommitsShortSHAAndMessageGate(t *testing.T) {
+	// Two invariants on the per-dev Top Commits block:
+	//   1. SHAs shorter than 12 chars must not crash template execution.
+	//      LoadJSONL does not enforce SHA length, and the previous
+	//      {{slice .SHA 0 12}} raised "index out of range" on any short
+	//      input, aborting profile generation for the whole page.
+	//   2. The Message column header and cells must drop out when no
+	//      commit carries a message — mirrors the dataset-level Top
+	//      Commits convention so `extract --include-commit-messages` is
+	//      a strict opt-in, not a silent empty-column penalty.
+	data := ProfileReportData{
+		GeneratedAt: "2024-01-01 00:00",
+		RepoName:    "t",
+		Profile: stats.DevProfile{
+			Name: "N", Email: "n@x",
+			Commits: 1, ActiveDays: 1,
+			FirstDate: "2024-01-01", LastDate: "2024-01-01",
+			TopCommits: []stats.DevCommit{
+				{SHA: "c1", Date: "2024-01-01", LinesChanged: 10, FilesChanged: 1},
+				{SHA: "abcdef1234567890", Date: "2024-01-02", LinesChanged: 20, FilesChanged: 2},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := profileTmpl.Execute(&buf, data); err != nil {
+		t.Fatalf("profileTmpl.Execute: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, ">c1<") {
+		t.Errorf("short 2-char SHA should render intact, got:\n%s", out)
+	}
+	if !strings.Contains(out, ">abcdef123456<") {
+		t.Errorf("16-char SHA should truncate to 12, got:\n%s", out)
+	}
+	if strings.Contains(out, "abcdef1234567890") {
+		t.Errorf("16-char SHA leaked past the 12-char cap")
+	}
+
+	// Message column must be absent when all TopCommits have empty messages.
+	topBlock := out
+	if idx := strings.Index(out, "<h2>Top Commits"); idx >= 0 {
+		topBlock = out[idx:]
+	}
+	if end := strings.Index(topBlock, "</table>"); end >= 0 {
+		topBlock = topBlock[:end]
+	}
+	if strings.Contains(topBlock, "<th>Message</th>") {
+		t.Errorf("Message column should not render when no commit has a message, got:\n%s", topBlock)
+	}
+}
+
 func TestGenerateProfile_UnknownEmail(t *testing.T) {
 	ds := loadFixture(t)
 	var buf bytes.Buffer

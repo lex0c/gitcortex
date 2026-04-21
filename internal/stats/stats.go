@@ -1328,6 +1328,14 @@ type DevProfile struct {
 	// whole footprint or just a sample. Zero when the dev's touched
 	// file count fits in 10.
 	TopFilesHidden int
+	// TopCommits is the dev's largest commits by LinesChanged (add+del),
+	// capped at 10. Mirrors the dataset-level TopCommits metric so a
+	// reader can see which individual commits drive this dev's churn
+	// footprint — a handful of huge vendored-drop commits reads very
+	// differently from a steady stream of medium ones, even when the
+	// totals match. TopCommitsHidden follows the TopFilesHidden pattern.
+	TopCommits       []DevCommit
+	TopCommitsHidden int
 	Scope          []DirScope
 	// ScopeHidden / ExtensionsHidden count the buckets dropped by the
 	// top-5 truncation so CLI and HTML can surface "+N more" — without
@@ -1367,6 +1375,22 @@ type DevFileContrib struct {
 	Path    string
 	Commits int
 	Churn   int64
+}
+
+// DevCommit is a single commit attributed to the dev, carrying the
+// fields needed to render the per-dev "top commits" list. Mirrors the
+// shape of BigCommit (the dataset-level TopCommits type) minus the
+// AuthorName/AuthorEmail fields — those are redundant in a per-dev view
+// where every entry belongs to the same author. Message is truncated
+// at 80 chars (same as TopCommits) to keep the CLI/HTML table narrow.
+type DevCommit struct {
+	SHA          string
+	Date         string
+	Message      string
+	Additions    int64
+	Deletions    int64
+	LinesChanged int64
+	FilesChanged int
 }
 
 // DevExtContrib is a dev's footprint in a single extension bucket.
@@ -1525,15 +1549,43 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 	// Per-dev work grid + monthly activity
 	devGrid := make(map[string]*[7][24]int)
 	devMonthly := make(map[string]map[string]*ActivityBucket)
+	// Per-dev commit list for TopCommits ranking. Collected in the same
+	// ds.commits pass as devGrid/devMonthly so we don't iterate the full
+	// commit map twice; actual sort + top-10 truncation happens in the
+	// per-dev assembly loop below.
+	devCommits := make(map[string][]DevCommit)
 	dayIdx := [7]int{6, 0, 1, 2, 3, 4, 5} // Sunday=6, Monday=0, ...
 
-	for _, cm := range ds.commits {
+	for sha, cm := range ds.commits {
 		if !inTarget(cm.email) {
 			continue
 		}
 		if cm.date.IsZero() {
+			// Note: dataset-level TopCommits() renders zero-date commits
+			// as "0001-01-01"; we drop them here because grid/monthly below
+			// share this guard and malformed-date commits are rare enough
+			// in practice (JSONL extract always emits author_date) that
+			// the divergence is not worth branching the loop for.
 			continue
 		}
+
+		// Message is stored un-truncated on purpose: the 80-char
+		// truncation is deferred to the per-dev assembly loop below,
+		// which runs after sort + top-10 cap. A dev with thousands of
+		// commits would otherwise pay N small string allocations here
+		// just to throw away all but 10. Dataset-level TopCommits()
+		// truncates inline because it builds BigCommits in one pass;
+		// the per-dev path splits collection from projection so we can
+		// avoid that cost.
+		devCommits[cm.email] = append(devCommits[cm.email], DevCommit{
+			SHA:          sha,
+			Date:         cm.date.UTC().Format("2006-01-02"),
+			Message:      cm.message,
+			Additions:    cm.add,
+			Deletions:    cm.del,
+			LinesChanged: cm.add + cm.del,
+			FilesChanged: cm.files,
+		})
 
 		if devGrid[cm.email] == nil {
 			devGrid[cm.email] = &[7][24]int{}
@@ -1582,6 +1634,33 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			if len(topFiles) > 10 {
 				topFilesHidden = len(topFiles) - 10
 				topFiles = topFiles[:10]
+			}
+		}
+
+		// Top commits: rank this dev's commits by lines changed, mirroring
+		// the dataset-level TopCommits semantics. Deterministic tiebreak on
+		// SHA asc so the displayed top-10 is stable across runs when a dev
+		// has several same-sized commits (e.g. a series of formatting
+		// passes each touching the same LOC count). Message truncation is
+		// done here, post-cap, so we pay the string-copy cost for at most
+		// 10 entries per dev instead of the full commit count.
+		topCommits := devCommits[email]
+		topCommitsHidden := 0
+		if len(topCommits) > 0 {
+			sort.Slice(topCommits, func(i, j int) bool {
+				if topCommits[i].LinesChanged != topCommits[j].LinesChanged {
+					return topCommits[i].LinesChanged > topCommits[j].LinesChanged
+				}
+				return topCommits[i].SHA < topCommits[j].SHA
+			})
+			if len(topCommits) > 10 {
+				topCommitsHidden = len(topCommits) - 10
+				topCommits = topCommits[:10]
+			}
+			for i := range topCommits {
+				if len(topCommits[i].Message) > 80 {
+					topCommits[i].Message = topCommits[i].Message[:77] + "..."
+				}
 			}
 		}
 
@@ -1805,6 +1884,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			LinesChanged: cs.Additions + cs.Deletions, FilesTouched: cs.FilesTouched,
 			ActiveDays: cs.ActiveDays, FirstDate: cs.FirstDate, LastDate: cs.LastDate,
 			TopFiles: topFiles, TopFilesHidden: topFilesHidden,
+			TopCommits: topCommits, TopCommitsHidden: topCommitsHidden,
 			Scope: scope, ScopeHidden: scopeHidden,
 			Extensions: extensions, ExtensionsHidden: extensionsHidden,
 			Specialization: specialization,
