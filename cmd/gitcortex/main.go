@@ -913,10 +913,22 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 	maxCommits := 0
 
 	for _, m := range result.Manifest.Repos {
+		// Collapse "skipped" (worker picked the job up and saw
+		// ctx.Err before running extract) into "pending" for the
+		// index. The summary strip already buckets them together
+		// under PendingRepos; without normalizing here too, the
+		// per-row render would emit class="repo skipped" /
+		// status-skipped — CSS selectors the template doesn't
+		// define, so skipped rows lost the amber border and pill
+		// that make cancellation fallout easy to spot at a glance.
+		status := m.Status
+		if status == "skipped" {
+			status = "pending"
+		}
 		entry := reportpkg.ScanIndexEntry{
 			Slug:   m.Slug,
 			Path:   m.Path,
-			Status: m.Status,
+			Status: status,
 			Error:  m.Error,
 		}
 		if m.Status != "ok" {

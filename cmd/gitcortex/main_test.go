@@ -409,6 +409,59 @@ func manyCommitsJSONL(n int) string {
 	return sb.String()
 }
 
+// Regression: scan emits Status="skipped" for repos the worker
+// picked up but abandoned when ctx.Err fired (see scan.runOne).
+// The index template only styles .repo.pending / .status-pending;
+// a raw "skipped" status would produce class="repo skipped" with
+// no CSS match, hiding the amber border and pill that make
+// cancellation fallout triagable. The renderer must fold skipped
+// into pending so the row visuals stay consistent with the
+// summary-strip count (which already buckets them together).
+func TestRenderScanReportDir_NormalizesSkippedToPending(t *testing.T) {
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: t.TempDir(),
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				{Slug: "a", Path: "/x/a", Status: "skipped", Error: "context canceled"},
+			},
+		},
+	}
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexB, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexB)
+
+	// Summary counts skipped under pending (already the case, but
+	// anchor it so a future refactor doesn't drift).
+	if !strings.Contains(index, "1 pending") {
+		t.Errorf("skipped entry should count as pending in summary; got index excerpt: %.400s", index)
+	}
+	// Row CSS must use the pending selector — a raw "skipped" class
+	// has no style defined so the row would lose its warning affordance.
+	if !strings.Contains(index, `class="repo pending"`) {
+		t.Error("skipped entry's card must render with `class=\"repo pending\"`")
+	}
+	if strings.Contains(index, `class="repo skipped"`) {
+		t.Error("raw `skipped` leaked into CSS class — template selectors don't match it")
+	}
+	// Pill class must also normalize.
+	if !strings.Contains(index, `status-pending`) {
+		t.Error("skipped entry's status pill should read as `status-pending`")
+	}
+	if strings.Contains(index, `status-skipped`) {
+		t.Error("raw `skipped` leaked into pill class")
+	}
+}
+
 // Render with zero successful repos must still emit an index
 // without tripping on the MaxCommits==0 guard in the bar-width
 // template expression.
