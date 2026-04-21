@@ -372,7 +372,7 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 {{end}}
 
 {{if .Profiles}}
-<h2>Developer Profiles</h2>
+<h2>Developer Profiles{{if lt (len .Profiles) .Summary.TotalDevs}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .Profiles)}} of {{thousands .Summary.TotalDevs}}</span>{{end}}</h2>
 <p class="hint">Per-developer view. Use to spot silos (narrow scope + few collaborators), knowledge concentration (high pace on few directories), and cultural patterns (weekend or refactor-heavy work). · {{docRef "profile"}}</p>
 {{range .Profiles}}
 <div style="background:#fff; border:1px solid #d0d7de; border-radius:6px; padding:16px; margin-bottom:16px;">
