@@ -9,6 +9,19 @@ import (
 	"text/tabwriter"
 )
 
+// shortSHA returns the first 12 bytes of a commit SHA, clamping safely
+// when the input is shorter. LoadJSONL does not validate SHA length,
+// so hand-built fixtures (e.g. "c1") and any future ingest path that
+// emits abbreviated SHAs would otherwise panic on a fixed `sha[:12]`.
+// Twelve mirrors the display convention used across CLI and HTML
+// surfaces in this package.
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
 // specLabel turns a DevProfile.Specialization (Herfindahl) value into a
 // short human-readable classification. Thresholds live in stats.go as
 // named constants so templates can reuse the same values.
@@ -399,7 +412,7 @@ func (f *Formatter) PrintTopCommits(commits []BigCommit) error {
 		rows := make([][]string, len(commits))
 		for i, c := range commits {
 			rows[i] = []string{
-				c.SHA[:12], c.AuthorName, c.AuthorEmail, c.Date,
+				shortSHA(c.SHA), c.AuthorName, c.AuthorEmail, c.Date,
 				fmt.Sprintf("%d", c.Additions), fmt.Sprintf("%d", c.Deletions),
 				fmt.Sprintf("%d", c.LinesChanged), fmt.Sprintf("%d", c.FilesChanged),
 				c.Message,
@@ -420,14 +433,14 @@ func (f *Formatter) PrintTopCommits(commits []BigCommit) error {
 			fmt.Fprintf(tw, "---\t------\t----\t-----\t-----\t-------\n")
 			for _, c := range commits {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
-					c.SHA[:12], c.AuthorName, c.Date, c.LinesChanged, c.FilesChanged, c.Message)
+					shortSHA(c.SHA), c.AuthorName, c.Date, c.LinesChanged, c.FilesChanged, c.Message)
 			}
 		} else {
 			fmt.Fprintf(tw, "SHA\tAUTHOR\tDATE\tADDITIONS\tDELETIONS\tLINES\tFILES\n")
 			fmt.Fprintf(tw, "---\t------\t----\t---------\t---------\t-----\t-----\n")
 			for _, c := range commits {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%d\t%d\n",
-					c.SHA[:12], c.AuthorName, c.Date, c.Additions, c.Deletions, c.LinesChanged, c.FilesChanged)
+					shortSHA(c.SHA), c.AuthorName, c.Date, c.Additions, c.Deletions, c.LinesChanged, c.FilesChanged)
 			}
 		}
 		return tw.Flush()
@@ -524,19 +537,8 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Fprintln(f.w)
 				fmt.Fprintln(f.w, "  Top commits:")
 				for _, tc := range p.TopCommits {
-					// Defensive slice: LoadJSONL does not validate SHA
-					// length, so hand-built fixtures (e.g. "c1") or a
-					// future ingest path that emits abbreviated SHAs
-					// would panic on a fixed tc.SHA[:12]. The other SHA
-					// slice sites in this file (TopCommits / LatestCommits)
-					// carry the same latent risk and are left as-is so
-					// this change stays scoped to the new Top-commits block.
-					sha := tc.SHA
-					if len(sha) > 12 {
-						sha = sha[:12]
-					}
 					fmt.Fprintf(f.w, "    %s  %s  %6d lines  %3d files  %s\n",
-						sha, tc.Date, tc.LinesChanged, tc.FilesChanged, tc.Message)
+						shortSHA(tc.SHA), tc.Date, tc.LinesChanged, tc.FilesChanged, tc.Message)
 				}
 				if p.TopCommitsHidden > 0 {
 					fmt.Fprintf(f.w, "    ... (+%d more commits not shown)\n", p.TopCommitsHidden)
