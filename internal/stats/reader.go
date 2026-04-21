@@ -22,6 +22,11 @@ type commitEntry struct {
 	del     int64
 	files   int
 	message string
+	// repo carries the LoadMultiJSONL pathPrefix (without the trailing
+	// colon) so RepoBreakdown can attribute commits back to their source
+	// repository on multi-repo scans. Empty for single-file loads, which
+	// keeps single-repo callers' behavior unchanged.
+	repo string
 }
 
 type fileEntry struct {
@@ -81,6 +86,17 @@ type Dataset struct {
 	contributors map[string]*ContributorStat
 	files        map[string]*fileEntry
 	workGrid     [7][24]int
+
+	// commitsByRepo preserves commit records per repository so the
+	// per-repo breakdown stays correct when two repos share a SHA
+	// (forks, mirrors, cherry-picks between sibling projects). The
+	// commits map above is keyed by SHA and drops the losing side of
+	// a collision — acceptable for file-side lookups where a single
+	// record per SHA is enough — but RepoBreakdown would then
+	// silently under-count the overwritten repo's commits and churn.
+	// Populated at ingest in lockstep with commits; a single-repo
+	// load (no pathPrefix) keeps all entries under the "(repo)" key.
+	commitsByRepo map[string][]*commitEntry
 
 	// Coupling (pre-aggregated during load)
 	couplingPairs       map[filePair]int
@@ -158,6 +174,7 @@ func newDataset() *Dataset {
 		contribFiles:        make(map[string]map[string]struct{}),
 		contribFirst:        make(map[string]time.Time),
 		contribLast:         make(map[string]time.Time),
+		commitsByRepo:       make(map[string][]*commitEntry),
 	}
 }
 
@@ -235,14 +252,25 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			ds.TotalDeletions += c.Deletions
 			ds.TotalFilesChanged += int64(c.FilesChanged)
 
-			ds.commits[c.SHA] = &commitEntry{
+			entry := &commitEntry{
 				email:   c.AuthorEmail,
 				date:    t,
 				add:     c.Additions,
 				del:     c.Deletions,
 				files:   c.FilesChanged,
 				message: c.Message,
+				repo:    strings.TrimSuffix(pathPrefix, ":"),
 			}
+			ds.commits[c.SHA] = entry
+			// Record separately per-repo so RepoBreakdown survives
+			// SHA collisions across repositories (forks/mirrors/
+			// cherry-picks). Key defaults to "(repo)" in single-repo
+			// loads so the fallback row in RepoBreakdown still works.
+			repoKey := entry.repo
+			if repoKey == "" {
+				repoKey = "(repo)"
+			}
+			ds.commitsByRepo[repoKey] = append(ds.commitsByRepo[repoKey], entry)
 
 			// Contributors
 			cs, ok := ds.contributors[c.AuthorEmail]

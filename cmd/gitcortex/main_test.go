@@ -1,9 +1,564 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lex0c/gitcortex/internal/scan"
+	"github.com/lex0c/gitcortex/internal/stats"
 )
+
+// scanCmd must validate --since BEFORE running the discovery walk
+// and extract pool. Without the early check, an obvious typo like
+// `--since 1yy` only surfaces after scan.Run has already walked
+// every root and extracted every repo found — which can take
+// minutes-to-hours on a large workspace and waste the work.
+//
+// Use an empty TempDir so scan.Run would fail fast with "no git
+// repositories found" if we reached it — that error does not mention
+// "since", so an error containing "since" proves the early
+// validation fired first.
+func TestScanCmd_ValidatesSinceBeforeScanning(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--since", "bogus",
+	})
+	// Swallow any stderr output cobra might emit so we don't pollute
+	// go-test logs on success.
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --since bogus, got nil")
+	}
+	if !strings.Contains(err.Error(), "since") {
+		t.Errorf("expected error to mention --since (proving early validation), got %q", err)
+	}
+	// Reaching scan.Run on an empty TempDir would produce the
+	// discovery error; asserting its absence confirms the walk was
+	// not started.
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("scan.Run was reached before --since was validated — discovery ran on an invalid-flag input: %q", err)
+	}
+}
+
+// scanCmd must exit non-zero when every discovered repo's extract
+// failed, regardless of whether --report was requested. scan.Run
+// intentionally treats per-repo failures as non-fatal (a transient
+// error on one repo shouldn't tank the whole batch), but if ZERO
+// repos succeed there's nothing useful on disk and CI should know.
+// Previously the no-report branch returned success unconditionally;
+// automation saw exit 0 and "Scan complete: 0 JSONL file(s)" and
+// continued with empty artifacts.
+//
+// Test uses a fake repo (a bare `.git` dir with no history) so
+// discovery picks it up but extract fails.
+func TestScanCmd_ExitsNonZeroWhenAllExtractsFail(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "fake-repo", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", root,
+		"--output", t.TempDir(),
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit when all extracts fail; CI would silently treat this as success")
+	}
+	if !strings.Contains(err.Error(), "all extracts failed") {
+		t.Errorf("error should explain every repo failed; got %q", err)
+	}
+}
+
+// `scan --ignore-file /nonexistent` must fail at the CLI layer —
+// silently falling back to zero rules would widen discovery scope
+// without telling the user (e.g. node_modules and vendor/ dirs the
+// user thought they excluded suddenly appear in the report). The
+// default-path lookup in scan.loadMatcher still tolerates a missing
+// `.gitcortex-ignore` at the first root; only the explicit flag is
+// strict.
+func TestScanCmd_RejectsMissingIgnoreFile(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--ignore-file", filepath.Join(t.TempDir(), "typo.ignore"),
+	})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing --ignore-file; a typo must not silently widen scope")
+	}
+	if !strings.Contains(err.Error(), "typo.ignore") {
+		t.Errorf("error should identify the missing file; got %q", err)
+	}
+	// Must fail BEFORE discovery starts — scan on an empty TempDir
+	// would otherwise produce "no git repositories found".
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("ignore-file check ran after discovery; got %q", err)
+	}
+}
+
+// --email without --report would silently reach os.Create("") after
+// the full scan/extract phase finished, surfacing a cryptic "open :
+// no such file or directory" error minutes into a wasted run. The
+// flag pair is mandatory in both directions: reject up front
+// alongside the other flag-combination checks.
+func TestScanCmd_RejectsEmailWithoutReport(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--email", "me@x.com",
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --email without --report; silent fall-through would waste a full scan before failing")
+	}
+	if !strings.Contains(err.Error(), "--report") {
+		t.Errorf("error should name --report as the missing flag; got %q", err)
+	}
+	// Must fail BEFORE discovery starts; empty TempDir would
+	// otherwise produce "no git repositories found".
+	if strings.Contains(err.Error(), "no git repositories found") {
+		t.Errorf("flag validation ran after scan; got %q", err)
+	}
+}
+
+// --report without --email is ambiguous under the "no team-wide
+// consolidation" design: the only meaningful single-HTML output
+// across multiple repos is a developer profile. The error must
+// point the user at the right flag for each intent.
+func TestScanCmd_RejectsReportWithoutEmail(t *testing.T) {
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", t.TempDir(),
+		"--output", t.TempDir(),
+		"--report", filepath.Join(t.TempDir(), "out.html"),
+	})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for --report without --email")
+	}
+	if !strings.Contains(err.Error(), "--report-dir") || !strings.Contains(err.Error(), "--email") {
+		t.Errorf("error should point at both --report-dir and --email as remediation; got %q", err)
+	}
+}
+
+// `scan --report-dir <dir>` writes index.html plus one HTML per
+// successful repo, with each per-repo HTML rendered from a
+// single-input Dataset (no cross-repo path prefix). End-to-end
+// check against two real repos built with git.
+func TestScanCmd_ReportDirGeneratesPerRepoHTMLAndIndex(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	makeRepoWithCommit(t, filepath.Join(root, "alpha"), "a.go", "package a\n")
+	makeRepoWithCommit(t, filepath.Join(root, "beta"), "b.py", "print('b')\n")
+
+	scanOut := t.TempDir()
+	reportDir := t.TempDir()
+
+	cmd := scanCmd()
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"--root", root,
+		"--output", scanOut,
+		"--report-dir", reportDir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("scan --report-dir: %v", err)
+	}
+
+	// Every successful repo gets a standalone HTML named <slug>.html.
+	for _, slug := range []string{"alpha", "beta"} {
+		path := filepath.Join(reportDir, slug+".html")
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("per-repo report missing: %v", err)
+		}
+		if !strings.Contains(string(b), "<!DOCTYPE html>") {
+			t.Errorf("%s should be a full HTML document", path)
+		}
+		// Paths inside the per-repo report must NOT carry a
+		// `<repo>:` prefix — each tab is standalone, so LoadJSONL
+		// (not LoadMultiJSONL) was used and file paths appear raw.
+		if strings.Contains(string(b), slug+":") {
+			t.Errorf("per-repo report %s contains a `%s:` path prefix; Dataset was loaded as multi-repo", path, slug)
+		}
+	}
+
+	// index.html links to each per-repo report.
+	indexBytes, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatalf("index.html missing: %v", err)
+	}
+	index := string(indexBytes)
+	if !strings.Contains(index, `href="alpha.html"`) || !strings.Contains(index, `href="beta.html"`) {
+		t.Errorf("index.html should link to both per-repo reports; got body excerpt: %.300s", index)
+	}
+	// The summary card strip is now the top-of-page anchor (no H1).
+	// Asserting on the "Repositories" label keeps the test meaningful
+	// if the card layout changes.
+	if !strings.Contains(index, "Repositories") {
+		t.Errorf("index.html missing summary strip")
+	}
+}
+
+// renderScanReportDir must render the index for a manifest that
+// mixes ok / failed / pending statuses. Failed entries show their
+// error message, pending entries render with the pending pill, and
+// neither inflates the "failed" count in the summary card.
+func TestRenderScanReportDir_MixedStatuses(t *testing.T) {
+	dir := t.TempDir()
+	okJSONL := filepath.Join(dir, "good.jsonl")
+	jsonlContent := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-01T00:00:00Z","additions":10,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"a.go","additions":10,"deletions":0}
+`
+	if err := os.WriteFile(okJSONL, []byte(jsonlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: dir,
+		Manifest: scan.Manifest{
+			Roots: []string{"/fake/root"},
+			Repos: []scan.ManifestRepo{
+				{Slug: "good", Path: "/fake/root/good", Status: "ok", JSONL: okJSONL},
+				{Slug: "broken", Path: "/fake/root/broken", Status: "failed", Error: "simulated extract crash"},
+				{Slug: "skipped", Path: "/fake/root/skipped", Status: "pending"},
+			},
+		},
+	}
+
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatalf("renderScanReportDir returned error despite inline-failure policy: %v", err)
+	}
+
+	// OK entry's report file exists; failed/pending do not.
+	if _, err := os.Stat(filepath.Join(reportDir, "good.html")); err != nil {
+		t.Errorf("good.html missing: %v", err)
+	}
+	for _, unwanted := range []string{"broken.html", "skipped.html"} {
+		if _, err := os.Stat(filepath.Join(reportDir, unwanted)); err == nil {
+			t.Errorf("%s should NOT be written — status was not ok", unwanted)
+		}
+	}
+
+	indexB, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatalf("index.html: %v", err)
+	}
+	index := string(indexB)
+
+	// Summary card splits failed and pending correctly: "(1 failed)"
+	// AND "(1 pending)" appear, not "(2 failed)".
+	if strings.Contains(index, "(2 failed)") {
+		t.Error("summary miscounted pending as failed — `(2 failed)` appeared instead of separate buckets")
+	}
+	if !strings.Contains(index, "1 failed") {
+		t.Errorf("summary should show `1 failed`; index excerpt: %.600s", index)
+	}
+	if !strings.Contains(index, "1 pending") {
+		t.Errorf("summary should show `1 pending`; index excerpt: %.600s", index)
+	}
+
+	// Failed entry's error bubbles up to the card.
+	if !strings.Contains(index, "simulated extract crash") {
+		t.Error("failed entry's error message missing from index")
+	}
+
+	// Status pills render only for non-ok entries (ok is implicit
+	// given the link itself and the presence of metric cells). Assert
+	// the two non-ok pills exist and the ok one does not.
+	for _, want := range []string{"status-failed", "status-pending"} {
+		if !strings.Contains(index, want) {
+			t.Errorf("index missing %q pill — status branch lost its style", want)
+		}
+	}
+	if strings.Contains(index, `class="status-pill status-ok"`) {
+		t.Error("ok entries should not render a status pill — redundant with the link and metric cells")
+	}
+
+	// Only OK entries carry an href; failed/pending must not link to
+	// a file that doesn't exist.
+	if strings.Contains(index, `href="broken.html"`) || strings.Contains(index, `href="skipped.html"`) {
+		t.Error("index links to a non-existent per-repo HTML for a non-ok entry")
+	}
+}
+
+// Index order is a triage view: failed first (actionable), then
+// pending (skipped work, less urgent), then ok ranked by commit
+// count desc (heaviest healthy repos first). Slug asc breaks ties
+// everywhere.
+func TestRenderScanReportDir_IndexOrderFailedFirstThenByCommits(t *testing.T) {
+	dir := t.TempDir()
+	// One JSONL with 50 commits, one with 5 — lets us see the
+	// ok-bucket reorder from the "small -> big" alphabetical slug
+	// order to "big -> small" commit-count order.
+	bigJSONL := filepath.Join(dir, "big.jsonl")
+	smallJSONL := filepath.Join(dir, "small.jsonl")
+	if err := os.WriteFile(bigJSONL, []byte(manyCommitsJSONL(50)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(smallJSONL, []byte(manyCommitsJSONL(5)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: dir,
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				// Slug asc would give: big, broken, pending, small.
+				// Triage order expected: broken (failed), pending, big (50c), small (5c).
+				{Slug: "big", Path: "/x/big", Status: "ok", JSONL: bigJSONL},
+				{Slug: "broken", Path: "/x/broken", Status: "failed", Error: "explode"},
+				{Slug: "pending", Path: "/x/pending", Status: "pending"},
+				{Slug: "small", Path: "/x/small", Status: "ok", JSONL: smallJSONL},
+			},
+		},
+	}
+
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+
+	// Each card renders `<div class="path">{{.Path}}</div>` with the
+	// unique filesystem path. Finding each path's offset gives the
+	// render order; ok entries also include an anchor but failed /
+	// pending do not, so the `.path` cell is the stable locator.
+	idxOf := func(p string) int { return strings.Index(out, p) }
+	brokenIdx := idxOf("/x/broken")
+	pendingIdx := idxOf("/x/pending")
+	bigIdx := idxOf("/x/big")
+	smallIdx := idxOf("/x/small")
+	for name, i := range map[string]int{"broken": brokenIdx, "pending": pendingIdx, "big": bigIdx, "small": smallIdx} {
+		if i < 0 {
+			t.Fatalf("%q path not found in index output", name)
+		}
+	}
+	if !(brokenIdx < pendingIdx && pendingIdx < bigIdx && bigIdx < smallIdx) {
+		t.Errorf("triage order failed: broken=%d pending=%d big=%d small=%d — want broken < pending < big < small",
+			brokenIdx, pendingIdx, bigIdx, smallIdx)
+	}
+}
+
+// manyCommitsJSONL returns n valid commit+file rows, each with a
+// distinct SHA so LoadJSONL counts them as N commits.
+func manyCommitsJSONL(n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		sha := fmt.Sprintf("%040x", i+1)
+		fmt.Fprintf(&sb,
+			`{"type":"commit","sha":"%s","author_email":"me@x.com","author_name":"Me","author_date":"2024-01-%02dT00:00:00Z","additions":10,"deletions":0,"files_changed":1}`+"\n",
+			sha, (i%28)+1)
+		fmt.Fprintf(&sb,
+			`{"type":"commit_file","commit":"%s","path_current":"f%d.go","additions":10,"deletions":0}`+"\n",
+			sha, i)
+	}
+	return sb.String()
+}
+
+// Regression: scan emits Status="skipped" for repos the worker
+// picked up but abandoned when ctx.Err fired (see scan.runOne).
+// The index template only styles .repo.pending / .status-pending;
+// a raw "skipped" status would produce class="repo skipped" with
+// no CSS match, hiding the amber border and pill that make
+// cancellation fallout triagable. The renderer must fold skipped
+// into pending so the row visuals stay consistent with the
+// summary-strip count (which already buckets them together).
+func TestRenderScanReportDir_NormalizesSkippedToPending(t *testing.T) {
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: t.TempDir(),
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				{Slug: "a", Path: "/x/a", Status: "skipped", Error: "context canceled"},
+			},
+		},
+	}
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexB, err := os.ReadFile(filepath.Join(reportDir, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexB)
+
+	// Summary counts skipped under pending (already the case, but
+	// anchor it so a future refactor doesn't drift).
+	if !strings.Contains(index, "1 pending") {
+		t.Errorf("skipped entry should count as pending in summary; got index excerpt: %.400s", index)
+	}
+	// Row CSS must use the pending selector — a raw "skipped" class
+	// has no style defined so the row would lose its warning affordance.
+	if !strings.Contains(index, `class="repo pending"`) {
+		t.Error("skipped entry's card must render with `class=\"repo pending\"`")
+	}
+	if strings.Contains(index, `class="repo skipped"`) {
+		t.Error("raw `skipped` leaked into CSS class — template selectors don't match it")
+	}
+	// Pill class must also normalize.
+	if !strings.Contains(index, `status-pending`) {
+		t.Error("skipped entry's status pill should read as `status-pending`")
+	}
+	if strings.Contains(index, `status-skipped`) {
+		t.Error("raw `skipped` leaked into pill class")
+	}
+}
+
+// Render with zero successful repos must still emit an index
+// without tripping on the MaxCommits==0 guard in the bar-width
+// template expression.
+func TestRenderScanReportDir_AllFailedStillEmitsIndex(t *testing.T) {
+	reportDir := t.TempDir()
+	result := &scan.Result{
+		OutputDir: t.TempDir(),
+		Manifest: scan.Manifest{
+			Repos: []scan.ManifestRepo{
+				{Slug: "a", Status: "failed", Error: "boom"},
+				{Slug: "b", Status: "failed", Error: "also boom"},
+			},
+		},
+	}
+	err := renderScanReportDir(result, reportDir,
+		stats.LoadOptions{HalfLifeDays: 90, CoupMaxFiles: 50},
+		stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1},
+		10)
+	if err != nil {
+		t.Fatalf("render should not fail on all-failed manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(reportDir, "index.html")); err != nil {
+		t.Fatalf("index.html must be emitted even when every repo failed: %v", err)
+	}
+}
+
+// makeRepoWithCommit initializes a git repo with one file and one
+// commit using a deterministic identity.
+func makeRepoWithCommit(t *testing.T, dir, file, contents string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("add", ".")
+	run("commit", "-q", "-m", "initial")
+}
+
+// The profile report title used to echo roots[0] even when the
+// scan aggregated many roots, so "gitcortex scan --root ~/work
+// --root ~/oss --report me.html --email me@x.com" produced a
+// report titled "· work" that readers interpreted as belonging
+// only to the first root. Ensure the label reflects the actual
+// scope.
+func TestProfileScanLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		roots []string
+		want  string
+	}{
+		{"no roots", nil, "scan"},
+		{"single root uses basename", []string{"/home/me/work"}, "work"},
+		// Two and three-root scans join with " + " so the scope is
+		// visible at a glance rather than being summarised as a number.
+		{"two roots joined", []string{"/home/me/work", "/home/me/personal"}, "work + personal"},
+		{"three roots joined", []string{"/a/one", "/b/two", "/c/three"}, "one + two + three"},
+		// Large scans fall back to a count — joining 50 basenames
+		// would bloat the H1; the exact set lives in the scan log
+		// and manifest.
+		{"many roots use count", []string{"/a/x", "/b/x", "/c/x", "/d/x", "/e/x"}, "5 roots"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := profileScanLabel(c.roots); got != c.want {
+				t.Errorf("profileScanLabel(%v) = %q, want %q", c.roots, got, c.want)
+			}
+		})
+	}
+}
+
+// defaultScanParallel must stay within [2, 16] regardless of host
+// NumCPU. The floor protects single-core CI from serialising every
+// scan; the cap prevents 64-core servers from over-subscribing
+// when git I/O can't actually use that much concurrency.
+func TestDefaultScanParallel(t *testing.T) {
+	got := defaultScanParallel()
+	if got < 2 || got > 16 {
+		t.Errorf("defaultScanParallel() = %d, want between 2 and 16 inclusive", got)
+	}
+}
 
 func TestValidateDate(t *testing.T) {
 	cases := []struct {

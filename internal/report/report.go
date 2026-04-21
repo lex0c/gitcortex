@@ -641,6 +641,13 @@ type ProfileReportData struct {
 	MaxActivityCommits int
 	PatternGrid     [7][24]int
 	MaxPattern      int
+
+	// Repos is the per-repository breakdown filtered to this developer's
+	// commits. Empty on single-repo profile reports — gated in the
+	// template so existing single-repo callers see no change. The headline
+	// use case for `gitcortex scan --email me` lives here: the developer
+	// can see at a glance which repos they spent time in.
+	Repos []stats.RepoStat
 }
 
 func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) error {
@@ -672,6 +679,7 @@ func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) err
 		MaxActivityCommits: maxAct,
 		PatternGrid:        p.WorkGrid,
 		MaxPattern:         maxP,
+		Repos:              stats.RepoBreakdown(ds, email),
 	}
 
 	return profileTmpl.Execute(w, data)

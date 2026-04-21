@@ -401,6 +401,73 @@ gitcortex stats --input auth.jsonl --input payments.jsonl --stat coupling --top 
 
 Paths appear as `auth:src/main.go` and `payments:src/main.go`. Contributors are deduped by email across repos — the same developer contributing to both repos is counted once.
 
+For workspaces containing many repos (an engineer's `~/work`, a platform team's service folder), `gitcortex scan` discovers every `.git` under one or more roots and extracts them in parallel — see below.
+
+### Scan: discover and aggregate every repo under a root
+
+Walk one or more directories, find every git repository (working trees and bare clones both detected), extract them in parallel, and optionally render HTML. Two output modes:
+
+- `--report-dir <dir>` — one standalone HTML per repo plus an `index.html` landing page linking them. Each per-repo report is equivalent to running `gitcortex report` against that repo alone; no metric mixing across unrelated codebases.
+- `--report <file> --email <address>` — a **single** consolidated profile report for one developer across every scanned repo. The only cross-repo aggregation in the feature, because "where did this person spend their time?" is the only question that genuinely benefits from pooling signal across projects.
+
+There is no third mode. Cross-repo consolidation at the team/codebase level inflates hotspots, bus factor, and coupling with noise from unrelated codebases; if that's what you want, inspect `manifest.json` or run `gitcortex report` per JSONL.
+
+```bash
+# Discover and extract every repo under ~/work (JSONLs + manifest, no HTML)
+gitcortex scan --root ~/work --output ./scan-out
+
+# Per-repo HTML reports + index landing page
+gitcortex scan --root ~/work --output ./scan-out --report-dir ./reports
+# opens ./reports/index.html → click through to each repo
+
+# Personal cross-repo profile: only MY commits, consolidated into one HTML
+gitcortex scan --root ~/work --output ./scan-out \
+  --report ./me.html --email me@company.com --since 1y \
+  --include-commit-messages
+
+# Multiple roots, higher parallelism, pre-set ignore patterns
+gitcortex scan --root ~/work --root ~/personal --root ~/oss \
+  --parallel 8 --max-depth 4 \
+  --output ./scan-out --report-dir ./reports
+```
+
+The scan output directory holds:
+
+| file | purpose |
+|---|---|
+| `<slug>.jsonl` | per-repo JSONL, one per discovered repo |
+| `<slug>.state` | resume checkpoint (safe to re-run scan to continue) |
+| `manifest.json` | discovery results, per-repo status (ok/failed/pending), timing |
+
+Each repo's slug is derived from its directory basename; colliding basenames get a short SHA-1 suffix (the suffix lengthens automatically on the rare truncation collision, so `<slug>.state` is stable across runs).
+
+**Filtering discovery with `.gitcortex-ignore`.** Create a gitignore-style file at the scan root:
+
+```
+# skip heavy clones we don't want in the report
+node_modules
+chromium.git
+linux.git
+
+# skip vendored repos except the one we own
+vendor/
+!vendor/in-house-fork
+```
+
+Directory rules, globs, `**/foo`, and `!path` negations all work. Globbed negations like `!vendor*/keep` are honored — discovery descends into any dir where a negation rule could match a descendant. If `--ignore-file` is not set, scan looks for `.gitcortex-ignore` in the first `--root`.
+
+**Consolidated profile report.** When `scan --email me@company.com --report path.html` runs against a multi-repo dataset, the profile report renders a *Per-Repository Breakdown* section: commits, churn, files, active days, and share-of-total — all filtered to that developer's contributions (files count reflects only files the dev touched). This is the one report that legitimately aggregates across repos; team-level views live in `--report-dir` (one HTML per repo, never mixed).
+
+**Flags worth knowing:**
+
+- `--parallel N` — repos extracted concurrently (default 4). Git is I/O-bound, so values past NumCPU give diminishing returns.
+- `--max-depth N` — stop descending past N levels. Useful when a root contains a monorepo with deeply nested internal repos you don't want enumerated.
+- `--extract-ignore <glob>` (repeatable) — forwarded to each per-repo `extract --ignore`, e.g. `--extract-ignore 'package-lock.json' --extract-ignore 'dist/*'`.
+- `--from / --to / --since` — time window applied to the consolidated report (same semantics as `report`).
+- `--churn-half-life`, `--coupling-max-files`, `--coupling-min-changes`, `--network-min-files` — pass tuning to the consolidated report identical to `gitcortex report`.
+
+Partial failures are non-fatal: the manifest records which repos failed, and the report is built from whichever JSONLs completed. `Ctrl+C` aborts both the discovery walk and any in-flight extracts; re-running picks up from each repo's state file.
+
 ### Diff: compare time periods
 
 Compare stats between two time periods, or filter to a single period.
@@ -444,6 +511,8 @@ gitcortex report --input data.jsonl --email alice@company.com --output alice.htm
 
 Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, legacy-hotspot, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
 
+When the input is multi-repo (from `gitcortex scan` or multiple `--input` files) AND `--email` is set, the profile report renders a *Per-Repository Breakdown* with commit/churn/files/active-days per repo, filtered to that developer's contributions. The team-view report intentionally omits this section — per-repo aggregates on a consolidated dataset reduce to raw git-history distribution, which is more usefully inspected via `manifest.json` or `stats --input X.jsonl` per repo.
+
 > The HTML activity heatmap is always monthly (year × 12 months grid). For day/week/year buckets, use `gitcortex stats --stat activity --granularity <unit>`.
 
 ### CI: quality gates for pipelines
@@ -483,9 +552,14 @@ internal/
     parse.go                   Shared types (RawEntry, NumstatEntry)
     discard.go                 Malformed entry tracking
   extract/extract.go           Extraction orchestration, state, JSONL writing
+  scan/
+    scan.go                    Multi-repo orchestration (worker pool over extract)
+    discovery.go               Directory walk, bare-repo detection, slug uniqueness
+    ignore.go                  Gitignore-style matcher with negation support
   stats/
-    reader.go                  Streaming JSONL aggregator (single-pass)
+    reader.go                  Streaming JSONL aggregator (single-pass, multi-JSONL)
     stats.go                   Stat computations (9 stats)
+    repo_breakdown.go          Per-repository aggregate (scan consolidated report)
     format.go                  Table/CSV/JSON output formatting
 ```
 

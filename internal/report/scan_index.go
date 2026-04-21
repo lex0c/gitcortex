@@ -1,0 +1,243 @@
+package report
+
+import (
+	"fmt"
+	"html/template"
+	"io"
+	"time"
+)
+
+// ScanIndexEntry is one repo's row on the scan-index landing page.
+// Successful repos populate the numeric fields; failed / pending
+// repos leave them zero and surface Error instead. ReportHref is the
+// relative URL the index uses to link into each per-repo report —
+// empty when no report exists for that entry.
+type ScanIndexEntry struct {
+	Slug            string
+	Path            string
+	Status          string
+	Error           string
+	Commits         int
+	Devs            int
+	Files           int
+	Churn           int64
+	FirstCommitDate string
+	LastCommitDate  string
+	// LastCommitAgo is LastCommitDate humanized relative to the
+	// index generation time: "today" / "Nd ago" / "Nmo ago" / "Ny ago".
+	// Lets operators spot abandoned repos in a list of 30 without
+	// doing date math in their head.
+	LastCommitAgo string
+	// RecencyBucket classifies LastCommitAgo into "fresh" (≤ 30 days),
+	// "stable" (≤ 1 year), "stale" (> 1 year). Drives the badge color
+	// in the template so the cold repos stand out at a glance.
+	RecencyBucket string
+	ReportHref    string
+}
+
+// HumanizeAgo is the caller entry point for the index: formats
+// `lastDate` (YYYY-MM-DD) as a compact "ago" phrase relative to
+// wall-clock now, and classifies recency into fresh / stable /
+// stale for template coloring. Empty pair on unparsable input so
+// failed/pending rows with no dates render nothing.
+func HumanizeAgo(lastDate string) (label, bucket string) {
+	return humanizeAgoAt(lastDate, time.Now())
+}
+
+// humanizeAgoAt is the testable core — same logic as HumanizeAgo
+// but takes an explicit "now" so tests can pin the reference time
+// and avoid drift.
+//
+// Future-commit policy: dates strictly AFTER today's UTC midnight
+// (e.g. tomorrow's YYYY-MM-DD due to clock skew or a future-dated
+// CI rewrite) yield empty — the index surfaces how STALE each repo
+// is, and labeling "in 3d" as "fresh" would actively mislead. Both
+// sides of the comparison reduce to UTC midnights so "tomorrow"
+// is detected even when the user's wall clock is mid-day; sub-day
+// committer-clock skew inside today's date still falls into
+// `days == 0 → "today"`, documented as the safe fallback at day
+// granularity.
+//
+// The earlier implementation computed `days` as
+// int(now.Sub(t).Hours() / 24), which truncates toward zero for
+// negative durations. A "tomorrow" date 12 hours ahead produced
+// days == 0 instead of -1, slipping past the future-date guard
+// and rendering "today" / fresh. Comparing the parsed date
+// directly against today's UTC midnight removes the truncation
+// gap.
+func humanizeAgoAt(lastDate string, now time.Time) (label, bucket string) {
+	t, err := time.Parse("2006-01-02", lastDate)
+	if err != nil {
+		return "", ""
+	}
+	today := now.UTC().Truncate(24 * time.Hour)
+	if t.After(today) {
+		return "", ""
+	}
+	days := int(today.Sub(t).Hours() / 24)
+	switch {
+	case days < 0:
+		// Defensive: t.After(today) above already covered this, but
+		// keep the branch so a later refactor that moves the guard
+		// can't silently produce a negative-days label.
+		return "", ""
+	case days == 0:
+		label = "today"
+	case days < 30:
+		label = fmt.Sprintf("%dd ago", days)
+	case days < 365:
+		// Cap the month reading at 11 — otherwise `days/30` emits
+		// "12mo ago" at days 360-364, which reads as older than
+		// "1y ago" even though it's actually in the still-stable
+		// (≤365d) band. Clamping keeps the label progression
+		// monotonic with the bucket color.
+		months := days / 30
+		if months > 11 {
+			months = 11
+		}
+		label = fmt.Sprintf("%dmo ago", months)
+	default:
+		label = fmt.Sprintf("%dy ago", days/365)
+	}
+	switch {
+	case days <= 30:
+		bucket = "fresh"
+	case days <= 365:
+		bucket = "stable"
+	default:
+		bucket = "stale"
+	}
+	return label, bucket
+}
+
+// ScanIndexData is the top-level template input for the index page.
+type ScanIndexData struct {
+	GeneratedAt string
+	Repos       []ScanIndexEntry
+	// TotalRepos / OKRepos / FailedRepos / PendingRepos are
+	// precomputed so the template doesn't need conditional arithmetic.
+	// Pending is distinct from failed: a pending repo is one the
+	// worker never reached (cancelled mid-scan), a failed repo is one
+	// whose extract or render broke. Mixing them in the summary would
+	// read a cancel-shaped partial run as a fleet-of-errors.
+	TotalRepos   int
+	OKRepos      int
+	FailedRepos  int
+	PendingRepos int
+	TotalCommits int
+	TotalDevs    int
+	// Largest repo commit count — used to normalize the bar widths so
+	// the relative-volume bars are visually comparable across repos.
+	MaxCommits int
+}
+
+// GenerateScanIndex writes the scan landing page: a per-repo card
+// list with links to each repo's standalone report and a short
+// summary strip. Failures are surfaced inline rather than hidden so
+// operators can spot them at a glance and dig into the manifest.
+func GenerateScanIndex(w io.Writer, data ScanIndexData) error {
+	if data.GeneratedAt == "" {
+		data.GeneratedAt = time.Now().Format("2006-01-02 15:04")
+	}
+	return scanIndexTmpl.Execute(w, data)
+}
+
+var scanIndexTmpl = template.Must(template.New("scan-index").Funcs(funcMap).Parse(scanIndexHTML))
+
+const scanIndexHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>gitcortex scan index ({{.TotalRepos}} repositories)</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #24292f; background: #f6f8fa; padding: 20px; max-width: 1200px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.card { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px; }
+.card .label { font-size: 12px; color: #656d76; text-transform: uppercase; }
+.card .value { font-size: 24px; font-weight: 600; margin-top: 4px; }
+.repo { background: #fff; border: 1px solid #d0d7de; border-radius: 6px; padding: 16px 20px; margin-bottom: 10px; display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1.2fr; gap: 16px; align-items: center; }
+.repo.failed { border-left: 4px solid #cf222e; }
+.repo.pending { border-left: 4px solid #bf8700; }
+.repo .name { font-weight: 600; font-size: 15px; }
+.repo .name a { color: #0969da; text-decoration: none; }
+.repo .name a:hover { text-decoration: underline; }
+.repo .path { font-family: "SF Mono", Consolas, monospace; font-size: 11px; color: #656d76; margin-top: 2px; word-break: break-all; }
+.repo .error { font-size: 12px; color: #cf222e; margin-top: 4px; }
+.repo .metric { font-size: 13px; }
+.repo .metric .val { font-weight: 600; font-size: 16px; }
+.repo .metric .lbl { font-size: 11px; color: #656d76; text-transform: uppercase; display: block; margin-top: 2px; }
+.repo .bar-container { display: flex; align-items: center; gap: 8px; }
+.repo .bar-outer { flex: 1; height: 8px; background: #eaeef2; border-radius: 3px; overflow: hidden; }
+.repo .bar-inner { height: 100%; background: #2da44e; }
+.repo .dates { font-size: 11px; color: #656d76; font-family: "SF Mono", Consolas, monospace; }
+.recency { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin-bottom: 4px; }
+.recency.fresh { background: #dafbe1; color: #1a7f37; }
+.recency.stable { background: #eaeef2; color: #656d76; }
+.recency.stale { background: #fff4d4; color: #9a6700; }
+.status-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.status-ok { background: #dafbe1; color: #1a7f37; }
+.status-failed { background: #ffebe9; color: #cf222e; }
+.status-pending { background: #fff4d4; color: #9a6700; }
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; color: #656d76; font-size: 12px; }
+.hint { font-size: 12px; color: #656d76; font-style: italic; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+
+<div class="cards">
+  <div class="card"><div class="label">Repositories</div><div class="value">{{thousands .OKRepos}}{{if gt .FailedRepos 0}} <span style="font-size:14px; color:#cf222e;">({{.FailedRepos}} failed)</span>{{end}}{{if gt .PendingRepos 0}} <span style="font-size:14px; color:#9a6700;">({{.PendingRepos}} pending)</span>{{end}}</div></div>
+  <div class="card"><div class="label">Total commits</div><div class="value" title="{{thousands .TotalCommits}}">{{humanize .TotalCommits}}</div></div>
+  <div class="card"><div class="label">Unique devs</div><div class="value">{{thousands .TotalDevs}}</div></div>
+</div>
+
+<p class="hint">Each repo below links to its own standalone report. Metrics are per-repository — no cross-repo aggregation that would mix signals from unrelated codebases. For a consolidated developer view, use <code>gitcortex scan --report &lt;file&gt; --email &lt;address&gt;</code>.</p>
+
+{{$max := .MaxCommits}}
+{{range .Repos}}
+<div class="repo {{.Status}}">
+  <div>
+    <div class="name">
+      {{if .ReportHref}}<a href="{{.ReportHref}}">{{.Slug}}</a>{{else}}{{.Slug}}{{end}}
+      {{if ne .Status "ok"}}<span class="status-pill status-{{.Status}}">{{.Status}}</span>{{end}}
+    </div>
+    <div class="path">{{.Path}}</div>
+    {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+  </div>
+  {{if eq .Status "ok"}}
+  <div class="metric">
+    <span class="val" title="{{thousands .Commits}}">{{humanize .Commits}}</span>
+    <span class="lbl">commits</span>
+  </div>
+  <div class="metric">
+    <span class="val" title="{{thousands .Churn}}">{{humanize .Churn}}</span>
+    <span class="lbl">churn</span>
+  </div>
+  <div class="metric">
+    <span class="val">{{.Devs}}</span>
+    <span class="lbl">devs</span>
+  </div>
+  <div class="metric">
+    <span class="val">{{humanize .Files}}</span>
+    <span class="lbl">files</span>
+  </div>
+  <div class="dates">
+    {{if .LastCommitAgo}}<span class="recency {{.RecencyBucket}}">{{.LastCommitAgo}}</span><br>{{end}}
+    {{if .LastCommitDate}}{{.FirstCommitDate}}<br>→ {{.LastCommitDate}}{{end}}
+  </div>
+  {{else}}
+  <div style="grid-column: span 5; color:#656d76; font-style:italic;">No report available.</div>
+  {{end}}
+</div>
+{{if eq .Status "ok"}}
+<div class="bar-container" style="margin:-4px 0 12px 20px; max-width:600px;">
+  <div class="bar-outer"><div class="bar-inner" style="width:{{if gt $max 0}}{{pctInt .Commits $max}}%{{else}}0%{{end}};"></div></div>
+</div>
+{{end}}
+{{end}}
+
+<footer>Generated by <a href="https://github.com/lex0c/gitcortex" target="_blank" rel="noopener noreferrer" style="color:#0969da; text-decoration:none;">gitcortex</a> · {{.GeneratedAt}}</footer>
+
+</body>
+</html>
+`

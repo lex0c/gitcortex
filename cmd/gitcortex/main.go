@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/lex0c/gitcortex/internal/extract"
 	"github.com/lex0c/gitcortex/internal/git"
 	reportpkg "github.com/lex0c/gitcortex/internal/report"
+	"github.com/lex0c/gitcortex/internal/scan"
 	"github.com/lex0c/gitcortex/internal/stats"
 
 	"github.com/spf13/cobra"
@@ -35,6 +38,7 @@ func main() {
 	rootCmd.AddCommand(diffCmd())
 	rootCmd.AddCommand(ciCmd())
 	rootCmd.AddCommand(reportCmd())
+	rootCmd.AddCommand(scanCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -866,6 +870,458 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
 	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
 	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
+
+	return cmd
+}
+
+// defaultScanParallel picks an initial concurrency that scales with
+// the host but caps the aggressive end: git extract is a mix of
+// CPU (diff/numstat parsing) and disk I/O, so more than ~8 workers
+// hit diminishing returns on typical SSDs and can thrash on
+// spinning disks. The cap at 16 keeps 64-core servers from
+// over-subscribing; the floor at 2 keeps single-core CI from
+// serialising every scan.
+func defaultScanParallel() int {
+	n := runtime.NumCPU()
+	if n > 16 {
+		n = 16
+	}
+	if n < 2 {
+		n = 2
+	}
+	return n
+}
+
+// profileScanLabel builds the `RepoName` header string for
+// `scan --report --email`. The profile dataset aggregates commits
+// from every successful repo across all --root values, so titling
+// the report after roots[0] alone would mislead readers into
+// thinking the scope is a single root's work.
+//
+// Label policy:
+//   - 1 root → root basename (the default case, unchanged).
+//   - 2-3 roots → joined with " + " so the scope is visible at a glance.
+//   - 4+ roots → "N roots" because joining many basenames bloats
+//     the H1 and the exact set is available in the scan log and
+//     manifest anyway.
+func profileScanLabel(roots []string) string {
+	switch len(roots) {
+	case 0:
+		return "scan"
+	case 1:
+		return filepath.Base(absPath(roots[0]))
+	case 2, 3:
+		parts := make([]string, len(roots))
+		for i, r := range roots {
+			parts[i] = filepath.Base(absPath(r))
+		}
+		return strings.Join(parts, " + ")
+	default:
+		return fmt.Sprintf("%d roots", len(roots))
+	}
+}
+
+// scanIndexStatusRank maps a ManifestRepo.Status to a sort bucket
+// used by the index page ordering. Lower rank renders first; failed
+// entries float to the top so operators spot them immediately,
+// pending/skipped land in the middle, and ok entries make up the
+// "everything else" tail ranked by commit count inside
+// renderScanReportDir.
+func scanIndexStatusRank(status string) int {
+	switch status {
+	case "failed":
+		return 0
+	case "pending", "skipped":
+		return 1
+	case "ok":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// renderScanReportDir is `scan --report-dir` in one place: for each
+// successful repo in the manifest, load only that repo's JSONL as a
+// standalone dataset, run the normal `report` pipeline into
+// <dir>/<slug>.html, and afterward emit <dir>/index.html linking
+// all of them. Intentionally uses LoadJSONL (single-input) rather
+// than LoadMultiJSONL so each per-repo report's paths carry no
+// `<repo>:` prefix — each tab of the experience is self-contained.
+func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOptions, sf stats.StatsFlags, topN int) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create report dir: %w", err)
+	}
+
+	// Build an index-row slice parallel to Manifest.Repos so the
+	// landing page preserves scan order. We can't skip failed/pending
+	// entries — operators need to see what didn't produce a report.
+	entries := make([]reportpkg.ScanIndexEntry, 0, len(result.Manifest.Repos))
+	var totalCommits int
+	allDevs := map[string]struct{}{}
+	maxCommits := 0
+
+	for _, m := range result.Manifest.Repos {
+		// Collapse "skipped" (worker picked the job up and saw
+		// ctx.Err before running extract) into "pending" for the
+		// index. The summary strip already buckets them together
+		// under PendingRepos; without normalizing here too, the
+		// per-row render would emit class="repo skipped" /
+		// status-skipped — CSS selectors the template doesn't
+		// define, so skipped rows lost the amber border and pill
+		// that make cancellation fallout easy to spot at a glance.
+		status := m.Status
+		if status == "skipped" {
+			status = "pending"
+		}
+		entry := reportpkg.ScanIndexEntry{
+			Slug:   m.Slug,
+			Path:   m.Path,
+			Status: status,
+			Error:  m.Error,
+		}
+		if m.Status != "ok" {
+			entries = append(entries, entry)
+			continue
+		}
+
+		ds, err := stats.LoadJSONL(m.JSONL, loadOpts)
+		if err != nil {
+			// Treat load failure as a per-repo failure — index shows it,
+			// but the scan itself was already successful to that point.
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("load %s: %v", m.JSONL, err)
+			entries = append(entries, entry)
+			continue
+		}
+
+		// All render-time errors for a single repo (create the output
+		// file, template.Execute) get demoted to an inline failure and
+		// the loop continues to the next repo — matching the policy
+		// already applied above for LoadJSONL. Aborting the batch on
+		// one bad render would discard every HTML already written and
+		// skip the index entirely, leaving operators staring at an
+		// incomplete directory with no way to discover the state.
+		outFile := filepath.Join(dir, m.Slug+".html")
+		f, err := os.Create(outFile)
+		if err != nil {
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("create %s: %v", outFile, err)
+			entries = append(entries, entry)
+			continue
+		}
+		if err := reportpkg.Generate(f, ds, m.Slug, topN, sf); err != nil {
+			f.Close()
+			// Best-effort cleanup: leave nothing half-written on disk.
+			_ = os.Remove(outFile)
+			entry.Status = "failed"
+			entry.Error = fmt.Sprintf("render %s: %v", m.Slug, err)
+			entries = append(entries, entry)
+			continue
+		}
+		f.Close()
+
+		summary := stats.ComputeSummary(ds)
+		entry.Commits = summary.TotalCommits
+		entry.Devs = summary.TotalDevs
+		entry.Files = summary.TotalFiles
+		entry.Churn = summary.TotalAdditions + summary.TotalDeletions
+		entry.FirstCommitDate = summary.FirstCommitDate
+		entry.LastCommitDate = summary.LastCommitDate
+		entry.LastCommitAgo, entry.RecencyBucket = reportpkg.HumanizeAgo(summary.LastCommitDate)
+		entry.ReportHref = m.Slug + ".html"
+
+		totalCommits += entry.Commits
+		if entry.Commits > maxCommits {
+			maxCommits = entry.Commits
+		}
+		for _, email := range stats.DevEmails(ds) {
+			allDevs[email] = struct{}{}
+		}
+
+		entries = append(entries, entry)
+	}
+
+	// Order the index as a triage view rather than by discovery's
+	// alphabetical slug order. Failed entries come first (they need
+	// attention and their absence of metrics makes the red border
+	// the only signal), then pending/skipped, then ok entries
+	// ranked by commit count desc so the heaviest repos surface at
+	// the top of the "healthy" section. Slug asc is the tiebreaker
+	// in every bucket so scans with identical shapes still produce
+	// identical page order.
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := scanIndexStatusRank(entries[i].Status), scanIndexStatusRank(entries[j].Status)
+		if a != b {
+			return a < b
+		}
+		if entries[i].Status == "ok" && entries[i].Commits != entries[j].Commits {
+			return entries[i].Commits > entries[j].Commits
+		}
+		return entries[i].Slug < entries[j].Slug
+	})
+
+	indexPath := filepath.Join(dir, "index.html")
+	f, err := os.Create(indexPath)
+	if err != nil {
+		return fmt.Errorf("create index: %w", err)
+	}
+	defer f.Close()
+
+	// Pending and failed live in separate buckets: pending means the
+	// worker never reached the repo (user cancelled mid-scan, or a
+	// future scheduling change), while failed means the extract was
+	// attempted and broke. Conflating them in the summary strip would
+	// mislead operators reading a cancel-shaped failure as a real
+	// repo-level problem.
+	var okCount, failedCount, pendingCount int
+	for _, e := range entries {
+		switch e.Status {
+		case "ok":
+			okCount++
+		case "pending", "skipped":
+			pendingCount++
+		default:
+			failedCount++
+		}
+	}
+
+	data := reportpkg.ScanIndexData{
+		Repos:        entries,
+		TotalRepos:   len(entries),
+		OKRepos:      okCount,
+		FailedRepos:  failedCount,
+		PendingRepos: pendingCount,
+		TotalCommits: totalCommits,
+		TotalDevs:    len(allDevs),
+		MaxCommits:   maxCommits,
+	}
+	if err := reportpkg.GenerateScanIndex(f, data); err != nil {
+		return fmt.Errorf("generate index: %w", err)
+	}
+
+	// Log line tracks the summary card's zero-suppression: only
+	// non-zero buckets appear, and the opener is whichever bucket
+	// has a count so an all-failed scan reads as "2 failed" instead
+	// of the misleading "0 ok, 2 failed".
+	var parts []string
+	if okCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d ok", okCount))
+	}
+	if failedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failedCount))
+	}
+	if pendingCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d pending", pendingCount))
+	}
+	if len(parts) == 0 {
+		parts = []string{"0 repos"} // defensive; renderScanReportDir requires > 0 manifest entries to be reached at all
+	}
+	fmt.Fprintf(os.Stderr, "Per-repo reports written to %s (%s); open %s\n",
+		dir, strings.Join(parts, ", "), fileURL(indexPath))
+	return nil
+}
+
+// --- Scan ---
+
+func scanCmd() *cobra.Command {
+	var (
+		roots              []string
+		output             string
+		ignoreFile         string
+		maxDepth           int
+		parallel           int
+		email              string
+		from               string
+		to                 string
+		since              string
+		reportPath         string
+		reportDir          string
+		topN               int
+		extractIgnore      []string
+		batchSize          int
+		mailmap            bool
+		firstParent        bool
+		includeMessages    bool
+		couplingMaxFiles   int
+		couplingMinChanges int
+		churnHalfLife      int
+		networkMinFiles    int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Discover git repositories under one or more roots and consolidate their history",
+		Long: `Walk the given root(s), find every git repository, and run extract on each
+repository in parallel. Outputs one JSONL per repo plus a manifest in --output.
+Optionally generates a consolidated HTML report including a per-repository
+breakdown — handy for showing aggregated work across many repos.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(roots) == 0 {
+				return fmt.Errorf("--root is required (repeatable for multiple roots)")
+			}
+			if since != "" && (from != "" || to != "") {
+				return fmt.Errorf("--since cannot be combined with --from/--to")
+			}
+			if err := validateDate(from, "--from"); err != nil {
+				return err
+			}
+			if err := validateDate(to, "--to"); err != nil {
+				return err
+			}
+			if from != "" && to != "" && from > to {
+				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+			// Report-flag combinations. --report is reserved for the
+			// only case that genuinely consolidates signal across repos
+			// — the per-developer profile; cross-repo team aggregation
+			// inflates hotspots/bus-factor/coupling with mixed-codebase
+			// noise and has been replaced by --report-dir which emits
+			// one standalone HTML per repo plus an index landing page.
+			if reportPath != "" && email == "" {
+				return fmt.Errorf("--report requires --email (profile consolidation); for per-repo HTML reports use --report-dir <dir>")
+			}
+			if email != "" && reportPath == "" {
+				// Without this up-front check, --email alone would
+				// run the full scan, reach the profile branch, and
+				// only then call os.Create("") — surfacing a cryptic
+				// `open : no such file or directory` after the slow
+				// multi-repo extract phase had already completed.
+				return fmt.Errorf("--email requires --report <file> pointing at the profile HTML output path")
+			}
+			if reportPath != "" && reportDir != "" {
+				return fmt.Errorf("--report and --report-dir are mutually exclusive; pick profile (--report + --email) or per-repo (--report-dir)")
+			}
+			if email != "" && reportDir != "" {
+				return fmt.Errorf("--email filters a single consolidated profile report; combine it with --report <file>, not --report-dir")
+			}
+			// Resolve --since up-front. If this fails we'd otherwise
+			// discover the typo only after a full multi-repo scan —
+			// minutes to hours on a large workspace, all thrown away
+			// because the user mistyped `--since 1yy`. Validate early,
+			// fail fast, keep the result for the report stage.
+			fromDate := from
+			if since != "" {
+				d, err := parseSince(since)
+				if err != nil {
+					return err
+				}
+				fromDate = d
+			}
+
+			cfg := scan.Config{
+				Roots:      roots,
+				Output:     output,
+				IgnoreFile: ignoreFile,
+				MaxDepth:   maxDepth,
+				Parallel:   parallel,
+				Extract: extract.Config{
+					BatchSize:       batchSize,
+					IncludeMessages: includeMessages,
+					CommandTimeout:  extract.DefaultCommandTimeout,
+					FirstParent:     firstParent,
+					Mailmap:         mailmap,
+					IgnorePatterns:  extractIgnore,
+					StartOffset:     -1,
+				},
+			}
+
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			result, err := scan.Run(ctx, cfg)
+			// scan.Run returns a partial result alongside ctx.Err() on
+			// cancellation. Honor that — write whatever progress we made
+			// to disk and surface the error so the CLI exits non-zero.
+			if err != nil {
+				return err
+			}
+
+			// Exit non-zero when every repo failed to extract, regardless
+			// of whether a report was requested. scan.Run intentionally
+			// treats per-repo failures as non-fatal so a transient error
+			// on one repo doesn't tank the whole batch — but when the
+			// count of successes is zero, there's nothing useful on disk
+			// to inspect. Without this guard CI sees exit code 0 and
+			// continues with empty artifacts; the manifest's per-repo
+			// Status fields remain the only way to see the failures.
+			if len(result.JSONLs) == 0 {
+				return fmt.Errorf("scan found %d repositor(ies) but all extracts failed; see %s for per-repo status",
+					len(result.Manifest.Repos),
+					filepath.Join(result.OutputDir, "manifest.json"))
+			}
+
+			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles}
+			loadOpts := stats.LoadOptions{
+				From:         fromDate,
+				To:           to,
+				HalfLifeDays: churnHalfLife,
+				CoupMaxFiles: couplingMaxFiles,
+			}
+
+			// Path 1: profile consolidation — the one cross-repo
+			// aggregation that earns its place (a single dev's work
+			// across all scanned repos). Build a multi-repo Dataset
+			// (path-prefixed via LoadMultiJSONL) and filter by email
+			// at render time.
+			if email != "" {
+				ds, err := stats.LoadMultiJSONL(result.JSONLs, loadOpts)
+				if err != nil {
+					return fmt.Errorf("load consolidated dataset: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Loaded %d commits across %d repo(s)\n", ds.CommitCount, len(result.JSONLs))
+
+				f, err := os.Create(reportPath)
+				if err != nil {
+					return fmt.Errorf("create report: %w", err)
+				}
+				defer f.Close()
+
+				repoLabel := profileScanLabel(cfg.Roots)
+				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email); err != nil {
+					return fmt.Errorf("generate profile report: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(reportPath))
+				return nil
+			}
+
+			// Path 2: per-repo reports + index. Each repo is loaded
+			// standalone so its stats reflect its own codebase — no
+			// hotspot/bus-factor/coupling mixing across unrelated
+			// projects. The index.html lists every repo with cards
+			// linking into each per-repo report; failed extracts are
+			// surfaced inline so operators can spot them without
+			// opening the manifest.
+			if reportDir != "" {
+				return renderScanReportDir(result, reportDir, loadOpts, sf, topN)
+			}
+
+			// Path 3: no report flag — just confirm JSONLs landed.
+			fmt.Fprintf(os.Stderr, "Scan complete: %d JSONL file(s) in %s\n", len(result.JSONLs), result.OutputDir)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&roots, "root", nil, "Root directory to walk for repositories (repeatable)")
+	cmd.Flags().StringVar(&output, "output", "scan-output", "Directory to write per-repo JSONL files and the manifest")
+	cmd.Flags().StringVar(&ignoreFile, "ignore-file", "", "Gitignore-style file with directories to skip during discovery. When unset, only the first --root is searched for a .gitcortex-ignore; pass an explicit path to apply rules across all roots.")
+	cmd.Flags().IntVar(&maxDepth, "max-depth", 0, "Maximum directory depth to descend into when looking for repos (0 = unlimited)")
+	cmd.Flags().IntVar(&parallel, "parallel", defaultScanParallel(), "Number of repositories to extract in parallel")
+	cmd.Flags().StringVar(&email, "email", "", "Generate a per-developer profile report (only when --report is set)")
+	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD (forwarded to the consolidated report)")
+	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD (forwarded to the consolidated report)")
+	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y); mutually exclusive with --from/--to")
+	cmd.Flags().StringVar(&reportPath, "report", "", "With --email, write a developer profile consolidated across all scanned repos to this HTML file. For per-repo reports use --report-dir instead.")
+	cmd.Flags().StringVar(&reportDir, "report-dir", "", "Directory to write one standalone HTML report per repo plus an index.html landing page. Each per-repo report is equivalent to running `gitcortex report` on that repo alone — no cross-repo metric mixing.")
+	cmd.Flags().IntVar(&topN, "top", 20, "Top-N entries per section in each per-repo report")
+	cmd.Flags().StringSliceVar(&extractIgnore, "extract-ignore", nil, "Glob patterns forwarded to per-repo extract --ignore (e.g. package-lock.json)")
+	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Per-repo extract checkpoint interval")
+	cmd.Flags().BoolVar(&mailmap, "mailmap", false, "Use .mailmap (per repo) to normalize identities")
+	cmd.Flags().BoolVar(&firstParent, "first-parent", false, "Restrict extracts to the first-parent chain")
+	cmd.Flags().BoolVar(&includeMessages, "include-commit-messages", false, "Include commit messages in JSONL (needed for Top Commits in the consolidated report)")
+	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis (consolidated report)")
+	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results (consolidated report)")
+	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (consolidated report)")
+	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges (consolidated report)")
 
 	return cmd
 }

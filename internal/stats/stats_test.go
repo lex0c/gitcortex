@@ -63,6 +63,30 @@ func makeDataset() *Dataset {
 	return ds
 }
 
+// DevEmails returns every author email unordered. Faster than
+// TopContributors(ds, 0) when the caller only needs the set —
+// used by scan's per-repo render loop to aggregate unique devs
+// across repos without paying the full contributor sort per repo.
+func TestDevEmails(t *testing.T) {
+	ds := makeDataset()
+	got := map[string]bool{}
+	for _, e := range DevEmails(ds) {
+		got[e] = true
+	}
+	want := map[string]bool{
+		"alice@test.com": true,
+		"bob@test.com":   true,
+	}
+	for email := range want {
+		if !got[email] {
+			t.Errorf("missing %q in DevEmails output: %v", email, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("unexpected extras in DevEmails: got %v, want %v", got, want)
+	}
+}
+
 func TestComputeSummary(t *testing.T) {
 	ds := makeDataset()
 	s := ComputeSummary(ds)
