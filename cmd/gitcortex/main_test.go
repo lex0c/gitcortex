@@ -549,6 +549,17 @@ func TestProfileScanLabel(t *testing.T) {
 	}
 }
 
+// defaultScanParallel must stay within [2, 16] regardless of host
+// NumCPU. The floor protects single-core CI from serialising every
+// scan; the cap prevents 64-core servers from over-subscribing
+// when git I/O can't actually use that much concurrency.
+func TestDefaultScanParallel(t *testing.T) {
+	got := defaultScanParallel()
+	if got < 2 || got > 16 {
+		t.Errorf("defaultScanParallel() = %d, want between 2 and 16 inclusive", got)
+	}
+}
+
 func TestValidateDate(t *testing.T) {
 	cases := []struct {
 		in      string

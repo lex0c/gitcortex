@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -873,6 +874,24 @@ func reportCmd() *cobra.Command {
 	return cmd
 }
 
+// defaultScanParallel picks an initial concurrency that scales with
+// the host but caps the aggressive end: git extract is a mix of
+// CPU (diff/numstat parsing) and disk I/O, so more than ~8 workers
+// hit diminishing returns on typical SSDs and can thrash on
+// spinning disks. The cap at 16 keeps 64-core servers from
+// over-subscribing; the floor at 2 keeps single-core CI from
+// serialising every scan.
+func defaultScanParallel() int {
+	n := runtime.NumCPU()
+	if n > 16 {
+		n = 16
+	}
+	if n < 2 {
+		n = 2
+	}
+	return n
+}
+
 // profileScanLabel builds the `RepoName` header string for
 // `scan --report --email`. The profile dataset aggregates commits
 // from every successful repo across all --root values, so titling
@@ -1015,8 +1034,8 @@ func renderScanReportDir(result *scan.Result, dir string, loadOpts stats.LoadOpt
 		if entry.Commits > maxCommits {
 			maxCommits = entry.Commits
 		}
-		for _, c := range stats.TopContributors(ds, 0) {
-			allDevs[c.Email] = struct{}{}
+		for _, email := range stats.DevEmails(ds) {
+			allDevs[email] = struct{}{}
 		}
 
 		entries = append(entries, entry)
@@ -1286,7 +1305,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 	cmd.Flags().StringVar(&output, "output", "scan-output", "Directory to write per-repo JSONL files and the manifest")
 	cmd.Flags().StringVar(&ignoreFile, "ignore-file", "", "Gitignore-style file with directories to skip during discovery. When unset, only the first --root is searched for a .gitcortex-ignore; pass an explicit path to apply rules across all roots.")
 	cmd.Flags().IntVar(&maxDepth, "max-depth", 0, "Maximum directory depth to descend into when looking for repos (0 = unlimited)")
-	cmd.Flags().IntVar(&parallel, "parallel", 4, "Number of repositories to extract in parallel")
+	cmd.Flags().IntVar(&parallel, "parallel", defaultScanParallel(), "Number of repositories to extract in parallel")
 	cmd.Flags().StringVar(&email, "email", "", "Generate a per-developer profile report (only when --report is set)")
 	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD (forwarded to the consolidated report)")
 	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD (forwarded to the consolidated report)")

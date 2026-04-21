@@ -239,6 +239,19 @@ func ComputeSummary(ds *Dataset) Summary {
 	return s
 }
 
+// DevEmails returns every author email in the dataset, unordered.
+// Cheaper than TopContributors(ds, 0) when the caller only needs
+// the email set (e.g. aggregating unique devs across multiple
+// repos): skips the per-contributor struct copy and the full sort
+// that TopContributors pays for ranking purposes.
+func DevEmails(ds *Dataset) []string {
+	out := make([]string, 0, len(ds.contributors))
+	for email := range ds.contributors {
+		out = append(out, email)
+	}
+	return out
+}
+
 func TopContributors(ds *Dataset, n int) []ContributorStat {
 	result := make([]ContributorStat, 0, len(ds.contributors))
 	for _, cs := range ds.contributors {
