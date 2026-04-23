@@ -2,11 +2,9 @@
 
 **Repository behavior analyzer.** Reads git history — commits, authors, dates, file paths, line counts — and surfaces signals about how people and processes interact with a codebase: hotspots, bus factor, coupling, churn risk, working patterns, collaboration networks. It analyzes the behavior recorded in git, not the source code itself — every metric is derived from who touched what, when, and with whom.
 
-That distinction matters in practice: a beautifully written library touched by one maintainer can classify as `silo`; a pile of spaghetti that the whole team works on daily will read as `active`. The tool complements code review and static analysis, it doesn't replace them — it surfaces the human and process layer over the repo.
-
-Under the hood it extracts commit metadata, file changes, blob sizes, and developer info into JSONL, then derives the stats above from that stream.
-
 ## Performance
+
+See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks.
 
 Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built binary on a single machine (not a controlled lab benchmark; directional, not absolute).
 
@@ -19,42 +17,6 @@ Benchmarked on open-source repositories. `extract` reads bare clones; `stats` an
 | [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 12m 57s | 1m 15s | 1m 53s | 6M lines / 1.9 GB |
 
 `extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
-
-See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks, including gitcortex extracting itself (189 commits, 45 ms) and Chromium at scale (1.7M commits, ~2 hours) — plus an analysis of what drives extract throughput on large monorepos.
-
-## Vendor and generated code
-
-**This is the biggest practical distortion in every stat.** Line-count metrics treat a 50k-line `generated.pb.go` the same as a 50k-line hand-written module. Lock files like `package-lock.json` regenerate with every dependency bump. Vendored dependencies inflate churn whenever they're updated. OpenAPI specs, minified JS, `bindata.go`-style embeds — all common, all inflate churn and bus factor without reflecting real human contribution.
-
-Run gitcortex on kubernetes without filtering and the top fading-silos are `vendor/golang.org/x/tools/…/manifest.go`, `api/openapi-spec/v3/…v1alpha3_openapi.json`, and `staging/…/generated.pb.go` — technically correct per the data, practically useless for decision-making.
-
-Mitigate with `--ignore` glob patterns at extract time. Files matched are dropped from the JSONL entirely, so **every downstream stat** (hotspots, churn-risk, bus factor, coupling, dev-network, profiles) reflects only hand-authored code:
-
-```bash
-# Typical starter set
-gitcortex extract --repo . \
-  --ignore "vendor/*" \
-  --ignore "node_modules/*" \
-  --ignore "dist/*" \
-  --ignore "build/*" \
-  --ignore "*.min.js" \
-  --ignore "*.min.css" \
-  --ignore "package-lock.json" \
-  --ignore "yarn.lock" \
-  --ignore "Cargo.lock" \
-  --ignore "go.sum" \
-  --ignore "poetry.lock" \
-  --ignore "*.pb.go" \
-  --ignore "*_generated.go"
-```
-
-Patterns match against the file path as emitted by `git log --raw` (forward-slash, repo-relative). Directory patterns like `vendor/*` are **repo-root prefixes** — they exclude everything under `vendor/` at the top of the tree, but **not** nested occurrences like `pkg/vendor/foo.go` or `services/auth/vendor/bar.go`. For those you need explicit entries such as `--ignore "pkg/vendor/*"`. File-name patterns like `*.pb.go` and `package-lock.json` match at any depth via extract's basename match, so one entry covers every occurrence.
-
-Start permissive, run `gitcortex stats --stat hotspots --top 20` and `--stat churn-risk --top 20`, and add `--ignore` entries for whatever generated file type dominates the output. Re-extract until the top list represents real changes worth understanding.
-
-**You don't need to get this right on the first try.** When `stats` runs on an un-filtered dataset and likely vendor/generated paths account for ≥10% of repo churn, it prints a warning to stderr with the matched buckets and a copy-pasteable `--ignore` invocation. The warning enumerates the exact nested prefixes it found (e.g. `wp-includes/js/dist/*`, `services/auth/vendor/*`), so monorepos and subproject-heavy layouts get the specific entries they need without guessing. Running the suggestion and re-extracting is the fastest path from raw repo to usable stats.
-
-> Both commit-level (`Summary.TotalAdditions/Deletions`) and file-level aggregations recompute from the filtered set, so all totals stay consistent after `--ignore` — the extract step recalculates commit additions/deletions as the sum of non-ignored file records before writing them to JSONL.
 
 ## Privacy and reliability
 
