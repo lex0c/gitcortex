@@ -281,6 +281,31 @@ File extensions aggregated from `ds.files`, ranked by **recent churn** (decay-we
 
 **What it does not do**: no language-family grouping (`.js`+`.ts`+`.tsx` stay distinct). Aggregate downstream if you need "frontend vs backend"; the tool does not prescribe the taxonomy. Generated-file buckets (`.lock`, `.pb.go`, `.min.js`) will dominate unless filtered via `--ignore` at extract time — the suspect-paths warning flags these.
 
+## Tests
+
+A **history-based proxy** for test investment (`--stat tests`, plus a section in the HTML report and a per-dev figure in profiles). It is *not* code coverage: gitcortex never reads file contents or runs a suite. Every tracked file is classified by **path convention** into one of three roles (`classifyTestRole`), and the ratios are computed from commit churn already in the dataset.
+
+**Roles** (each file resolves to exactly one, in this precedence):
+1. **`--test-glob` override** — an explicit user glob wins over everything (including the suspect gate below), so golden-file suites under `testdata/*` or any path you name count as tests.
+2. **other (suspect)** — vendor/generated paths (`vendor/`, `node_modules/`, `dist/`, `build/`, `*.lock`, `*.min.js`, `*.pb.go`, …) are excluded as noise, so a dependency's own `foo.test.js` doesn't inflate your ratio. Shares the suspect-paths table with the extract warning.
+3. **test** — filename conventions that embed the language (`_test.go`, `_spec.rb`, `*Test.java`, `*_test.{cc,cpp,rs}`, …) fire regardless of location. Extension-agnostic conventions (`test_*` prefix, `*.test.*` / `*.spec.*` infix) and test directories (`test/ tests/ spec/ specs/ __tests__/ e2e/`) only count when the file is also code, so `api.spec.yaml` or `test/fixtures/data.json` stay in **other**.
+4. **source** — any remaining file with a recognized code extension (`codeExtensions`).
+5. **other** — everything else (docs, config, data, assets).
+
+**Ratios** are deliberately test-over-**source**, not test-over-total: the denominator is code a test could plausibly cover, so docs/config/vendor sit out of both numerator and denominator (reported only as an "excluded" count for transparency). A ratio of `0.50` means half as much test churn as production-code churn.
+
+**Fields / surfaces**:
+- `test_files` / `source_files` and their `file_ratio` — counts of distinct files per role.
+- `test_churn` / `source_churn` and their `churn_ratio` — lifetime additions + deletions per role (whole-file attribution by the canonical path; unlike Extensions there is no per-era split, because a file is wholly a test or wholly source).
+- **By language** — the same split sliced by `extractExtension` of the canonical path, so `foo_test.go` and `bar.go` both land under `.go`; read each row as that language's test-to-source balance. Bounded by `--top`.
+- **Trend** (`TestRatioOverTime`) — the churn ratio per period. Resolution is **monthly** (the only per-file time series retained is `fileEntry.monthChurn`); `--granularity year` rolls months up, and `day`/`week` fall back to month. The HTML report renders the **yearly** trend, which smooths the low-volume-month noise that makes a ratio spike when a month has only a line or two of source churn.
+- **Per developer** (profiles) — `TestChurn` / `SourceChurn` split a dev's authored line churn by file role; the profile shows both the test:source ratio and a "% of code churn is tests" share.
+
+**Caveats**:
+- **Convention-based, so false positives exist.** A real source package literally named `spec`/`specs` is read as tests; a real source dir named `build`/`dist` is read as suspect noise and drops out of the source denominator (inflating the ratio). Use `--ignore` at extract time or accept the bounded skew.
+- **Trend vs summary may not reconcile** for commits with no date: the summary counts all churn, the trend only churn from dated commits (the same `monthChurn` basis the Activity stat uses).
+- **`--test-glob`** matches via `path.Match` against the full repo-relative path and every trailing sub-path, so `testdata/*` matches at any depth and `*.itest.go` matches the basename; `**` is unsupported (express deep intent as a basename glob). Available on `stats`, `report`, and `scan`.
+
 ## Repo Structure
 
 A `tree(1)`-style view of the repository's directory layout, built from paths seen in history (`FileHotspots`), not from the filesystem at HEAD. Deleted files are included — the view answers "what shaped the codebase", not "what is present today".

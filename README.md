@@ -229,6 +229,11 @@ gitcortex stats --input data.jsonl --stat churn-risk --top 0 --format csv
 # Activity by week
 gitcortex stats --input data.jsonl --stat activity --granularity week
 
+# Test-to-source ratio (history-based proxy, not coverage)
+gitcortex stats --input data.jsonl --stat tests
+# Mark a non-standard test layout so it counts (repeatable)
+gitcortex stats --input data.jsonl --stat tests --test-glob 'tools/testing/selftests/*' --test-glob '*_kunit.c'
+
 # Filter to recent period
 gitcortex stats --since 7d                    # last 7 days
 gitcortex stats --since 3m --stat contributors # last 3 months
@@ -259,6 +264,7 @@ Available stats:
 | `pareto` | Concentration (80% threshold) across files, devs (two lenses: commits and churn), and directories |
 | `structure` | Repo layout as a `tree(1)`-style view, dirs sorted by aggregate churn, capped by `--tree-depth` (default 3) |
 | `extensions` | File extensions ranked by recent churn, with file count, unique devs, and first/last-seen — the historical lens on language distribution |
+| `tests` | History-based test-investment proxy: test-to-source ratio (files and churn) overall and per language, plus a ratio-over-time trend. Files are classified by path convention (not coverage); customize with `--test-glob` |
 
 Output formats: `table` (default, human-readable), `csv` (single clean table per `--stat`, header row on line 1), `json` (unified object with all sections).
 
@@ -510,7 +516,7 @@ gitcortex report --input data.jsonl --output report.html --top 30
 gitcortex report --input data.jsonl --email alice@company.com --output alice.html
 ```
 
-Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, working patterns heatmap, top commits, developer network, and developer profiles. A collapsible glossary at the top defines the terms (bus factor, churn, fading-silo, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
+Includes: summary cards, activity heatmap (with table toggle), top contributors, file hotspots, churn risk (with full-dataset label distribution strip above the truncated table), bus factor, file coupling, extensions, the tests section (test-to-source ratio, per-language breakdown, and ratio-over-time trend), working patterns heatmap, top commits, developer network, and developer profiles (each carrying a test-share figure). A collapsible glossary at the top defines the terms (bus factor, churn, fading-silo, specialization, etc.) for readers who are not already familiar. Typical size: 50-500KB depending on number of contributors.
 
 When the input is multi-repo (from `gitcortex scan` or multiple `--input` files) AND `--email` is set, the profile report renders a *Per-Repository Breakdown* with commit/churn/files/active-days per repo, filtered to that developer's contributions. The team-view report intentionally omits this section — per-repo aggregates on a consolidated dataset reduce to raw git-history distribution, which is more usefully inspected via `manifest.json` or `stats --input X.jsonl` per repo.
 

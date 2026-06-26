@@ -209,6 +209,10 @@ func herfindahl(values []int) float64 {
 type StatsFlags struct {
 	CouplingMinChanges int
 	NetworkMinFiles    int
+	// TestGlobs are extra --test-glob patterns forwarded to the test-stat
+	// classifier so the HTML report's test section matches what
+	// `stats --stat tests --test-glob ...` would show on the CLI.
+	TestGlobs []string
 }
 
 // --- Stats from pre-aggregated Dataset ---
@@ -1344,6 +1348,16 @@ type DevProfile struct {
 	ScopeHidden      int
 	Extensions       []DevExtContrib
 	ExtensionsHidden int
+	// TestChurn / SourceChurn split this dev's authored line churn by the
+	// role of the file touched (test vs production code); TestRatio is
+	// their test:source — "how much of this person's work is test code",
+	// read the same way as the repo-level Tests section. Files that are
+	// neither (docs/config/vendor/generated) are excluded from both.
+	// TestRatio is 0 when the dev authored no source churn (guarded
+	// division), same convention as TestSummary.
+	TestChurn       int64
+	SourceChurn     int64
+	TestRatio       float64
 	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
@@ -1425,7 +1439,17 @@ type DevExtContrib struct {
 // the pre-optimization behaviour — the CLI stats command wants this).
 // filterEmail is the stronger filter: when set, only that one profile
 // is built and n is ignored.
-func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
+func DevProfiles(ds *Dataset, filterEmail string, n int, cfg ...TestConfig) []DevProfile {
+	// Test-detection config is optional (variadic) so the ~25 existing
+	// callers — almost all tests — need no change; the CLI and HTML
+	// report pass a config built from --test-glob so the per-dev test
+	// ratio matches what the Tests section shows. Mirrors the variadic
+	// LoadOptions convention on LoadJSONL.
+	testCfg := NewTestConfig(nil)
+	if len(cfg) > 0 {
+		testCfg = cfg[0]
+	}
+
 	// Determine the target set of emails. Three modes:
 	//   1. filterEmail != ""  → single dev, n is irrelevant
 	//   2. n > 0              → top-N by commits (desc), email asc tiebreak
@@ -1788,6 +1812,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			churn int64
 		}
 		extCount := make(map[string]*extAccForDev)
+		var devTestChurn, devSourceChurn int64
 		if files, ok := devFiles[email]; ok {
 			for path, fa := range files {
 				ext := extractExtension(path)
@@ -1798,6 +1823,15 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 				}
 				acc.files++
 				acc.churn += fa.churn
+				// Split the dev's authored churn by the file's role for
+				// the per-dev test ratio. Same whole-file classification
+				// as ComputeTestSummary; RoleOther contributes to neither.
+				switch classifyTestRole(path, testCfg) {
+				case RoleTest:
+					devTestChurn += fa.churn
+				case RoleSource:
+					devSourceChurn += fa.churn
+				}
 			}
 		}
 		var extensions []DevExtContrib
@@ -1887,6 +1921,8 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			TopCommits: topCommits, TopCommitsHidden: topCommitsHidden,
 			Scope: scope, ScopeHidden: scopeHidden,
 			Extensions: extensions, ExtensionsHidden: extensionsHidden,
+			TestChurn: devTestChurn, SourceChurn: devSourceChurn,
+			TestRatio:      safeRatio(devTestChurn, devSourceChurn),
 			Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs, CollaboratorsHidden: collabsHidden,
