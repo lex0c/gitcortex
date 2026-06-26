@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lex0c/gitcortex/internal/model"
 )
@@ -27,6 +28,28 @@ type commitEntry struct {
 	// repository on multi-repo scans. Empty for single-file loads, which
 	// keeps single-repo callers' behavior unchanged.
 	repo string
+}
+
+// maxStoredMessageBytes caps the commit message retained per commit. The
+// only consumers (TopCommits, per-dev TopCommits) show the first line
+// truncated to 77 chars; retaining full multi-line bodies for every
+// commit adds hundreds of MB on large repos (linux: 1.44M commits) for
+// bytes nothing renders. The bound keeps ample headroom over the 80-char
+// display cap.
+const maxStoredMessageBytes = 200
+
+func truncateMessage(s string) string {
+	if len(s) <= maxStoredMessageBytes {
+		return s
+	}
+	// Back up to a rune boundary so the retained string is always valid
+	// UTF-8 (current display re-slices to ~77 chars, but keep it clean for
+	// any future full-message consumer).
+	b := maxStoredMessageBytes
+	for b > 0 && !utf8.RuneStart(s[b]) {
+		b--
+	}
+	return s[:b]
 }
 
 type fileEntry struct {
@@ -204,6 +227,17 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 	var coupCurrentFiles []string
 	var coupCurrentChurn int64
 
+	// Per-commit decay weight + month key, recomputed only when the commit
+	// changes. A commit's file lines are emitted contiguously (no other
+	// commit record between them — extract.emitCommit writes the block
+	// atomically), so ds.Latest is constant across them and this collapses
+	// to one math.Exp + time.Format per commit instead of one per file.
+	// Kept loop-local (not on commitEntry) so the scratch isn't retained
+	// for the whole Dataset lifetime.
+	var weightSHA string
+	var commitWeight float64
+	var commitMonthKey string
+
 	dayIndex := map[time.Weekday]int{
 		time.Monday: 0, time.Tuesday: 1, time.Wednesday: 2,
 		time.Thursday: 3, time.Friday: 4, time.Saturday: 5, time.Sunday: 6,
@@ -238,10 +272,17 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			t := parseDate(c.AuthorDate)
 
 			if hasFilter {
-				if !fromTime.IsZero() && !t.IsZero() && t.Before(fromTime) {
+				// A commit with no parseable date can't be placed inside a
+				// bounded window — exclude it (and, via commitInRange, its
+				// file/parent records) rather than letting the IsZero guard
+				// fall through and count it in every --since/--from/--to run.
+				if t.IsZero() {
 					continue
 				}
-				if !toTime.IsZero() && !t.IsZero() && t.After(toTime) {
+				if !fromTime.IsZero() && t.Before(fromTime) {
+					continue
+				}
+				if !toTime.IsZero() && t.After(toTime) {
 					continue
 				}
 				commitInRange[c.SHA] = struct{}{}
@@ -258,7 +299,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				add:     c.Additions,
 				del:     c.Deletions,
 				files:   c.FilesChanged,
-				message: c.Message,
+				message: truncateMessage(c.Message),
 				repo:    strings.TrimSuffix(pathPrefix, ":"),
 			}
 			ds.commits[c.SHA] = entry
@@ -417,10 +458,17 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 				ds.contribFiles[cm.email][path] = struct{}{}
 
 				if !cm.date.IsZero() {
-					days := ds.Latest.Sub(cm.date).Hours() / 24
-					weight := math.Exp(-lambda * days)
-					fe.recentChurn += float64(cf.Additions+cf.Deletions) * weight
-					ec.recentChurn += float64(cf.Additions+cf.Deletions) * weight
+					// Recompute the decay weight + month key only when the
+					// commit changes (see weightSHA decl): collapses to one
+					// math.Exp + time.Format per commit instead of per file.
+					if cf.Commit != weightSHA {
+						days := ds.Latest.Sub(cm.date).Hours() / 24
+						commitWeight = math.Exp(-lambda * days)
+						commitMonthKey = cm.date.UTC().Format("2006-01")
+						weightSHA = cf.Commit
+					}
+					fe.recentChurn += float64(cf.Additions+cf.Deletions) * commitWeight
+					ec.recentChurn += float64(cf.Additions+cf.Deletions) * commitWeight
 					if cm.date.After(fe.lastChange) {
 						fe.lastChange = cm.date
 					}
@@ -433,7 +481,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 					if ec.firstChange.IsZero() || cm.date.Before(ec.firstChange) {
 						ec.firstChange = cm.date
 					}
-					fe.monthChurn[cm.date.UTC().Format("2006-01")] += cf.Additions + cf.Deletions
+					fe.monthChurn[commitMonthKey] += cf.Additions + cf.Deletions
 				}
 			}
 

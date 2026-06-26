@@ -42,7 +42,17 @@ func NewLogStreamer(ctx context.Context, repo, branch, resumeSHA string, firstPa
 		format = fmt.Sprintf("%%x00%%x01%%H%%x1f%%T%%x1f%%P%%x1f%s%%x1f%s%%x1f%%aI%%x1f%s%%x1f%s%%x1f%%cI%%x1f%%x1e%%x02", an, ae, cn, ce)
 	}
 
-	args := []string{"-C", repo, "log",
+	args := []string{
+		// core.quotePath=false stops git from C-quoting/octal-escaping
+		// non-ASCII bytes in pathnames (e.g. "caf\303\251.txt"). The raw
+		// and numstat parsers read paths verbatim, so without this a file
+		// with a UTF-8/accented name lands in every path-based stat with
+		// quotes and escapes baked in, and a rename's numstat key stops
+		// matching its raw PathNew — resolving that file's churn to 0.
+		// Control characters (tab/newline) are still quoted by git even
+		// with this off, so the tab-delimited parsing stays safe.
+		"-c", "core.quotePath=false",
+		"-C", repo, "log",
 		"--raw", "--numstat", "-M",
 		"--abbrev=40",
 		fmt.Sprintf("--format=%s", format),
