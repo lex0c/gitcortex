@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lex0c/gitcortex/internal/stats"
@@ -334,67 +335,138 @@ func buildActivityGrid(raw []stats.ActivityBucket) ([]string, [][]ActivityCell, 
 }
 
 func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stats.StatsFlags) error {
-	patterns := stats.WorkingPatterns(ds)
-	var grid [7][24]int
-	maxP := 0
-	days := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
-	for _, p := range patterns {
-		for d, name := range days {
-			if name == p.Day {
-				grid[d][p.Hour] = p.Commits
-				if p.Commits > maxP {
-					maxP = p.Commits
+	testCfg := stats.NewTestConfig(sf.TestGlobs)
+	now := time.Now().Format("2006-01-02 15:04")
+
+	// Every computation below is a pure read over the immutable Dataset and
+	// writes only to its own local, so they run concurrently. The previous
+	// version ran ~18 independent O(files)/O(commits)/O(file-pairs) passes
+	// serially; on large repos (Linux: ~90s report) the heavy passes
+	// (FileCoupling, ChurnRisk, DevProfiles) dominate and overlap well.
+	var (
+		summary             stats.Summary
+		contributors        []stats.ContributorStat
+		allHotspots         []stats.FileStat
+		hotspots            []stats.FileStat
+		structure           *TreeNode
+		directories         []stats.DirStat
+		extensions          []stats.ExtensionStat
+		testSummary         stats.TestSummary
+		testTrend           []stats.TestRatioBucket
+		busFactor           []stats.BusFactorResult
+		coupling            []stats.CouplingResult
+		churnRisk           []stats.ChurnRiskResult
+		labelCounts         []LabelCount
+		topCommits          []stats.BigCommit
+		devNetwork          []stats.DevEdge
+		profiles            []stats.DevProfile
+		pareto              ParetoData
+		patterns            []stats.WorkingPattern
+		actRaw              []stats.ActivityBucket
+		actYears            []string
+		actGrid             [][]ActivityCell
+		maxActCommits       int
+		grid                [7][24]int
+		maxP                int
+		totalDirectories    int
+		totalExtensions     int
+		totalBusFactorFiles int
+	)
+
+	var wg sync.WaitGroup
+	run := func(f func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f()
+		}()
+	}
+
+	run(func() { summary = stats.ComputeSummary(ds) })
+	run(func() { contributors = stats.TopContributors(ds, topN) })
+	run(func() {
+		// FileHotspots is the costliest shared input: the table (top-N) and
+		// the repo tree (full) both derive from one sorted pass instead of
+		// recomputing it twice. FileHotspots(ds, topN) == FileHotspots(ds, 0)
+		// truncated (same sort), so the table is just a prefix of the full set.
+		allHotspots = stats.FileHotspots(ds, 0)
+		hotspots = allHotspots
+		if topN > 0 && topN < len(allHotspots) {
+			hotspots = allHotspots[:topN]
+		}
+		structure = BuildRepoTree(allHotspots, htmlTreeDepth)
+		CapChildrenPerDir(structure, htmlTreeMaxChildrenPerDir)
+	})
+	run(func() { directories = stats.DirectoryStats(ds, topN) })
+	run(func() { extensions = stats.ExtensionStats(ds, topN) })
+	run(func() { testSummary = stats.ComputeTestSummary(ds, testCfg, topN) })
+	run(func() { testTrend = stats.TestRatioOverTime(ds, testCfg, "year") })
+	run(func() { busFactor = stats.BusFactor(ds, topN) })
+	run(func() { coupling = stats.FileCoupling(ds, topN, sf.CouplingMinChanges) })
+	run(func() { churnRisk = stats.ChurnRisk(ds, topN) })
+	run(func() {
+		// Chip strip needs whole-dataset label counts without building a
+		// per-file result slice; a dedicated counter avoids that allocation.
+		labelCounts = buildLabelCountList(stats.ChurnRiskLabelCounts(ds))
+	})
+	run(func() { topCommits = stats.TopCommits(ds, topN) })
+	run(func() { devNetwork = stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles) })
+	run(func() { profiles = stats.DevProfiles(ds, "", topN, testCfg) })
+	run(func() { pareto = ComputePareto(ds) })
+	run(func() {
+		patterns = stats.WorkingPatterns(ds)
+		days := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+		for _, p := range patterns {
+			for d, name := range days {
+				if name == p.Day {
+					grid[d][p.Hour] = p.Commits
+					if p.Commits > maxP {
+						maxP = p.Commits
+					}
 				}
 			}
 		}
-	}
+	})
+	run(func() {
+		actRaw = stats.ActivityOverTime(ds, "month")
+		actYears, actGrid, maxActCommits = buildActivityGrid(actRaw)
+	})
+	run(func() { totalDirectories = stats.DirectoryCount(ds) })
+	run(func() { totalExtensions = stats.ExtensionCount(ds) })
+	run(func() { totalBusFactorFiles = stats.BusFactorCount(ds) })
 
-	actRaw := stats.ActivityOverTime(ds, "month")
-	actYears, actGrid, maxActCommits := buildActivityGrid(actRaw)
-
-	testCfg := stats.NewTestConfig(sf.TestGlobs)
-
-	now := time.Now().Format("2006-01-02 15:04")
-
-	// Compute label distribution for the Churn Risk chip strip without
-	// materializing a full result slice. The display table still takes
-	// the truncated ChurnRisk(ds, topN) call below — only the chip
-	// counts needed the whole-dataset view, and we can get those from
-	// a dedicated counter that never builds per-file structs.
-	labelCountsMap := stats.ChurnRiskLabelCounts(ds)
-	labelCounts := buildLabelCountList(labelCountsMap)
+	wg.Wait()
 
 	data := ReportData{
 		GeneratedAt:          now,
 		RepoName:             repoName,
-		Summary:              stats.ComputeSummary(ds),
-		Contributors:         stats.TopContributors(ds, topN),
-		Hotspots:             stats.FileHotspots(ds, topN),
-		Directories:          stats.DirectoryStats(ds, topN),
-		Extensions:           stats.ExtensionStats(ds, topN),
-		TestSummary:          stats.ComputeTestSummary(ds, testCfg, topN),
-		TestTrend:            stats.TestRatioOverTime(ds, testCfg, "year"),
+		Summary:              summary,
+		Contributors:         contributors,
+		Hotspots:             hotspots,
+		Directories:          directories,
+		Extensions:           extensions,
+		TestSummary:          testSummary,
+		TestTrend:            testTrend,
 		ActivityRaw:          actRaw,
 		ActivityYears:        actYears,
 		ActivityGrid:         actGrid,
 		MaxActivityCommits:   maxActCommits,
-		BusFactor:            stats.BusFactor(ds, topN),
-		Coupling:             stats.FileCoupling(ds, topN, sf.CouplingMinChanges),
-		ChurnRisk:            stats.ChurnRisk(ds, topN),
+		BusFactor:            busFactor,
+		Coupling:             coupling,
+		ChurnRisk:            churnRisk,
 		ChurnRiskLabelCounts: labelCounts,
 		Patterns:             patterns,
-		TopCommits:           stats.TopCommits(ds, topN),
-		DevNetwork:           stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
-		Profiles:             stats.DevProfiles(ds, "", topN, testCfg),
-		Pareto:               ComputePareto(ds),
+		TopCommits:           topCommits,
+		DevNetwork:           devNetwork,
+		Profiles:             profiles,
+		Pareto:               pareto,
 		PatternGrid:          grid,
 		MaxPattern:           maxP,
-		Structure:            BuildRepoTree(stats.FileHotspots(ds, 0), htmlTreeDepth),
-		TotalDirectories:     stats.DirectoryCount(ds),
-		TotalExtensions:      stats.ExtensionCount(ds),
-		TotalBusFactorFiles:  stats.BusFactorCount(ds),
+		Structure:            structure,
+		TotalDirectories:     totalDirectories,
+		TotalExtensions:      totalExtensions,
+		TotalBusFactorFiles:  totalBusFactorFiles,
 	}
-	CapChildrenPerDir(data.Structure, htmlTreeMaxChildrenPerDir)
 
 	return tmpl.Execute(w, data)
 }

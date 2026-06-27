@@ -32,8 +32,8 @@ type CommitFileInfo struct {
 	Status       string `json:"status"`
 	OldHash      string `json:"old_hash"`
 	NewHash      string `json:"new_hash"`
-	OldSize      int64  `json:"old_size"`
-	NewSize      int64  `json:"new_size"`
+	OldSize      int64  `json:"old_size,omitempty"`
+	NewSize      int64  `json:"new_size,omitempty"`
 	Additions    int64  `json:"additions"`
 	Deletions    int64  `json:"deletions"`
 }

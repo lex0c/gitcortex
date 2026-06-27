@@ -35,6 +35,13 @@ type Config struct {
 	FirstParent      bool
 	Mailmap          bool
 	IgnorePatterns   []string
+	// BlobSizes, when true, resolves per-blob byte sizes via
+	// `git cat-file --batch-check` and emits them as old_size/new_size.
+	// It is off by default: the lookup dominates extract wall time
+	// (the process blocks on the cat-file pipe) and no gitcortex stat
+	// consumes the sizes. Enable only when an external consumer of the
+	// JSONL needs blob sizes.
+	BlobSizes bool
 }
 
 type State struct {
@@ -164,11 +171,18 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 		}
 	}()
 
-	resolver, err := git.NewBlobSizeResolver(ctx, cfg.Repo)
-	if err != nil {
-		return fmt.Errorf("start blob resolver: %w", err)
+	// Blob-size resolution is opt-in: it is the dominant cost of extract
+	// (cat-file pipe round-trips) and nothing in the analysis path reads
+	// the resulting sizes. When disabled, resolver stays nil and the
+	// per-commit Resolve call is skipped entirely.
+	var resolver *git.BlobSizeResolver
+	if cfg.BlobSizes {
+		resolver, err = git.NewBlobSizeResolver(ctx, cfg.Repo)
+		if err != nil {
+			return fmt.Errorf("start blob resolver: %w", err)
+		}
+		defer resolver.Close()
 	}
-	defer resolver.Close()
 
 	checkpointInterval := cfg.BatchSize
 	if checkpointInterval <= 0 {
@@ -194,10 +208,13 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 			break
 		}
 
-		sizeMap, err := resolver.Resolve(commit.Raw)
-		if err != nil {
-			log.Printf("warning: blob sizes failed for %s: %v", commit.Meta.SHA, err)
-			sizeMap = map[string]int64{}
+		var sizeMap map[string]int64
+		if resolver != nil {
+			sizeMap, err = resolver.Resolve(commit.Raw)
+			if err != nil {
+				log.Printf("warning: blob sizes failed for %s: %v", commit.Meta.SHA, err)
+				sizeMap = map[string]int64{}
+			}
 		}
 
 		if err := emitCommit(writer, commit, sizeMap, devCache, cfg.IgnorePatterns); err != nil {

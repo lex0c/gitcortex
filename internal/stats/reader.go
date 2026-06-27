@@ -2,6 +2,7 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,33 @@ import (
 
 	"github.com/lex0c/gitcortex/internal/model"
 )
+
+// jsonTypePrefix is the literal head of every line the extractor emits.
+// Each record is marshalled from a struct whose first field is Type, so
+// encoding/json always writes `{"type":"...` first.
+var jsonTypePrefix = []byte(`{"type":"`)
+
+// peekType extracts the record discriminator without a full JSON parse.
+// Previously every line was unmarshalled twice — once into a {Type} probe,
+// then again into the concrete struct — and the probe is NOT cheap:
+// encoding/json must scan the whole object to locate the field. On a
+// multi-million-line corpus that probe pass was ~half the total JSON work.
+// Matching the fixed prefix and reading up to the closing quote replaces it
+// with a few-byte check. The type values are fixed ASCII enums with no
+// escapes, so the first quote terminates the value. Returns ok=false for
+// any line that doesn't fit this shape (foreign JSONL, reordered fields),
+// leaving the caller to fall back to a real parse.
+func peekType(line []byte) (string, bool) {
+	if !bytes.HasPrefix(line, jsonTypePrefix) {
+		return "", false
+	}
+	rest := line[len(jsonTypePrefix):]
+	end := bytes.IndexByte(rest, '"')
+	if end < 0 {
+		return "", false
+	}
+	return string(rest[:end]), true
+}
 
 type commitEntry struct {
 	email   string
@@ -302,14 +330,20 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			continue
 		}
 
-		var peek struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(line, &peek); err != nil {
-			return fmt.Errorf("line %d: parse type: %w", lineNum, err)
+		typ, ok := peekType(line)
+		if !ok {
+			// Fallback: the fast path only matches our own marshaller. For
+			// hand-written or reordered JSONL, parse just the discriminator.
+			var peek struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(line, &peek); err != nil {
+				return fmt.Errorf("line %d: parse type: %w", lineNum, err)
+			}
+			typ = peek.Type
 		}
 
-		switch peek.Type {
+		switch typ {
 		case model.CommitType:
 			var c model.CommitInfo
 			if err := json.Unmarshal(line, &c); err != nil {
