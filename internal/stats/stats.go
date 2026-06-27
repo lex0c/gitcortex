@@ -411,13 +411,24 @@ func DirectoryCount(ds *Dataset) int {
 	return len(dirs)
 }
 
-// ExtensionCount returns the total number of distinct extension
-// buckets ExtensionStats would produce. Same derivation via
-// extractExtension so the count matches what ranking would show.
+// ExtensionCount returns the total number of distinct extension buckets
+// ExtensionStats would produce — the "M" in a "Top N of M" header. It must
+// count buckets the SAME way ExtensionStats does: per-era via fileEntry.byExt
+// (so a rename across extensions, foo.js → foo.ts, contributes BOTH ".js"
+// and ".ts"), falling back to the canonical path's extension only when byExt
+// is nil (hand-built fileEntries). Counting just canonical-path extensions
+// would under-count M on migration-heavy repos and make the header read
+// "Top N of M" with M smaller than the rows actually shown.
 func ExtensionCount(ds *Dataset) int {
 	exts := make(map[string]struct{})
-	for path := range ds.files {
-		exts[extractExtension(path)] = struct{}{}
+	for path, fe := range ds.files {
+		if fe.byExt == nil {
+			exts[extractExtension(path)] = struct{}{}
+			continue
+		}
+		for ext := range fe.byExt {
+			exts[ext] = struct{}{}
+		}
 	}
 	return len(exts)
 }
@@ -1874,11 +1885,17 @@ func DevProfiles(ds *Dataset, filterEmail string, n int, cfg ...TestConfig) []De
 		contribType := "growth"
 		if cs.Additions > 0 {
 			contribRatio = math.Round(float64(cs.Deletions)/float64(cs.Additions)*100) / 100
-		}
-		if contribRatio >= contribRefactorRatio {
+			if contribRatio >= contribRefactorRatio {
+				contribType = "refactor"
+			} else if contribRatio >= contribBalancedRatio {
+				contribType = "balanced"
+			}
+		} else if cs.Deletions > 0 {
+			// Pure deletions (no additions) — del/add is unbounded, which is
+			// the strongest cleanup signal, not "growth". Leave contribRatio
+			// at 0 (an unbounded float can't round-trip through JSON) but
+			// classify as refactor so the label isn't the opposite of reality.
 			contribType = "refactor"
-		} else if contribRatio >= contribBalancedRatio {
-			contribType = "balanced"
 		}
 
 		// Pace

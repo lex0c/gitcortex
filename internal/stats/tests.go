@@ -323,10 +323,11 @@ type TestSummary struct {
 }
 
 // TestLangStat is the same ratio sliced to one language bucket (keyed by
-// extractExtension of the canonical path). A test file's extension places
+// extractExtension of the per-era path). A test file's extension places
 // it in its language's bucket — `foo_test.go` and `bar.go` both land
 // under ".go" — so each row reads as "this language's test-to-source
-// balance".
+// balance". Per-era keying means a `foo.js → foo.ts` migration splits
+// across the ".js" and ".ts" buckets, matching ExtensionStats.
 type TestLangStat struct {
 	Ext         string
 	TestFiles   int

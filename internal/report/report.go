@@ -233,7 +233,13 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	}
 
 	// Dirs: % of dirs for 80% of churn
+	// DirectoryStats returns dirs sorted by file-touches; the Pareto count
+	// is "fewest dirs reaching 80% of CHURN", so re-sort by churn desc
+	// first (mirrors the Files path above). Without this the cumulative
+	// loop walks file-touches order and over-counts TopChurnDirs, inflating
+	// DirsPct80Churn and biasing the label toward "well distributed".
 	dirs := stats.DirectoryStats(ds, 0)
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Churn > dirs[j].Churn })
 	var totalDirChurn int64
 	for _, d := range dirs {
 		totalDirChurn += d.Churn

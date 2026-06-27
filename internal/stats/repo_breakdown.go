@@ -18,6 +18,10 @@ type RepoStat struct {
 	Churn           int64
 	Files           int
 	ActiveDays      int
+	// UniqueDevs is repo-wide: all authors who committed to the repo, not
+	// just the email-filtered dev — so the profile lens shows how crowded
+	// each of the dev's repos is. (Commits/Churn/Files/ActiveDays above
+	// ARE email-filtered when a filter is set.)
 	UniqueDevs      int
 	FirstCommitDate string
 	LastCommitDate  string
@@ -53,31 +57,40 @@ func RepoBreakdown(ds *Dataset, emailFilter string) []RepoStat {
 		commits     int
 		add, del    int64
 		days        map[string]struct{}
-		devs        map[string]struct{}
 		first, last time.Time
 	}
 
 	repos := make(map[string]*acc)
+	// repoDevs is the REPO-WIDE author set per repo, recorded before the
+	// email filter so UniqueDevs answers "how many people work in this
+	// repo" even in the email-filtered profile lens. Accumulating it
+	// inside the filtered path (as before) collapsed the column to a
+	// constant 1 — the filtered dev was the only author ever recorded.
+	repoDevs := make(map[string]map[string]struct{})
 	emailLower := strings.ToLower(strings.TrimSpace(emailFilter))
 
 	visit := func(key string, c *commitEntry) {
+		if c.email != "" {
+			dv := repoDevs[key]
+			if dv == nil {
+				dv = make(map[string]struct{})
+				repoDevs[key] = dv
+			}
+			dv[strings.ToLower(c.email)] = struct{}{}
+		}
+		// Commits/churn/active-days/dates below are the filtered dev's
+		// slice of the repo; only UniqueDevs (repoDevs) is repo-wide.
 		if emailLower != "" && strings.ToLower(strings.TrimSpace(c.email)) != emailLower {
 			return
 		}
 		a, ok := repos[key]
 		if !ok {
-			a = &acc{
-				days: make(map[string]struct{}),
-				devs: make(map[string]struct{}),
-			}
+			a = &acc{days: make(map[string]struct{})}
 			repos[key] = a
 		}
 		a.commits++
 		a.add += c.add
 		a.del += c.del
-		if c.email != "" {
-			a.devs[strings.ToLower(c.email)] = struct{}{}
-		}
 		if !c.date.IsZero() {
 			a.days[c.date.UTC().Format("2006-01-02")] = struct{}{}
 			if a.first.IsZero() || c.date.Before(a.first) {
@@ -161,7 +174,7 @@ func RepoBreakdown(ds *Dataset, emailFilter string) []RepoStat {
 			Churn:      a.add + a.del,
 			Files:      fileCounts[repo],
 			ActiveDays: len(a.days),
-			UniqueDevs: len(a.devs),
+			UniqueDevs: len(repoDevs[repo]),
 		}
 		if !a.first.IsZero() {
 			stat.FirstCommitDate = a.first.UTC().Format("2006-01-02")

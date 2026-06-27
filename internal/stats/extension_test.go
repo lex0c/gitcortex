@@ -43,8 +43,8 @@ func TestExtractExtensionPolicy(t *testing.T) {
 		// nested paths already discard the prefix via the slash split.
 		{"repo.v1:Makefile", "(none)"},
 		{"repo.v1:LICENSE", "(none)"},
-		{"repo.v1:foo.go", ".go"},   // real ext still wins after prefix strip
-		{"repo:Makefile", "(none)"}, // stem with no dots — same rule
+		{"repo.v1:foo.go", ".go"},            // real ext still wins after prefix strip
+		{"repo:Makefile", "(none)"},          // stem with no dots — same rule
 		{"repo.v1:.gitignore", ".gitignore"}, // dotfile survives prefix
 		{"repo.v1:src/foo.go", ".go"},        // nested path: slash strips prefix first
 		{"repo.v1:", "(none)"},               // prefix with empty basename
@@ -101,8 +101,8 @@ func TestBusFactorCountExcludesEmptyDevLines(t *testing.T) {
 	ds := &Dataset{
 		UniqueFileCount: 2, // Summary total; includes both
 		files: map[string]*fileEntry{
-			"src/authored.go":       {devLines: map[string]int64{"alice@x": 10}},
-			"src/pure-rename-only":  {devLines: map[string]int64{}}, // no authored lines
+			"src/authored.go":      {devLines: map[string]int64{"alice@x": 10}},
+			"src/pure-rename-only": {devLines: map[string]int64{}}, // no authored lines
 		},
 	}
 	if got := BusFactorCount(ds); got != 1 {
@@ -194,6 +194,32 @@ func TestExtensionStatsAggregation(t *testing.T) {
 // and zero to .js — an ugly skew in migration-heavy repos. The fix
 // uses fileEntry.byExt (populated at per-change time) to split the
 // lineage back across both buckets.
+// Regression: ExtensionCount (the "M" in a "Top N of M" header) must count
+// per-era extension buckets like ExtensionStats, not just canonical-path
+// extensions. A foo.js → foo.ts migration yields TWO ExtensionStats rows,
+// so the header total must also be 2 — otherwise it reads "Top N of 1" with
+// two rows shown.
+func TestExtensionCountHonorsPerEraSplit(t *testing.T) {
+	ds := &Dataset{
+		files: map[string]*fileEntry{
+			"foo.ts": { // canonical .ts, but lineage held .js then .ts
+				byExt: map[string]*extContribution{
+					".js": {churn: 1000},
+					".ts": {churn: 500},
+				},
+			},
+			"bar.go": {additions: 10}, // byExt nil → canonical fallback (.go)
+		},
+	}
+	if got := ExtensionCount(ds); got != 3 {
+		t.Errorf("ExtensionCount = %d, want 3 (.js + .ts + .go)", got)
+	}
+	// Must agree with the number of rows ExtensionStats actually produces.
+	if got, want := ExtensionCount(ds), len(ExtensionStats(ds, 0)); got != want {
+		t.Errorf("ExtensionCount (%d) != len(ExtensionStats) (%d)", got, want)
+	}
+}
+
 func TestExtensionStatsHonorsPerEraSplit(t *testing.T) {
 	ds := &Dataset{
 		Latest: time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -422,8 +448,8 @@ func TestDevProfileExtensions(t *testing.T) {
 			"deploy/prod.yaml": {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}, additions: 15, deletions: 5},
 			"Makefile":         {devLines: map[string]int64{"alice@x": 5}, devCommits: map[string]int{"alice@x": 1}, additions: 5, deletions: 0},
 		},
-		commits:   map[string]*commitEntry{},
-		workGrid:  [7][24]int{},
+		commits:  map[string]*commitEntry{},
+		workGrid: [7][24]int{},
 	}
 
 	profiles := DevProfiles(ds, "alice@x", 0)
@@ -612,12 +638,12 @@ func TestDevProfileExtensionsTruncationSum(t *testing.T) {
 			"alice@x": {Email: "alice@x", Commits: 6, FilesTouched: 6, ActiveDays: 1},
 		},
 		files: map[string]*fileEntry{
-			"a.go":  {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}},
-			"b.py":  {devLines: map[string]int64{"alice@x": 50}, devCommits: map[string]int{"alice@x": 1}},
-			"c.rs":  {devLines: map[string]int64{"alice@x": 40}, devCommits: map[string]int{"alice@x": 1}},
-			"d.ts":  {devLines: map[string]int64{"alice@x": 30}, devCommits: map[string]int{"alice@x": 1}},
-			"e.md":  {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}},
-			"f.sh":  {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
+			"a.go": {devLines: map[string]int64{"alice@x": 60}, devCommits: map[string]int{"alice@x": 1}},
+			"b.py": {devLines: map[string]int64{"alice@x": 50}, devCommits: map[string]int{"alice@x": 1}},
+			"c.rs": {devLines: map[string]int64{"alice@x": 40}, devCommits: map[string]int{"alice@x": 1}},
+			"d.ts": {devLines: map[string]int64{"alice@x": 30}, devCommits: map[string]int{"alice@x": 1}},
+			"e.md": {devLines: map[string]int64{"alice@x": 20}, devCommits: map[string]int{"alice@x": 1}},
+			"f.sh": {devLines: map[string]int64{"alice@x": 10}, devCommits: map[string]int{"alice@x": 1}},
 		},
 		commits:  map[string]*commitEntry{},
 		workGrid: [7][24]int{},
@@ -844,9 +870,9 @@ func TestDevProfileExtensionsTopFive(t *testing.T) {
 func TestExtensionStatsTopN(t *testing.T) {
 	ds := &Dataset{
 		files: map[string]*fileEntry{
-			"a.go":  {recentChurn: 100, devLines: map[string]int64{"a": 1}},
-			"b.py":  {recentChurn: 50, devLines: map[string]int64{"a": 1}},
-			"c.rs":  {recentChurn: 10, devLines: map[string]int64{"a": 1}},
+			"a.go": {recentChurn: 100, devLines: map[string]int64{"a": 1}},
+			"b.py": {recentChurn: 50, devLines: map[string]int64{"a": 1}},
+			"c.rs": {recentChurn: 10, devLines: map[string]int64{"a": 1}},
 		},
 	}
 	result := ExtensionStats(ds, 2)

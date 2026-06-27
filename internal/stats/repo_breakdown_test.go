@@ -61,6 +61,7 @@ func TestRepoBreakdown_EmailFilter(t *testing.T) {
 	if len(breakdown) != 2 {
 		t.Fatalf("want 2 repos for me@x.com, got %d", len(breakdown))
 	}
+	devsByRepo := map[string]int{}
 	for _, b := range breakdown {
 		if b.Commits != 1 {
 			t.Errorf("repo %s: expected 1 commit (filtered), got %d", b.Repo, b.Commits)
@@ -68,6 +69,16 @@ func TestRepoBreakdown_EmailFilter(t *testing.T) {
 		if b.Files != 1 {
 			t.Errorf("repo %s: expected 1 file (filtered), got %d", b.Repo, b.Files)
 		}
+		devsByRepo[b.Repo] = b.UniqueDevs
+	}
+	// UniqueDevs is repo-wide even under the email filter: alpha has two
+	// authors (me@ + other@), beta has one. A regression to the filtered
+	// accumulation would report 1 for both.
+	if devsByRepo["alpha"] != 2 {
+		t.Errorf("alpha UniqueDevs = %d, want 2 (repo-wide: me@ + other@)", devsByRepo["alpha"])
+	}
+	if devsByRepo["beta"] != 1 {
+		t.Errorf("beta UniqueDevs = %d, want 1", devsByRepo["beta"])
 	}
 }
 

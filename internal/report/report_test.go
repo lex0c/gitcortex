@@ -122,13 +122,13 @@ func TestGenerate_TeamReportOmitsPerRepoBreakdown(t *testing.T) {
 
 // End-to-end for the `gitcortex scan --email me@x.com --report …`
 // flow. Covers three assertions at once:
-//   1. GenerateProfile emits the Per-Repository Breakdown section
-//      when the dataset is multi-repo (gated on len(Repos) > 1).
-//   2. Counts per repo are filtered to the dev — a commit by
-//      someone-else@x.com in alpha doesn't bleed into my profile's
-//      alpha row.
-//   3. Files counted per repo are only files THIS dev touched — a
-//      colleague-exclusive file in alpha must not inflate my scope.
+//  1. GenerateProfile emits the Per-Repository Breakdown section
+//     when the dataset is multi-repo (gated on len(Repos) > 1).
+//  2. Counts per repo are filtered to the dev — a commit by
+//     someone-else@x.com in alpha doesn't bleed into my profile's
+//     alpha row.
+//  3. Files counted per repo are only files THIS dev touched — a
+//     colleague-exclusive file in alpha must not inflate my scope.
 func TestGenerateProfile_MultiRepoBreakdownFiltersByEmail(t *testing.T) {
 	dir := t.TempDir()
 	alpha := filepath.Join(dir, "alpha.jsonl")
@@ -462,6 +462,41 @@ func TestComputeParetoFilesAndDirsZeroChurn(t *testing.T) {
 	}
 	if p.DirsPct80Churn != 0 {
 		t.Errorf("DirsPct80Churn = %.1f, want 0", p.DirsPct80Churn)
+	}
+}
+
+// Regression: the dirs Pareto must rank by CHURN, not by file-touches.
+// dirA is touched in more commits (higher file-touches) but holds little
+// churn; dirB holds ~95% of churn in one commit. The correct "fewest dirs
+// for 80% of churn" answer is 1 (dirB alone). The old code walked
+// DirectoryStats' file-touches order (dirA first) and reported 2.
+func TestComputeParetoDirsRankByChurn(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"1111111111111111111111111111111111111111","author_name":"A","author_email":"a@x","author_date":"2024-01-01T10:00:00Z","additions":205,"deletions":0,"files_changed":2}
+{"type":"commit_file","commit":"1111111111111111111111111111111111111111","path_current":"dirA/x.go","path_previous":"dirA/x.go","status":"M","additions":5,"deletions":0}
+{"type":"commit_file","commit":"1111111111111111111111111111111111111111","path_current":"dirB/y.go","path_previous":"dirB/y.go","status":"M","additions":200,"deletions":0}
+{"type":"commit","sha":"2222222222222222222222222222222222222222","author_name":"A","author_email":"a@x","author_date":"2024-01-02T10:00:00Z","additions":5,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"2222222222222222222222222222222222222222","path_current":"dirA/x.go","path_previous":"dirA/x.go","status":"M","additions":5,"deletions":0}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dirs.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := stats.LoadJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := ComputePareto(ds)
+	// dirA: file-touches 2, churn 10; dirB: file-touches 1, churn 200.
+	// Total churn 210, 80% = 168 → dirB alone (200) crosses it.
+	if p.TopChurnDirs != 1 {
+		t.Errorf("TopChurnDirs = %d, want 1 (dirB holds 95%% of churn); file-touches order would give 2", p.TopChurnDirs)
+	}
+	if p.TotalDirs != 2 {
+		t.Errorf("TotalDirs = %d, want 2", p.TotalDirs)
+	}
+	if p.DirsPct80Churn != 50.0 {
+		t.Errorf("DirsPct80Churn = %.1f, want 50.0 (1 of 2 dirs)", p.DirsPct80Churn)
 	}
 }
 

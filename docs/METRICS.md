@@ -296,8 +296,8 @@ A **history-based proxy** for test investment (`--stat tests`, plus a section in
 
 **Fields / surfaces**:
 - `test_files` / `source_files` and their `file_ratio` — counts of distinct files per role.
-- `test_churn` / `source_churn` and their `churn_ratio` — lifetime additions + deletions per role (whole-file attribution by the canonical path; unlike Extensions there is no per-era split, because a file is wholly a test or wholly source).
-- **By language** — the same split sliced by `extractExtension` of the canonical path, so `foo_test.go` and `bar.go` both land under `.go`; read each row as that language's test-to-source balance. Bounded by `--top`.
+- `test_churn` / `source_churn` and their `churn_ratio` — lifetime additions + deletions per role, attributed **per era** (like Extensions' `byExt`): when a file is renamed across the test/source boundary (`src/foo.go → foo_test.go`, or a move into `tests/` or under `vendor/`), each era's churn is classified by the path it held at the time, so pre-rename production churn is not miscounted as test. A lineage is counted once per role it ever held.
+- **By language** — the same split sliced by `extractExtension` of the **era** path, so `foo_test.go` and `bar.go` both land under `.go`, and a `foo.js → foo.ts` migration splits across `.js`/`.ts`; read each row as that language's test-to-source balance. Bounded by `--top`.
 - **Trend** (`TestRatioOverTime`) — the churn ratio per period. Resolution is **monthly** (the only per-file time series retained is `fileEntry.monthChurn`); `--granularity year` rolls months up, and `day`/`week` fall back to month. The HTML report renders the **yearly** trend, which smooths the low-volume-month noise that makes a ratio spike when a month has only a line or two of source churn.
 - **Per developer** (profiles) — `TestChurn` / `SourceChurn` split a dev's authored line churn by file role; the profile shows both the test:source ratio and a "% of code churn is tests" share.
 
