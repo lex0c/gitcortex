@@ -6,15 +6,15 @@
 
 See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks.
 
-Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built binary on a single machine (not a controlled lab benchmark; directional, not absolute).
+Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built v2.11.0 binary on a single NVMe-SSD machine (not a controlled lab benchmark; directional, not absolute). `stats`/`report` now include the test-to-source ratio section, so they do slightly more work than pre-v2.11 figures.
 
 | Repository | Commits | Devs | Extract | Stats (JSON) | Report (HTML) | JSONL size |
 |------------|---------|------|---------|-------------|--------------|------------|
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 1.5s | 0.18s | 0.24s | 23K lines / 6.5 MB |
-| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 25s | 0.96s | 0.95s | 95K lines / 30 MB |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 47s | 2.9s | 2.8s | 298K lines / 96 MB |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 2m 4s | 11.7s | 14s | 943K lines / 314 MB |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 12m 57s | 1m 15s | 1m 53s | 6M lines / 1.9 GB |
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 0.9s | 0.21s | 0.23s | 23K lines / 6.4 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 24s | 1.1s | 1.2s | 95K lines / 29 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 3.0s | 3.2s | 298K lines / 96 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 1m 58s | 11.1s | 12.0s | 943K lines / 313 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 11m 34s | 1m 24s | 1m 29s | 6.1M lines / 1.9 GB |
 
 `extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
 

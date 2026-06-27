@@ -1,26 +1,33 @@
 # Performance
 
-How `gitcortex extract` scales across repositories. All measurements
-below were taken on NVMe SSD with the v2.3.0 binary (LRU blob cache
-enabled) and `--batch-size 1000` (default).
+How `gitcortex` scales across repositories. All measurements below were
+taken on NVMe SSD with the **v2.11.0** binary (LRU blob cache enabled)
+and `--batch-size 1000` (default). The full pipeline (extract → stats →
+report) was timed on each repo in isolation, one repo at a time, so the
+numbers are not skewed by concurrent load. `stats`/`report` since v2.11.0
+also compute the test-to-source ratio section, so they do slightly more
+work than the earlier (v2.3.0) figures these tables replace.
 
 ## Extract benchmarks
 
-Seven repositories spanning four orders of magnitude in commit count,
+Six repositories spanning four orders of magnitude in commit count,
 extracted end-to-end (git log stream, blob size resolution, JSONL
-emission, checkpointing). Smaller repos run without `--ignore`
-filters; Chromium runs with a monorepo filter set applied (see the
-Chromium section for details).
+emission, checkpointing) then analyzed (`stats --format json`, `report`).
+None use `--ignore` filters. Chromium is carried over from the v2.3.0
+run (the repo was not available for this round) for the extreme-scale /
+OOM reference; its filtered extract used the `--ignore` set in footnote †.
 
 | Repository | Commits | Bare size | Extract | Stats (JSON) | Report (HTML) | JSONL |
 |---|---|---|---|---|---|---|
-| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.05s** | 0.012s | 0.022s | 803 lines / 245 KB |
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 10 MB | **0.99s** | 0.19s | 0.27s | 23k lines / 6.5 MB |
-| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **24.0s** | 1.02s | 1.07s | 95k lines / 30 MB |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **46.3s** | 2.90s | 3.03s | 298k lines / 96 MB |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **2m 4.1s** | 12.4s | 15.5s | 943k lines / 314 MB |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **13m 26.9s** | 1m 7.7s | 1m 9.8s | 6.1M lines / 1.9 GB |
-| [Chromium](https://chromium.googlesource.com/chromium/src) † | 1,738,421 | 61 GB | **1h 55m 52s** | OOM ‡ | OOM ‡ | 12.3M lines / 4.4 GB |
+| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.1s** | 0.01s | 0.02s | 803 lines / 244 KB |
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 9.8 MB | **0.9s** | 0.21s | 0.23s | 23k lines / 6.4 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **23.8s** | 1.12s | 1.24s | 95k lines / 29 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **46.4s** | 2.96s | 3.23s | 298k lines / 96 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **1m 58.1s** | 11.1s | 12.0s | 943k lines / 313 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **11m 34.3s** | 1m 23.7s | 1m 29.2s | 6.1M lines / 1.9 GB |
+| [Chromium](https://chromium.googlesource.com/chromium/src) †◇ | 1,738,421 | 61 GB | **1h 55m 52s** | OOM ‡ | OOM ‡ | 12.3M lines / 4.4 GB |
+
+◇ Chromium figures are from the v2.3.0 run, not re-measured this round.
 
 † Chromium was extracted with `--ignore 'third_party/*' --ignore 'out/*'
 --ignore 'node_modules/*' --ignore '*.min.js' --ignore '*.min.css'
@@ -44,18 +51,18 @@ per second** — normalizing by actual work rather than commit count:
 
 | Repository | Records/sec (avg) |
 |---|---|
-| gitcortex (self) | ~18,000 † |
-| Pi-hole | ~23,000 |
-| Kubernetes | ~7,600 |
-| Linux kernel | ~7,500 |
-| WordPress | ~6,400 |
-| Praat | ~3,900 |
-| Chromium | ~1,775 |
+| Pi-hole | ~25,600 |
+| Linux kernel | ~8,750 |
+| Kubernetes | ~7,990 |
+| WordPress | ~6,425 |
+| Praat | ~3,990 |
+| Chromium | ~1,775 ◇ |
+| gitcortex (self) | noisy † |
 
-† gitcortex's number is noisy: 803 records in 45 ms is too short a
-sample to characterize sustained throughput reliably. Included here
-because it's useful to see the tool exercising itself — the dogfood
-benchmark.
+† gitcortex's number is noisy: 803 records in ~0.1s is too short a
+sample to characterize sustained throughput reliably. Included in the
+extract table because it's useful to see the tool exercising itself —
+the dogfood benchmark. ◇ Chromium carried from v2.3.0.
 
 Small repos benefit from the entire working set fitting in OS page
 cache. Linux (6 GB) and Kubernetes (1.3 GB) mostly fit. Chromium
@@ -135,7 +142,7 @@ Extract streams the commit history and keeps a small buffer in RAM
 per-dev accumulators that scale with the number of classified files
 and the active span of each.
 
-Post-v2.3.0 optimizations reduce two of the hot spots:
+Post-v2.3.0 optimizations reduce several hot spots:
 
 - **ChurnRiskLabelCounts avoids materializing full result structs**
   for the HTML chip strip. Earlier versions called
@@ -148,9 +155,20 @@ Post-v2.3.0 optimizations reduce two of the hot spots:
   contributor — 38k on Linux, pushing RSS past 6 GB and triggering
   the kernel OOM-killer silently. Capping at top-N before building
   those structures keeps the heavy work proportional to the output.
+- **(v2.11.0) Per-commit decay caching at ingest** — the recency
+  weight (`exp(-λ·days)`) and month key are computed once per commit
+  and reused across its files, instead of once per file change, cutting
+  `math.Exp` + `time.Format` calls in the hottest load loop.
+- **(v2.11.0) Commit messages truncated at ingest** to a small bound
+  (only the first line is ever displayed), so `--include-commit-messages`
+  no longer retains full multi-line bodies for every commit.
+- **(v2.11.0) The test-stats per-era map (`byPath`) is built only at
+  the rename merge, not per file at ingest** — so the unrenamed majority
+  (and runs that never read test stats) allocate nothing extra. The
+  test-to-source section itself adds modest CPU to `stats`/`report`.
 
-Together these changes made the Linux report finish cleanly in
-~1m 10s on a machine where it previously died at 0 bytes. **Chromium
+Together these changes made the Linux report finish cleanly (~1m 29s on
+v2.11.0) on a machine where it previously died at 0 bytes. **Chromium
 remains out of reach** for `stats` and `report` on a 15 GB machine.
 The dominant remaining hog is `fileEntry.monthChurn` — a per-month
 activity map on every file, used only to compute the trend dimension
