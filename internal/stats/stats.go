@@ -1834,14 +1834,35 @@ func DevProfiles(ds *Dataset, filterEmail string, n int, cfg ...TestConfig) []De
 				}
 				acc.files++
 				acc.churn += fa.churn
-				// Split the dev's authored churn by the file's role for
-				// the per-dev test ratio. Same whole-file classification
-				// as ComputeTestSummary; RoleOther contributes to neither.
-				switch classifyTestRole(path, testCfg) {
-				case RoleTest:
-					devTestChurn += fa.churn
-				case RoleSource:
-					devSourceChurn += fa.churn
+				// Split the dev's authored churn by role. When the lineage
+				// was renamed across the test/source boundary, devLines (and
+				// thus fa.churn) is merged under the canonical path, so
+				// classify PER ERA using byPath's per-dev churn — mirroring
+				// ComputeTestSummary's eachEra — to keep pre-rename
+				// production churn from being reported as test. Unrenamed
+				// files (byPath nil) classify the canonical path with
+				// fa.churn, which is exact for a single era. RoleOther
+				// contributes to neither.
+				if fe := ds.files[path]; fe != nil && len(fe.byPath) > 0 {
+					for eraPath, pe := range fe.byPath {
+						c := pe.devChurn[email]
+						if c == 0 {
+							continue
+						}
+						switch classifyTestRole(eraPath, testCfg) {
+						case RoleTest:
+							devTestChurn += c
+						case RoleSource:
+							devSourceChurn += c
+						}
+					}
+				} else {
+					switch classifyTestRole(path, testCfg) {
+					case RoleTest:
+						devTestChurn += fa.churn
+					case RoleSource:
+						devSourceChurn += fa.churn
+					}
 				}
 			}
 		}

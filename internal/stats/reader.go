@@ -95,11 +95,17 @@ type extContribution struct {
 }
 
 // pathEra is one path's contribution to a file lineage (see byPath): the
-// churn attributed while the file lived at that path, plus the per-month
-// breakdown the test-ratio trend needs to place each era in time.
+// churn attributed while the file lived at that path, the per-month
+// breakdown the test-ratio trend needs to place each era in time, and the
+// per-developer churn for that era so the dev profile can split a
+// cross-boundary rename's churn by role per dev. devChurn is captured only
+// during a rename merge (mergeFileEntry) from each era's pre-merge
+// devLines — it is nil for an un-merged (single-era) file, which never
+// needs it (the canonical fallback is exact for one era).
 type pathEra struct {
 	churn      int64
 	monthChurn map[string]int64 // "YYYY-MM" → churn
+	devChurn   map[string]int64 // email → churn, captured at rename merge
 }
 
 // eachEra invokes f once per (path, churn, monthChurn) era of the file so
@@ -756,7 +762,46 @@ func applyRenames(ds *Dataset) {
 
 // mergeFileEntry folds src into dst: sums scalars, unions maps, keeps the
 // widest firstChange→lastChange span.
+// captureEraDevChurn snapshots fe.devLines into any byPath entry that has
+// not recorded its per-dev churn yet. Called from mergeFileEntry on a
+// pre-merge fileEntry, where its single uncaptured byPath entry IS its own
+// era and fe.devLines is exactly that era's per-dev churn. A copy is taken
+// because the caller is about to merge (mutate) fe.devLines. Entries
+// already captured (transferred from an earlier merge in a rename chain)
+// are skipped so their per-era snapshot is not overwritten with summed
+// totals.
+func captureEraDevChurn(fe *fileEntry) {
+	if len(fe.byPath) == 0 {
+		return
+	}
+	for _, pe := range fe.byPath {
+		// devChurn != nil means already captured (this era was a src/dst in
+		// an earlier merge). Capture even when devLines is empty (a
+		// pure-rename era with no authored churn) — the empty non-nil map
+		// MARKS the entry captured, so a later merge can't re-capture it
+		// from the by-then-summed devLines. Skipping the empty case caused
+		// an order-dependent over-count on rename chains.
+		if pe.devChurn != nil {
+			continue
+		}
+		pe.devChurn = make(map[string]int64, len(fe.devLines))
+		for email, n := range fe.devLines {
+			pe.devChurn[email] = n
+		}
+	}
+}
+
 func mergeFileEntry(dst, src *fileEntry) {
+	// Snapshot each side's own-era per-dev churn into its byPath entry
+	// BEFORE the devLines sum below merges them. Each side's not-yet-
+	// captured byPath entry is its own un-merged era, whose per-dev churn
+	// is exactly that side's current devLines; copy it (dst.devLines is
+	// about to be mutated). Already-captured entries (transferred from a
+	// prior merge) are left alone. Only renamed lineages reach here, so the
+	// dev dimension on byPath costs memory only where it changes the answer.
+	captureEraDevChurn(dst)
+	captureEraDevChurn(src)
+
 	dst.commits += src.commits
 	dst.additions += src.additions
 	dst.deletions += src.deletions
@@ -830,6 +875,17 @@ func mergeFileEntry(dst, src *fileEntry) {
 				}
 				for m, c := range srcPE.monthChurn {
 					dstPE.monthChurn[m] += c
+				}
+				// Both sides' devChurn were snapshotted by captureEraDevChurn
+				// above; sum them so a path reused across merged lineages
+				// keeps every era's per-dev churn.
+				if srcPE.devChurn != nil {
+					if dstPE.devChurn == nil {
+						dstPE.devChurn = make(map[string]int64, len(srcPE.devChurn))
+					}
+					for e, c := range srcPE.devChurn {
+						dstPE.devChurn[e] += c
+					}
 				}
 			} else {
 				dst.byPath[p] = srcPE

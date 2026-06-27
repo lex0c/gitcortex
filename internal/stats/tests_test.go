@@ -1,6 +1,10 @@
 package stats
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestClassifyTestRole(t *testing.T) {
 	cfg := NewTestConfig(nil)
@@ -176,6 +180,78 @@ func TestTestRatioOverTime(t *testing.T) {
 	yr := TestRatioOverTime(ds, NewTestConfig(nil), "year")
 	if len(yr) != 1 || yr[0].Period != "2024" || yr[0].SourceChurn != 150 || yr[0].TestChurn != 60 {
 		t.Fatalf("year rollup = %+v, want one 2024 bucket src=150 test=60", yr)
+	}
+}
+
+// End-to-end (load → applyRenames merge → DevProfiles): a developer's
+// per-profile test churn must be split per rename era too. A dev who wrote
+// foo.go (production) before it was renamed to foo_test.go must have that
+// pre-rename churn counted as SOURCE in their profile, not test — devLines
+// is merged under the canonical path, so the split comes from byPath's
+// per-dev churn captured at the merge.
+func TestDevProfileTestChurnSplitsByEra(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_name":"D","author_email":"dev@x","author_date":"2024-01-01T10:00:00Z","additions":100,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"foo.go","path_previous":"foo.go","status":"A","additions":100,"deletions":0}
+{"type":"commit","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","author_name":"D","author_email":"dev@x","author_date":"2024-02-01T10:00:00Z","additions":30,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","path_current":"foo_test.go","path_previous":"foo.go","status":"R090","additions":30,"deletions":0}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git_data.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := LoadJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	profiles := DevProfiles(ds, "dev@x", 0, NewTestConfig(nil))
+	if len(profiles) != 1 {
+		t.Fatalf("want 1 profile, got %d", len(profiles))
+	}
+	p := profiles[0]
+	// Pre-rename foo.go (100) → source; post-rename foo_test.go (30) → test.
+	// Canonical-only classification would report all 130 as test.
+	if p.TestChurn != 30 || p.SourceChurn != 100 {
+		t.Errorf("profile churn: test=%d source=%d, want 30/100 (pre-rename stays source)", p.TestChurn, p.SourceChurn)
+	}
+	if p.TestRatio != 30.0/100.0 {
+		t.Errorf("TestRatio = %v, want 0.3", p.TestRatio)
+	}
+}
+
+// Regression for the per-era capture: a rename CHAIN that includes a
+// pure-rename era (0 churn → empty devLines) must not over-count or become
+// order-dependent. foo.go (+100, source) → bar.go (pure rename, 0) →
+// bar_test.go (+30, test). The per-dev split must reconcile exactly with
+// the repo-level summary (Σ per-dev == repo-level), which a missed capture
+// of the empty era broke.
+func TestDevProfilePureRenameChainNoOvercount(t *testing.T) {
+	jsonl := `{"type":"commit","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","author_name":"D","author_email":"dev@x","author_date":"2024-01-01T10:00:00Z","additions":100,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","path_current":"foo.go","path_previous":"foo.go","status":"A","additions":100,"deletions":0}
+{"type":"commit","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","author_name":"D","author_email":"dev@x","author_date":"2024-02-01T10:00:00Z","additions":0,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","path_current":"bar.go","path_previous":"foo.go","status":"R100","additions":0,"deletions":0}
+{"type":"commit","sha":"cccccccccccccccccccccccccccccccccccccccc","author_name":"D","author_email":"dev@x","author_date":"2024-03-01T10:00:00Z","additions":30,"deletions":0,"files_changed":1}
+{"type":"commit_file","commit":"cccccccccccccccccccccccccccccccccccccccc","path_current":"bar_test.go","path_previous":"bar.go","status":"R090","additions":30,"deletions":0}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git_data.jsonl")
+	if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := LoadJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := DevProfiles(ds, "dev@x", 0, NewTestConfig(nil))[0]
+	if p.TestChurn != 30 || p.SourceChurn != 100 {
+		t.Errorf("profile churn: test=%d source=%d, want 30/100 (no over-count from the pure-rename era)", p.TestChurn, p.SourceChurn)
+	}
+	// Reconciliation invariant: per-dev == repo-level.
+	s := ComputeTestSummary(ds, NewTestConfig(nil), 0)
+	if p.TestChurn != s.TestChurn || p.SourceChurn != s.SourceChurn {
+		t.Errorf("per-dev (%d/%d) != repo-level (%d/%d)", p.TestChurn, p.SourceChurn, s.TestChurn, s.SourceChurn)
 	}
 }
 
