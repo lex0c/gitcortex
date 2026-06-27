@@ -251,6 +251,22 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 	return nil
 }
 
+// resolvedSize returns a pointer to the blob size for hash when the resolver
+// produced one (so a genuine 0-byte blob is preserved), or nil when the hash
+// was not resolved — a null hash, a lookup failure, or blob sizes disabled
+// (sizeMap nil). nil serializes to an omitted field; a non-nil pointer to 0
+// serializes as "...":0, which a --blob-sizes consumer must be able to see.
+func resolvedSize(sizeMap map[string]int64, hash string) *int64 {
+	if sizeMap == nil {
+		return nil
+	}
+	v, ok := sizeMap[hash]
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
 func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[string]int64, devCache map[string]struct{}, ignorePatterns []string) error {
 	// Filter files and recalculate totals
 	var totalAdd, totalDel int64
@@ -321,6 +337,14 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 			deletions = stats.Deletions
 		}
 
+		// Emit a size only for hashes the resolver actually returned. A
+		// hash present in sizeMap carries its true size, which may be 0 for
+		// an empty blob; one absent (null hash, unresolved, or blob sizes
+		// disabled so sizeMap is nil) leaves the field nil → omitted. The
+		// two-value lookup is what keeps a real 0 distinct from "absent".
+		oldSize := resolvedSize(sizeMap, entry.OldHash)
+		newSize := resolvedSize(sizeMap, entry.NewHash)
+
 		if err := writeJSON(writer, model.CommitFileInfo{
 			Type:         model.CommitFileType,
 			Commit:       commit.Meta.SHA,
@@ -329,8 +353,8 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 			Status:       entry.Status,
 			OldHash:      entry.OldHash,
 			NewHash:      entry.NewHash,
-			OldSize:      sizeMap[entry.OldHash],
-			NewSize:      sizeMap[entry.NewHash],
+			OldSize:      oldSize,
+			NewSize:      newSize,
 			Additions:    additions,
 			Deletions:    deletions,
 		}); err != nil {

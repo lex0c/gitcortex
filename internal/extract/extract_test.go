@@ -63,6 +63,27 @@ func TestEmitCommitBlobSizeGating(t *testing.T) {
 	if !strings.Contains(on, `"old_size":1024`) || !strings.Contains(on, `"new_size":2048`) {
 		t.Errorf("enabled path missing sizes:\n%s", on)
 	}
+
+	// Resolved 0 (empty blob) MUST be emitted, not collapsed to "absent".
+	// This is the contract --blob-sizes promises: a 0-byte blob is a real,
+	// distinguishable size. A scalar omitempty int would drop it here.
+	zero := render(map[string]int64{"aaa": 0, "bbb": 2048})
+	if !strings.Contains(zero, `"old_size":0`) {
+		t.Errorf("resolved 0-byte size was dropped (omitempty regression):\n%s", zero)
+	}
+	if !strings.Contains(zero, `"new_size":2048`) {
+		t.Errorf("enabled path missing non-zero size:\n%s", zero)
+	}
+
+	// A hash absent from the map (null hash / unresolved) stays omitted even
+	// when blob sizes are on — "no blob" must not masquerade as a 0-byte one.
+	absent := render(map[string]int64{"bbb": 2048})
+	if strings.Contains(absent, "old_size") {
+		t.Errorf("unresolved hash emitted a size; should be absent:\n%s", absent)
+	}
+	if !strings.Contains(absent, `"new_size":2048`) {
+		t.Errorf("enabled path missing the resolved size:\n%s", absent)
+	}
 }
 
 func TestLoadStateEmpty(t *testing.T) {
