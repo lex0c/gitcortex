@@ -27,6 +27,13 @@ type ReportData struct {
 	Hotspots     []stats.FileStat
 	Directories  []stats.DirStat
 	Extensions   []stats.ExtensionStat
+	TestSummary  stats.TestSummary
+	// TestTrend is the test:source churn ratio by year — compact enough
+	// to render the whole history and robust to the low-volume-month
+	// noise that makes a monthly ratio spike (e.g. 2 source lines in a
+	// month → a meaningless ratio). nil/empty when the repo has no
+	// classifiable code.
+	TestTrend []stats.TestRatioBucket
 	ActivityRaw    []stats.ActivityBucket
 	ActivityYears  []string
 	ActivityGrid   [][]ActivityCell // [year][month 0-11]
@@ -226,7 +233,13 @@ func ComputePareto(ds *stats.Dataset) ParetoData {
 	}
 
 	// Dirs: % of dirs for 80% of churn
+	// DirectoryStats returns dirs sorted by file-touches; the Pareto count
+	// is "fewest dirs reaching 80% of CHURN", so re-sort by churn desc
+	// first (mirrors the Files path above). Without this the cumulative
+	// loop walks file-touches order and over-counts TopChurnDirs, inflating
+	// DirsPct80Churn and biasing the label toward "well distributed".
 	dirs := stats.DirectoryStats(ds, 0)
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Churn > dirs[j].Churn })
 	var totalDirChurn int64
 	for _, d := range dirs {
 		totalDirChurn += d.Churn
@@ -339,6 +352,8 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 	actRaw := stats.ActivityOverTime(ds, "month")
 	actYears, actGrid, maxActCommits := buildActivityGrid(actRaw)
 
+	testCfg := stats.NewTestConfig(sf.TestGlobs)
+
 	now := time.Now().Format("2006-01-02 15:04")
 
 	// Compute label distribution for the Churn Risk chip strip without
@@ -357,6 +372,8 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		Hotspots:             stats.FileHotspots(ds, topN),
 		Directories:          stats.DirectoryStats(ds, topN),
 		Extensions:           stats.ExtensionStats(ds, topN),
+		TestSummary:          stats.ComputeTestSummary(ds, testCfg, topN),
+		TestTrend:            stats.TestRatioOverTime(ds, testCfg, "year"),
 		ActivityRaw:          actRaw,
 		ActivityYears:        actYears,
 		ActivityGrid:         actGrid,
@@ -368,7 +385,7 @@ func Generate(w io.Writer, ds *stats.Dataset, repoName string, topN int, sf stat
 		Patterns:             patterns,
 		TopCommits:           stats.TopCommits(ds, topN),
 		DevNetwork:           stats.DeveloperNetwork(ds, topN, sf.NetworkMinFiles),
-		Profiles:             stats.DevProfiles(ds, "", topN),
+		Profiles:             stats.DevProfiles(ds, "", topN, testCfg),
 		Pareto:               ComputePareto(ds),
 		PatternGrid:          grid,
 		MaxPattern:           maxP,
@@ -496,6 +513,21 @@ var funcMap = template.FuncMap{
 	"humanize":  humanize,
 	"thousands": thousands,
 	"docRef":    docRef,
+	"testShare": testShare,
+}
+
+// testShare renders test churn as a whole-percent of a dev's total
+// (test+source) code churn — "38" meaning 38% of their code work is
+// tests. Returns "0" when the dev touched no classifiable code, so the
+// template never divides by zero. Complements the test:source ratio
+// shown alongside it: the share answers "how much of their work" while
+// the ratio answers "how it compares to the production code they wrote".
+func testShare(test, source int64) string {
+	tot := test + source
+	if tot == 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%.0f", float64(test)/float64(tot)*100)
 }
 
 // docRef returns an anchor link to the Churn Risk / Bus Factor / etc.
@@ -650,8 +682,8 @@ type ProfileReportData struct {
 	Repos []stats.RepoStat
 }
 
-func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string) error {
-	profiles := stats.DevProfiles(ds, email, 0)
+func GenerateProfile(w io.Writer, ds *stats.Dataset, repoName, email string, cfg ...stats.TestConfig) error {
+	profiles := stats.DevProfiles(ds, email, 0, cfg...)
 	if len(profiles) == 0 {
 		return fmt.Errorf("developer %s not found", email)
 	}

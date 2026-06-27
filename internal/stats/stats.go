@@ -184,6 +184,17 @@ func herfindahl(values []int) float64 {
 	if len(values) == 0 {
 		return 0
 	}
+	// Sort ascending so the floating-point Σpᵢ² below accumulates in a
+	// canonical order. Callers build `values` by ranging a map (e.g. a
+	// per-directory file-count map), whose iteration order is randomized;
+	// because float addition is non-associative, that made the result's
+	// low-order bits differ run-to-run (visible as jitter in the JSON
+	// Specialization field, though the %.3f display and label bands were
+	// unaffected). Ascending order also minimizes rounding error. The
+	// integer sum is order-independent; only the float loop needs this.
+	// Sorting in place is safe — `values` is a throwaway slice the caller
+	// does not reuse.
+	sort.Ints(values)
 	var sum int64
 	for _, v := range values {
 		if v < 0 {
@@ -209,6 +220,10 @@ func herfindahl(values []int) float64 {
 type StatsFlags struct {
 	CouplingMinChanges int
 	NetworkMinFiles    int
+	// TestGlobs are extra --test-glob patterns forwarded to the test-stat
+	// classifier so the HTML report's test section matches what
+	// `stats --stat tests --test-glob ...` would show on the CLI.
+	TestGlobs []string
 }
 
 // --- Stats from pre-aggregated Dataset ---
@@ -407,13 +422,24 @@ func DirectoryCount(ds *Dataset) int {
 	return len(dirs)
 }
 
-// ExtensionCount returns the total number of distinct extension
-// buckets ExtensionStats would produce. Same derivation via
-// extractExtension so the count matches what ranking would show.
+// ExtensionCount returns the total number of distinct extension buckets
+// ExtensionStats would produce — the "M" in a "Top N of M" header. It must
+// count buckets the SAME way ExtensionStats does: per-era via fileEntry.byExt
+// (so a rename across extensions, foo.js → foo.ts, contributes BOTH ".js"
+// and ".ts"), falling back to the canonical path's extension only when byExt
+// is nil (hand-built fileEntries). Counting just canonical-path extensions
+// would under-count M on migration-heavy repos and make the header read
+// "Top N of M" with M smaller than the rows actually shown.
 func ExtensionCount(ds *Dataset) int {
 	exts := make(map[string]struct{})
-	for path := range ds.files {
-		exts[extractExtension(path)] = struct{}{}
+	for path, fe := range ds.files {
+		if fe.byExt == nil {
+			exts[extractExtension(path)] = struct{}{}
+			continue
+		}
+		for ext := range fe.byExt {
+			exts[ext] = struct{}{}
+		}
 	}
 	return len(exts)
 }
@@ -1344,6 +1370,16 @@ type DevProfile struct {
 	ScopeHidden      int
 	Extensions       []DevExtContrib
 	ExtensionsHidden int
+	// TestChurn / SourceChurn split this dev's authored line churn by the
+	// role of the file touched (test vs production code); TestRatio is
+	// their test:source — "how much of this person's work is test code",
+	// read the same way as the repo-level Tests section. Files that are
+	// neither (docs/config/vendor/generated) are excluded from both.
+	// TestRatio is 0 when the dev authored no source churn (guarded
+	// division), same convention as TestSummary.
+	TestChurn       int64
+	SourceChurn     int64
+	TestRatio       float64
 	Specialization  float64 // Gini over dir file-count distribution: 0 = broad generalist, 1 = single-dir specialist
 	ContribRatio    float64 // del/add — 0=growth, ~1=rewrite, >1=cleanup
 	ContribType     string  // "growth", "balanced", "refactor"
@@ -1425,7 +1461,17 @@ type DevExtContrib struct {
 // the pre-optimization behaviour — the CLI stats command wants this).
 // filterEmail is the stronger filter: when set, only that one profile
 // is built and n is ignored.
-func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
+func DevProfiles(ds *Dataset, filterEmail string, n int, cfg ...TestConfig) []DevProfile {
+	// Test-detection config is optional (variadic) so the ~25 existing
+	// callers — almost all tests — need no change; the CLI and HTML
+	// report pass a config built from --test-glob so the per-dev test
+	// ratio matches what the Tests section shows. Mirrors the variadic
+	// LoadOptions convention on LoadJSONL.
+	testCfg := NewTestConfig(nil)
+	if len(cfg) > 0 {
+		testCfg = cfg[0]
+	}
+
 	// Determine the target set of emails. Three modes:
 	//   1. filterEmail != ""  → single dev, n is irrelevant
 	//   2. n > 0              → top-N by commits (desc), email asc tiebreak
@@ -1788,6 +1834,7 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			churn int64
 		}
 		extCount := make(map[string]*extAccForDev)
+		var devTestChurn, devSourceChurn int64
 		if files, ok := devFiles[email]; ok {
 			for path, fa := range files {
 				ext := extractExtension(path)
@@ -1798,6 +1845,36 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 				}
 				acc.files++
 				acc.churn += fa.churn
+				// Split the dev's authored churn by role. When the lineage
+				// was renamed across the test/source boundary, devLines (and
+				// thus fa.churn) is merged under the canonical path, so
+				// classify PER ERA using byPath's per-dev churn — mirroring
+				// ComputeTestSummary's eachEra — to keep pre-rename
+				// production churn from being reported as test. Unrenamed
+				// files (byPath nil) classify the canonical path with
+				// fa.churn, which is exact for a single era. RoleOther
+				// contributes to neither.
+				if fe := ds.files[path]; fe != nil && len(fe.byPath) > 0 {
+					for eraPath, pe := range fe.byPath {
+						c := pe.devChurn[email]
+						if c == 0 {
+							continue
+						}
+						switch classifyTestRole(eraPath, testCfg) {
+						case RoleTest:
+							devTestChurn += c
+						case RoleSource:
+							devSourceChurn += c
+						}
+					}
+				} else {
+					switch classifyTestRole(path, testCfg) {
+					case RoleTest:
+						devTestChurn += fa.churn
+					case RoleSource:
+						devSourceChurn += fa.churn
+					}
+				}
 			}
 		}
 		var extensions []DevExtContrib
@@ -1840,11 +1917,17 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 		contribType := "growth"
 		if cs.Additions > 0 {
 			contribRatio = math.Round(float64(cs.Deletions)/float64(cs.Additions)*100) / 100
-		}
-		if contribRatio >= contribRefactorRatio {
+			if contribRatio >= contribRefactorRatio {
+				contribType = "refactor"
+			} else if contribRatio >= contribBalancedRatio {
+				contribType = "balanced"
+			}
+		} else if cs.Deletions > 0 {
+			// Pure deletions (no additions) — del/add is unbounded, which is
+			// the strongest cleanup signal, not "growth". Leave contribRatio
+			// at 0 (an unbounded float can't round-trip through JSON) but
+			// classify as refactor so the label isn't the opposite of reality.
 			contribType = "refactor"
-		} else if contribRatio >= contribBalancedRatio {
-			contribType = "balanced"
 		}
 
 		// Pace
@@ -1887,6 +1970,8 @@ func DevProfiles(ds *Dataset, filterEmail string, n int) []DevProfile {
 			TopCommits: topCommits, TopCommitsHidden: topCommitsHidden,
 			Scope: scope, ScopeHidden: scopeHidden,
 			Extensions: extensions, ExtensionsHidden: extensionsHidden,
+			TestChurn: devTestChurn, SourceChurn: devSourceChurn,
+			TestRatio:      safeRatio(devTestChurn, devSourceChurn),
 			Specialization: specialization,
 			ContribRatio: contribRatio, ContribType: contribType,
 			Pace: pace, Collaborators: collabs, CollaboratorsHidden: collabsHidden,

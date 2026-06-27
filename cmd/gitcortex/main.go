@@ -107,11 +107,24 @@ func isValidGranularity(s string) bool {
 	return false
 }
 
+// testTrendGranularity maps the --granularity flag to the resolution the
+// test-ratio trend can actually deliver. The per-file time series backing
+// it (fileEntry.monthChurn) is monthly, so only "year" rolls up; "day"
+// and "week" have no finer data and collapse to "month". Used purely for
+// the section header so the label doesn't promise a resolution the data
+// can't support.
+func testTrendGranularity(g string) string {
+	if g == "year" {
+		return "year"
+	}
+	return "month"
+}
+
 func isValidStat(s string) bool {
 	switch s {
 	case "summary", "contributors", "hotspots", "directories", "extensions",
 		"activity", "busfactor", "coupling", "churn-risk", "working-patterns",
-		"dev-network", "profile", "top-commits", "pareto", "structure":
+		"dev-network", "profile", "top-commits", "pareto", "structure", "tests":
 		return true
 	}
 	return false
@@ -132,6 +145,7 @@ type statsFlags struct {
 	networkMinFiles    int
 	email              string
 	treeDepth          int
+	testGlobs          []string
 }
 
 func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
@@ -139,7 +153,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.format, "format", "table", "Output format: table, csv, json")
 	cmd.Flags().IntVar(&sf.topN, "top", 10, "Number of top entries to show (0 = all)")
 	cmd.Flags().StringVar(&sf.granularity, "granularity", "month", "Activity granularity: day, week, month, year")
-	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure")
+	cmd.Flags().StringVar(&sf.stat, "stat", "", "Show a specific stat: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure, tests")
 	cmd.Flags().IntVar(&sf.couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis")
 	cmd.Flags().IntVar(&sf.couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results")
 	cmd.Flags().IntVar(&sf.churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (churn-risk)")
@@ -149,6 +163,7 @@ func addStatsFlags(cmd *cobra.Command, sf *statsFlags) {
 	cmd.Flags().StringVar(&sf.from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
 	cmd.Flags().StringVar(&sf.to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
 	cmd.Flags().IntVar(&sf.treeDepth, "tree-depth", 3, "Max depth for --stat structure (0 = unlimited)")
+	cmd.Flags().StringSliceVar(&sf.testGlobs, "test-glob", nil, "Extra glob(s) marking files as tests for --stat tests (repeatable), e.g. testdata/*, *.itest.go")
 }
 
 func validateStatsFlags(sf *statsFlags) error {
@@ -159,7 +174,7 @@ func validateStatsFlags(sf *statsFlags) error {
 		return fmt.Errorf("invalid --granularity %q; must be one of: day, week, month, year", sf.granularity)
 	}
 	if sf.stat != "" && !isValidStat(sf.stat) {
-		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure", sf.stat)
+		return fmt.Errorf("invalid --stat %q; valid: summary, contributors, hotspots, directories, extensions, activity, busfactor, coupling, churn-risk, working-patterns, dev-network, profile, top-commits, pareto, structure, tests", sf.stat)
 	}
 	if sf.since != "" && (sf.from != "" || sf.to != "") {
 		return fmt.Errorf("--since cannot be combined with --from/--to; pick one window spec")
@@ -172,6 +187,9 @@ func validateStatsFlags(sf *statsFlags) error {
 	}
 	if sf.from != "" && sf.to != "" && sf.from > sf.to {
 		return fmt.Errorf("--from (%s) must be on or before --to (%s)", sf.from, sf.to)
+	}
+	if err := stats.ValidateTestGlobs(sf.testGlobs); err != nil {
+		return err
 	}
 	return nil
 }
@@ -302,6 +320,23 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			return err
 		}
 	}
+	if showAll || sf.stat == "tests" {
+		cfg := stats.NewTestConfig(sf.testGlobs)
+		fmt.Fprintln(os.Stderr, "\n=== Test Stats ===")
+		if err := f.PrintTestSummary(stats.ComputeTestSummary(ds, cfg, sf.topN)); err != nil {
+			return err
+		}
+		// The trend is a second table. CSV keeps a single-table contract
+		// (downstream parsers tail one header), so the time series renders
+		// only for the human table format; JSON consumers get it nested
+		// under "tests" via renderStatsJSON.
+		if sf.format != "csv" {
+			fmt.Fprintf(os.Stderr, "\n=== Test Ratio Trend (%s) ===\n", testTrendGranularity(sf.granularity))
+			if err := f.PrintTestTrend(stats.TestRatioOverTime(ds, cfg, sf.granularity)); err != nil {
+				return err
+			}
+		}
+	}
 	if showAll || sf.stat == "activity" {
 		fmt.Fprintf(os.Stderr, "\n=== Activity (%s) ===\n", sf.granularity)
 		if err := f.PrintActivity(stats.ActivityOverTime(ds, sf.granularity)); err != nil {
@@ -344,7 +379,7 @@ func renderStats(ds *stats.Dataset, sf *statsFlags) error {
 			label = sf.email
 		}
 		fmt.Fprintf(os.Stderr, "\n=== Profile: %s ===\n", label)
-		if err := f.PrintProfiles(stats.DevProfiles(ds, sf.email, 0)); err != nil {
+		if err := f.PrintProfiles(stats.DevProfiles(ds, sf.email, 0, stats.NewTestConfig(sf.testGlobs))); err != nil {
 			return err
 		}
 	}
@@ -403,6 +438,13 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	if showAll || sf.stat == "extensions" {
 		report["extensions"] = stats.ExtensionStats(ds, sf.topN)
 	}
+	if showAll || sf.stat == "tests" {
+		cfg := stats.NewTestConfig(sf.testGlobs)
+		report["tests"] = map[string]interface{}{
+			"summary": stats.ComputeTestSummary(ds, cfg, sf.topN),
+			"trend":   stats.TestRatioOverTime(ds, cfg, sf.granularity),
+		}
+	}
 	if showAll || sf.stat == "activity" {
 		report["activity"] = stats.ActivityOverTime(ds, sf.granularity)
 	}
@@ -422,7 +464,7 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 		report["dev_network"] = stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)
 	}
 	if sf.stat == "profile" {
-		report["profiles"] = stats.DevProfiles(ds, sf.email, 0)
+		report["profiles"] = stats.DevProfiles(ds, sf.email, 0, stats.NewTestConfig(sf.testGlobs))
 	}
 	if showAll || sf.stat == "pareto" {
 		report["pareto"] = reportpkg.ComputePareto(ds)
@@ -785,6 +827,7 @@ func reportCmd() *cobra.Command {
 		couplingMinChanges int
 		churnHalfLife      int
 		networkMinFiles    int
+		testGlobs          []string
 	)
 
 	cmd := &cobra.Command{
@@ -807,6 +850,9 @@ func reportCmd() *cobra.Command {
 			}
 			if from != "" && to != "" && from > to {
 				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+			if err := stats.ValidateTestGlobs(testGlobs); err != nil {
+				return err
 			}
 
 			fromDate := from
@@ -837,6 +883,7 @@ func reportCmd() *cobra.Command {
 			sf := stats.StatsFlags{
 				CouplingMinChanges: couplingMinChanges,
 				NetworkMinFiles:    networkMinFiles,
+				TestGlobs:          testGlobs,
 			}
 
 			repoName := strings.TrimSuffix(filepath.Base(input), filepath.Ext(input))
@@ -845,7 +892,7 @@ func reportCmd() *cobra.Command {
 			}
 
 			if email != "" {
-				if err := reportpkg.GenerateProfile(f, ds, repoName, email); err != nil {
+				if err := reportpkg.GenerateProfile(f, ds, repoName, email, stats.NewTestConfig(testGlobs)); err != nil {
 					return fmt.Errorf("generate profile: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(output))
@@ -870,6 +917,7 @@ func reportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&since, "since", "", "Filter to recent period (e.g. 7d, 4w, 3m, 1y)")
 	cmd.Flags().StringVar(&from, "from", "", "Window start date YYYY-MM-DD, inclusive (pair with --to for closed window; leave --to empty for open-ended)")
 	cmd.Flags().StringVar(&to, "to", "", "Window end date YYYY-MM-DD, inclusive (pair with --from; leave --from empty for 'up to this date')")
+	cmd.Flags().StringSliceVar(&testGlobs, "test-glob", nil, "Extra glob(s) marking files as tests in the Tests section (repeatable), e.g. testdata/*")
 
 	return cmd
 }
@@ -1146,6 +1194,7 @@ func scanCmd() *cobra.Command {
 		couplingMinChanges int
 		churnHalfLife      int
 		networkMinFiles    int
+		testGlobs          []string
 	)
 
 	cmd := &cobra.Command{
@@ -1170,6 +1219,9 @@ breakdown — handy for showing aggregated work across many repos.`,
 			}
 			if from != "" && to != "" && from > to {
 				return fmt.Errorf("--from (%s) must be on or before --to (%s)", from, to)
+			}
+			if err := stats.ValidateTestGlobs(testGlobs); err != nil {
+				return err
 			}
 			// Report-flag combinations. --report is reserved for the
 			// only case that genuinely consolidates signal across repos
@@ -1250,7 +1302,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 					filepath.Join(result.OutputDir, "manifest.json"))
 			}
 
-			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles}
+			sf := stats.StatsFlags{CouplingMinChanges: couplingMinChanges, NetworkMinFiles: networkMinFiles, TestGlobs: testGlobs}
 			loadOpts := stats.LoadOptions{
 				From:         fromDate,
 				To:           to,
@@ -1277,7 +1329,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 				defer f.Close()
 
 				repoLabel := profileScanLabel(cfg.Roots)
-				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email); err != nil {
+				if err := reportpkg.GenerateProfile(f, ds, repoLabel, email, stats.NewTestConfig(testGlobs)); err != nil {
 					return fmt.Errorf("generate profile report: %w", err)
 				}
 				fmt.Fprintf(os.Stderr, "Profile report for %s written to %s\n", email, fileURL(reportPath))
@@ -1322,6 +1374,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results (consolidated report)")
 	cmd.Flags().IntVar(&churnHalfLife, "churn-half-life", 90, "Half-life in days for churn decay (consolidated report)")
 	cmd.Flags().IntVar(&networkMinFiles, "network-min-files", 5, "Min shared files for dev-network edges (consolidated report)")
+	cmd.Flags().StringSliceVar(&testGlobs, "test-glob", nil, "Extra glob(s) marking files as tests in each repo's Tests section (repeatable), e.g. testdata/*")
 
 	return cmd
 }

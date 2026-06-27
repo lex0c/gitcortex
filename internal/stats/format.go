@@ -202,6 +202,107 @@ func (f *Formatter) PrintExtensions(exts []ExtensionStat) error {
 	}
 }
 
+// ratioCell renders a test:source ratio for display. Returns "n/a" when
+// the denominator is zero (no source files / no source churn) so the
+// table doesn't show a misleading "0.00" that reads as "tests exist but
+// cover nothing" when really there's nothing to cover. CSV gets an empty
+// cell in that case (machine consumers prefer absent to a sentinel).
+func ratioCell(num, den int64, csv bool) string {
+	if den == 0 {
+		if csv {
+			return ""
+		}
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2f", float64(num)/float64(den))
+}
+
+func (f *Formatter) PrintTestSummary(s TestSummary) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(s)
+	case "csv":
+		rows := make([][]string, 0, len(s.ByLanguage)+1)
+		for _, l := range s.ByLanguage {
+			rows = append(rows, []string{
+				l.Ext,
+				fmt.Sprintf("%d", l.TestFiles),
+				fmt.Sprintf("%d", l.SourceFiles),
+				ratioCell(int64(l.TestFiles), int64(l.SourceFiles), true),
+				fmt.Sprintf("%d", l.TestChurn),
+				fmt.Sprintf("%d", l.SourceChurn),
+				ratioCell(l.TestChurn, l.SourceChurn, true),
+			})
+		}
+		// A "(total)" row mirrors the table footer so a piped CSV carries
+		// the overall ratio without the consumer having to re-aggregate.
+		rows = append(rows, []string{
+			"(total)",
+			fmt.Sprintf("%d", s.TestFiles),
+			fmt.Sprintf("%d", s.SourceFiles),
+			ratioCell(int64(s.TestFiles), int64(s.SourceFiles), true),
+			fmt.Sprintf("%d", s.TestChurn),
+			fmt.Sprintf("%d", s.SourceChurn),
+			ratioCell(s.TestChurn, s.SourceChurn, true),
+		})
+		return f.writeCSV([]string{"lang", "test_files", "source_files", "file_ratio", "test_churn", "source_churn", "churn_ratio"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "Test files\t%d\n", s.TestFiles)
+		fmt.Fprintf(tw, "Source files\t%d\n", s.SourceFiles)
+		fmt.Fprintf(tw, "Test:source files\t%s\n", ratioCell(int64(s.TestFiles), int64(s.SourceFiles), false))
+		fmt.Fprintf(tw, "Test churn\t%d\n", s.TestChurn)
+		fmt.Fprintf(tw, "Source churn\t%d\n", s.SourceChurn)
+		fmt.Fprintf(tw, "Test:source churn\t%s\n", ratioCell(s.TestChurn, s.SourceChurn, false))
+		fmt.Fprintf(tw, "Excluded (docs/config/vendor)\t%d\n", s.OtherFiles)
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		if len(s.ByLanguage) == 0 {
+			return nil
+		}
+		fmt.Fprintln(f.w, "\nBy language:")
+		ltw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(ltw, "LANG\tTEST FILES\tSRC FILES\tFILE RATIO\tTEST CHURN\tSRC CHURN\tCHURN RATIO\n")
+		fmt.Fprintf(ltw, "----\t----------\t---------\t----------\t----------\t---------\t-----------\n")
+		for _, l := range s.ByLanguage {
+			fmt.Fprintf(ltw, "%s\t%d\t%d\t%s\t%d\t%d\t%s\n",
+				l.Ext, l.TestFiles, l.SourceFiles,
+				ratioCell(int64(l.TestFiles), int64(l.SourceFiles), false),
+				l.TestChurn, l.SourceChurn,
+				ratioCell(l.TestChurn, l.SourceChurn, false))
+		}
+		return ltw.Flush()
+	}
+}
+
+func (f *Formatter) PrintTestTrend(buckets []TestRatioBucket) error {
+	switch f.format {
+	case "json":
+		return f.writeJSON(buckets)
+	case "csv":
+		rows := make([][]string, len(buckets))
+		for i, b := range buckets {
+			rows[i] = []string{
+				b.Period,
+				fmt.Sprintf("%d", b.TestChurn),
+				fmt.Sprintf("%d", b.SourceChurn),
+				ratioCell(b.TestChurn, b.SourceChurn, true),
+			}
+		}
+		return f.writeCSV([]string{"period", "test_churn", "source_churn", "churn_ratio"}, rows)
+	default:
+		tw := tabwriter.NewWriter(f.w, 0, 4, 2, ' ', 0)
+		fmt.Fprintf(tw, "PERIOD\tTEST CHURN\tSRC CHURN\tCHURN RATIO\n")
+		fmt.Fprintf(tw, "------\t----------\t---------\t-----------\n")
+		for _, b := range buckets {
+			fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
+				b.Period, b.TestChurn, b.SourceChurn, ratioCell(b.TestChurn, b.SourceChurn, false))
+		}
+		return tw.Flush()
+	}
+}
+
 func (f *Formatter) PrintActivity(buckets []ActivityBucket) error {
 	switch f.format {
 	case "json":
@@ -462,9 +563,12 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 				fmt.Sprintf("%d", p.ActiveDays),
 				fmt.Sprintf("%.1f", p.WeekendPct),
 				p.FirstDate, p.LastDate,
+				fmt.Sprintf("%d", p.TestChurn),
+				fmt.Sprintf("%d", p.SourceChurn),
+				ratioCell(p.TestChurn, p.SourceChurn, true),
 			}
 		}
-		return f.writeCSV([]string{"name", "email", "commits", "lines_changed", "files_touched", "active_days", "weekend_pct", "first_date", "last_date"}, rows)
+		return f.writeCSV([]string{"name", "email", "commits", "lines_changed", "files_touched", "active_days", "weekend_pct", "first_date", "last_date", "test_churn", "source_churn", "test_ratio"}, rows)
 	default:
 		for i, p := range profiles {
 			if i > 0 {
@@ -496,6 +600,18 @@ func (f *Formatter) PrintProfiles(profiles []DevProfile) error {
 					fmt.Fprintf(f.w, "  (+%d more)", p.ExtensionsHidden)
 				}
 				fmt.Fprintln(f.w)
+			}
+			if p.TestChurn > 0 || p.SourceChurn > 0 {
+				share := 0.0
+				if tot := p.TestChurn + p.SourceChurn; tot > 0 {
+					share = float64(p.TestChurn) / float64(tot) * 100
+				}
+				ratioStr := "n/a"
+				if p.SourceChurn > 0 {
+					ratioStr = fmt.Sprintf("%.2f", p.TestRatio)
+				}
+				fmt.Fprintf(f.w, "  Tests:         %.0f%% of code churn is tests (test:source %s — %d test / %d src)\n",
+					share, ratioStr, p.TestChurn, p.SourceChurn)
 			}
 			// %.3f (not %.2f): labels are assigned at thresholds 0.15 / 0.35
 			// / 0.7 using the unrounded float. With %.2f a value like

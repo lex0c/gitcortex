@@ -260,6 +260,56 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
 </table>
 {{end}}
 
+{{if or .TestSummary.SourceFiles .TestSummary.TestFiles}}
+<h2>Tests <span style="font-size:13px; color:#656d76; font-weight:normal;">test:source churn {{if .TestSummary.SourceChurn}}{{printf "%.2f" .TestSummary.ChurnRatio}}{{else}}n/a{{end}}</span></h2>
+<p class="hint">A <b>history-based proxy</b> for test investment — files are classified by <b>path convention</b> (e.g. <code>_test.go</code>, <code>*.spec.ts</code>, <code>tests/</code>), not by measuring coverage. Ratios are test-over-<b>source</b>: docs, config, and vendored/generated files are excluded so the denominator is code a test could plausibly cover. · {{docRef "tests"}}</p>
+<table>
+<tr><th>Metric</th><th>Files</th><th>Churn</th></tr>
+<tr><td>Test</td><td>{{thousands .TestSummary.TestFiles}}</td><td>{{thousands .TestSummary.TestChurn}}</td></tr>
+<tr><td>Source</td><td>{{thousands .TestSummary.SourceFiles}}</td><td>{{thousands .TestSummary.SourceChurn}}</td></tr>
+<tr><td><b>Test : Source ratio</b></td><td><b>{{if .TestSummary.SourceFiles}}{{printf "%.2f" .TestSummary.FileRatio}}{{else}}n/a{{end}}</b></td><td><b>{{if .TestSummary.SourceChurn}}{{printf "%.2f" .TestSummary.ChurnRatio}}{{else}}n/a{{end}}</b></td></tr>
+<tr><td>Excluded (docs/config/vendor)</td><td>{{thousands .TestSummary.OtherFiles}}</td><td></td></tr>
+</table>
+
+{{if .TestSummary.ByLanguage}}
+<h3 style="font-size:15px; margin:18px 0 6px;">By language</h3>
+<table>
+<tr><th>Lang</th><th>Test Files</th><th>Src Files</th><th>File Ratio</th><th>Test Churn</th><th>Src Churn</th><th>Churn Ratio</th><th></th></tr>
+{{$maxChurnRatio := 0.0}}{{range .TestSummary.ByLanguage}}{{if gt .ChurnRatio $maxChurnRatio}}{{$maxChurnRatio = .ChurnRatio}}{{end}}{{end}}
+{{range .TestSummary.ByLanguage}}
+<tr>
+  <td class="mono">{{.Ext}}</td>
+  <td>{{thousands .TestFiles}}</td>
+  <td>{{thousands .SourceFiles}}</td>
+  <td>{{if .SourceFiles}}{{printf "%.2f" .FileRatio}}{{else}}n/a{{end}}</td>
+  <td>{{thousands .TestChurn}}</td>
+  <td>{{thousands .SourceChurn}}</td>
+  <td>{{if .SourceChurn}}{{printf "%.2f" .ChurnRatio}}{{else}}n/a{{end}}</td>
+  <td style="width:20%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .ChurnRatio $maxChurnRatio}}%"></div></div></td>
+</tr>
+{{end}}
+</table>
+{{end}}
+
+{{if .TestTrend}}
+<h3 style="font-size:15px; margin:18px 0 6px;">Test ratio over time <span style="font-size:12px; color:#656d76; font-weight:normal;">(by year)</span></h3>
+<p class="hint">Is the codebase getting more or less tested? Yearly resolution smooths the low-volume-month noise that makes a monthly ratio spike.</p>
+<table>
+<tr><th>Year</th><th>Test Churn</th><th>Src Churn</th><th>Churn Ratio</th><th></th></tr>
+{{$maxTrend := 0.0}}{{range .TestTrend}}{{if gt .Ratio $maxTrend}}{{$maxTrend = .Ratio}}{{end}}{{end}}
+{{range .TestTrend}}
+<tr>
+  <td class="mono">{{.Period}}</td>
+  <td>{{thousands .TestChurn}}</td>
+  <td>{{thousands .SourceChurn}}</td>
+  <td>{{if .SourceChurn}}{{printf "%.2f" .Ratio}}{{else}}n/a{{end}}</td>
+  <td style="width:30%"><div class="bar-container"><div class="bar bar-churn" style="width: {{pctFloat .Ratio $maxTrend}}%"></div></div></td>
+</tr>
+{{end}}
+</table>
+{{end}}
+{{end}}
+
 {{if .ChurnRisk}}
 <h2>Churn Risk{{if lt (len .ChurnRisk) .Summary.TotalFiles}} <span style="font-size:13px; color:#656d76; font-weight:normal;">{{thousands (len .ChurnRisk)}} of {{thousands .Summary.TotalFiles}}</span>{{end}}</h2>
 <p class="hint">Files ranked by recent churn. Label classifies context so you can judge action: <b>fading-silo</b> (old code + concentrated + declining) is the urgent alarm; <b>silo</b> suggests knowledge transfer; <b>active-core</b> is young code with a single author (often fine); <b>active</b> is shared healthy work; <b>cold</b> is quiet.{{if (index .ChurnRisk 0).AgePercentile}} <b>Age P__ / Trend P__</b> under the label show where this file sits in the repo's distribution: age P90 means older than 90% of tracked files; trend P10 means declining more sharply than 90%. Classification boundaries are the P75 age and P25 trend of this dataset (see {{docRef "churn-risk"}}).{{end}}</p>
@@ -386,6 +436,11 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
     {{if .Extensions}}
     <span style="color:#656d76;">Extensions</span>
     <span>{{range $i, $e := .Extensions}}{{if $i}}, {{end}}<b>{{$e.Ext}}</b> ({{printf "%.0f" $e.Pct}}%){{end}}{{if gt .ExtensionsHidden 0}} <span style="color:#656d76; font-style:italic;">(+{{.ExtensionsHidden}} more)</span>{{end}}</span>
+    {{end}}
+
+    {{if or .TestChurn .SourceChurn}}
+    <span style="color:#656d76;">Tests</span>
+    <span><b>{{testShare .TestChurn .SourceChurn}}%</b> of code churn <span style="color:#656d76;">(test:source {{if .SourceChurn}}{{printf "%.2f" .TestRatio}}{{else}}n/a{{end}} · {{thousands .TestChurn}} test / {{thousands .SourceChurn}} src)</span></span>
     {{end}}
 
     <span style="color:#656d76;">Specialization</span>

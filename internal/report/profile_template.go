@@ -78,6 +78,9 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; col
   <div class="card"><div class="label">Active Days</div><div class="value" title="{{thousands .Profile.ActiveDays}}">{{humanize .Profile.ActiveDays}}</div></div>
   <div class="card"><div class="label">Pace</div><div class="value">{{printf "%.1f" .Profile.Pace}}</div><div class="detail">commits/active day</div></div>
   <div class="card"><div class="label">Weekend</div><div class="value">{{printf "%.1f" .Profile.WeekendPct}}%</div></div>
+  {{if or .Profile.TestChurn .Profile.SourceChurn}}
+  <div class="card" title="{{thousands .Profile.TestChurn}} test churn / {{thousands .Profile.SourceChurn}} source churn"><div class="label">Tests</div><div class="value">{{testShare .Profile.TestChurn .Profile.SourceChurn}}%</div><div class="detail">of code churn{{if .Profile.SourceChurn}} · test:source {{printf "%.2f" .Profile.TestRatio}}{{end}}</div></div>
+  {{end}}
 </div>
 
 <div style="margin-bottom:16px;">
