@@ -71,19 +71,20 @@ type fileEntry struct {
 	// aggregator falls back to the canonical path's extension when so.
 	byExt map[string]*extContribution
 
-	// byPath splits this file's churn (total + per month) across the
-	// distinct paths it occupied over its lifetime, so a rename that
-	// crosses the test/source boundary (src/foo.go → foo_test.go, or a
-	// move into tests/) keeps per-era ROLE attribution correct after
-	// applyRenames merges the lineage onto one canonical path — otherwise
-	// pre-rename production churn would be counted as test (and the trend
-	// would mislabel old months). Populated at ingest (path-at-commit,
-	// pre-rename) in lockstep with byExt/monthChurn, unioned by
-	// mergeFileEntry, and consumed only by the test-stat functions.
-	// finalizeDataset drops it for files that only ever held one path, so
-	// the common (unrenamed) case carries no extra map and the test stats
-	// fall back to classifying the canonical path with the file totals —
-	// exact for a single era. nil for hand-built fileEntries (tests).
+	// byPath splits this file's churn (total + per month + per dev) across
+	// the distinct paths it occupied over its lifetime, so a rename that
+	// crosses the test/source boundary (src/foo.go → foo_test.go, or a move
+	// into tests/) keeps per-era ROLE attribution correct after applyRenames
+	// merges the lineage onto one canonical path — otherwise pre-rename
+	// production churn would be counted as test (and the trend would mislabel
+	// old months). Built ONLY by applyRenames, and only for entries that
+	// actually merge (renamed lineages), via ensureEra snapshotting each
+	// pre-merge entry's own-era totals. It is deliberately NOT populated at
+	// ingest: doing so allocated a map per file (including the unrenamed
+	// majority and runs that never read test stats), spiking peak heap.
+	// nil for unrenamed files and hand-built fileEntries — the test stats
+	// fall back to the canonical path with the file totals, exact for a
+	// single era. Consumed only by the test-stat functions.
 	byPath map[string]*pathEra
 }
 
@@ -98,10 +99,10 @@ type extContribution struct {
 // churn attributed while the file lived at that path, the per-month
 // breakdown the test-ratio trend needs to place each era in time, and the
 // per-developer churn for that era so the dev profile can split a
-// cross-boundary rename's churn by role per dev. devChurn is captured only
-// during a rename merge (mergeFileEntry) from each era's pre-merge
-// devLines — it is nil for an un-merged (single-era) file, which never
-// needs it (the canonical fallback is exact for one era).
+// cross-boundary rename's churn by role per dev. All three are snapshotted
+// by ensureEra (from applyRenames) for renamed lineages only; an un-merged
+// (single-era) file has no pathEra and uses the canonical fallback, which
+// is exact for one era.
 type pathEra struct {
 	churn      int64
 	monthChurn map[string]int64 // "YYYY-MM" → churn
@@ -480,18 +481,13 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			}
 			ec.churn += cf.Additions + cf.Deletions
 
-			// byPath: attribute this change to the path the file had AT THIS
-			// COMMIT (pre-rename), so the per-era role split survives the
-			// applyRenames merge. Same lifecycle as byExt above.
-			if fe.byPath == nil {
-				fe.byPath = make(map[string]*pathEra)
-			}
-			pe, ok := fe.byPath[path]
-			if !ok {
-				pe = &pathEra{monthChurn: make(map[string]int64)}
-				fe.byPath[path] = pe
-			}
-			pe.churn += cf.Additions + cf.Deletions
+			// byPath (the per-era test-stats split) is NOT built here: doing
+			// so would allocate a map + nested month map for EVERY file —
+			// including the unrenamed majority and runs that never touch test
+			// stats — spiking peak heap during load. Instead applyRenames
+			// builds it only for renamed lineages, from these same per-era
+			// fileEntries before they merge. Unrenamed files keep byPath nil
+			// and the test stats fall back to the canonical path.
 
 			cm := ds.commits[cf.Commit]
 			if cm != nil {
@@ -541,7 +537,6 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 						ec.firstChange = cm.date
 					}
 					fe.monthChurn[commitMonthKey] += cf.Additions + cf.Deletions
-					pe.monthChurn[commitMonthKey] += cf.Additions + cf.Deletions
 				}
 			}
 
@@ -582,17 +577,6 @@ func finalizeDataset(ds *Dataset) {
 	applyRenames(ds)
 	// UniqueFileCount reflects post-merge canonical paths.
 	ds.UniqueFileCount = len(ds.files)
-
-	// Drop byPath for files that only ever held one path: a single era's
-	// role is exactly the canonical path's role, so the test stats can fall
-	// back to the file totals and skip the per-path map. Only renamed
-	// lineages (the minority) keep byPath, so the per-era split costs
-	// memory only where it changes the answer.
-	for _, fe := range ds.files {
-		if len(fe.byPath) <= 1 {
-			fe.byPath = nil
-		}
-	}
 
 	for email, cs := range ds.contributors {
 		cs.ActiveDays = len(ds.contribDays[email])
@@ -714,14 +698,22 @@ func applyRenames(ds *Dataset) {
 		}
 	}
 
-	// Re-key file entries, merging colliders.
+	// Re-key file entries, merging colliders. Only here — for entries that
+	// actually merge (renamed lineages) — do we build byPath, snapshotting
+	// each era's totals before they're summed. newFilePath remembers the
+	// original path of each survivor so its own era can be captured under
+	// that key on the first merge into it.
 	newFiles := make(map[string]*fileEntry, len(ds.files))
+	newFilePath := make(map[string]string, len(ds.files))
 	for path, fe := range ds.files {
 		c := canonical(path)
 		if existing, ok := newFiles[c]; ok {
+			ensureEra(existing, newFilePath[c]) // survivor's own era (once, pre-sum)
+			ensureEra(fe, path)                 // this era being merged in
 			mergeFileEntry(existing, fe)
 		} else {
 			newFiles[c] = fe
+			newFilePath[c] = path
 		}
 	}
 	ds.files = newFiles
@@ -760,48 +752,46 @@ func applyRenames(ds *Dataset) {
 	}
 }
 
-// mergeFileEntry folds src into dst: sums scalars, unions maps, keeps the
-// widest firstChange→lastChange span.
-// captureEraDevChurn snapshots fe.devLines into any byPath entry that has
-// not recorded its per-dev churn yet. Called from mergeFileEntry on a
-// pre-merge fileEntry, where its single uncaptured byPath entry IS its own
-// era and fe.devLines is exactly that era's per-dev churn. A copy is taken
-// because the caller is about to merge (mutate) fe.devLines. Entries
-// already captured (transferred from an earlier merge in a rename chain)
-// are skipped so their per-era snapshot is not overwritten with summed
-// totals.
-func captureEraDevChurn(fe *fileEntry) {
-	if len(fe.byPath) == 0 {
+// ensureEra records fe's current totals as the path-era for `path` in
+// fe.byPath, so a renamed lineage keeps its per-era churn/month/dev split.
+// applyRenames calls it for both the surviving entry (under its original
+// path) and each entry merged into it, BEFORE the merge sums fe's totals —
+// so the snapshot is that era's own contribution, not a running sum. The
+// presence of fe.byPath[path] marks it captured: a second merge into the
+// same survivor skips re-capturing its (now summed) totals. Maps are copied
+// because fe's are about to be mutated/discarded. Called only for renamed
+// lineages, so the per-era cost is paid only where it changes the answer —
+// the unrenamed majority never allocate byPath.
+func ensureEra(fe *fileEntry, path string) {
+	if fe.byPath == nil {
+		fe.byPath = make(map[string]*pathEra)
+	}
+	if _, ok := fe.byPath[path]; ok {
 		return
 	}
-	for _, pe := range fe.byPath {
-		// devChurn != nil means already captured (this era was a src/dst in
-		// an earlier merge). Capture even when devLines is empty (a
-		// pure-rename era with no authored churn) — the empty non-nil map
-		// MARKS the entry captured, so a later merge can't re-capture it
-		// from the by-then-summed devLines. Skipping the empty case caused
-		// an order-dependent over-count on rename chains.
-		if pe.devChurn != nil {
-			continue
+	pe := &pathEra{churn: fe.additions + fe.deletions}
+	if len(fe.monthChurn) > 0 {
+		pe.monthChurn = make(map[string]int64, len(fe.monthChurn))
+		for m, c := range fe.monthChurn {
+			pe.monthChurn[m] = c
 		}
+	}
+	if len(fe.devLines) > 0 {
 		pe.devChurn = make(map[string]int64, len(fe.devLines))
 		for email, n := range fe.devLines {
 			pe.devChurn[email] = n
 		}
 	}
+	fe.byPath[path] = pe
 }
 
-func mergeFileEntry(dst, src *fileEntry) {
-	// Snapshot each side's own-era per-dev churn into its byPath entry
-	// BEFORE the devLines sum below merges them. Each side's not-yet-
-	// captured byPath entry is its own un-merged era, whose per-dev churn
-	// is exactly that side's current devLines; copy it (dst.devLines is
-	// about to be mutated). Already-captured entries (transferred from a
-	// prior merge) are left alone. Only renamed lineages reach here, so the
-	// dev dimension on byPath costs memory only where it changes the answer.
-	captureEraDevChurn(dst)
-	captureEraDevChurn(src)
+// mergeFileEntry folds src into dst: sums scalars, unions maps, keeps the
+// widest firstChange→lastChange span.
 
+func mergeFileEntry(dst, src *fileEntry) {
+	// byPath eras for both sides are snapshotted by ensureEra (in
+	// applyRenames) before this call, so the union below just transfers
+	// src's eras onto dst.
 	dst.commits += src.commits
 	dst.additions += src.additions
 	dst.deletions += src.deletions
