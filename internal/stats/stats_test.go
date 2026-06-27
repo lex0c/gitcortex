@@ -2644,6 +2644,40 @@ func TestHerfindahlHelper(t *testing.T) {
 	}
 }
 
+// herfindahl must be invariant to input order: callers build `values` by
+// ranging a map (randomized order), and because float Σpᵢ² is
+// non-associative, an unsorted sum made the Specialization field jitter
+// run-to-run. The internal sort makes the result deterministic.
+func TestHerfindahlOrderInvariant(t *testing.T) {
+	// One dominant share plus many tiny ones — the case most sensitive to
+	// summation order in floating point.
+	base := []int{1000000}
+	for i := 0; i < 200; i++ {
+		base = append(base, 1)
+	}
+	cp := func() []int { return append([]int(nil), base...) }
+
+	forward := herfindahl(cp())
+
+	rev := cp()
+	for i, j := 0, len(rev)-1; i < j; i, j = i+1, j-1 {
+		rev[i], rev[j] = rev[j], rev[i]
+	}
+	reversed := herfindahl(rev)
+
+	// A deterministic permutation (stride coprime with len → bijection).
+	src := cp()
+	perm := make([]int, len(src))
+	for i := range perm {
+		perm[i] = src[(i*7)%len(src)]
+	}
+	permuted := herfindahl(perm)
+
+	if forward != reversed || forward != permuted {
+		t.Errorf("herfindahl not order-invariant: forward=%v reversed=%v permuted=%v", forward, reversed, permuted)
+	}
+}
+
 func TestPrintProfilesTopCommitsShortSHA(t *testing.T) {
 	// Regression: the Top commits block used to slice tc.SHA[:12]
 	// unconditionally, which panics when the dataset carries short

@@ -184,6 +184,17 @@ func herfindahl(values []int) float64 {
 	if len(values) == 0 {
 		return 0
 	}
+	// Sort ascending so the floating-point Σpᵢ² below accumulates in a
+	// canonical order. Callers build `values` by ranging a map (e.g. a
+	// per-directory file-count map), whose iteration order is randomized;
+	// because float addition is non-associative, that made the result's
+	// low-order bits differ run-to-run (visible as jitter in the JSON
+	// Specialization field, though the %.3f display and label bands were
+	// unaffected). Ascending order also minimizes rounding error. The
+	// integer sum is order-independent; only the float loop needs this.
+	// Sorting in place is safe — `values` is a throwaway slice the caller
+	// does not reuse.
+	sort.Ints(values)
 	var sum int64
 	for _, v := range values {
 		if v < 0 {
