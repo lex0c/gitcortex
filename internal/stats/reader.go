@@ -70,6 +70,21 @@ type fileEntry struct {
 	// ExtensionStats. nil for hand-built fileEntries in tests — the
 	// aggregator falls back to the canonical path's extension when so.
 	byExt map[string]*extContribution
+
+	// byPath splits this file's churn (total + per month) across the
+	// distinct paths it occupied over its lifetime, so a rename that
+	// crosses the test/source boundary (src/foo.go → foo_test.go, or a
+	// move into tests/) keeps per-era ROLE attribution correct after
+	// applyRenames merges the lineage onto one canonical path — otherwise
+	// pre-rename production churn would be counted as test (and the trend
+	// would mislabel old months). Populated at ingest (path-at-commit,
+	// pre-rename) in lockstep with byExt/monthChurn, unioned by
+	// mergeFileEntry, and consumed only by the test-stat functions.
+	// finalizeDataset drops it for files that only ever held one path, so
+	// the common (unrenamed) case carries no extra map and the test stats
+	// fall back to classifying the canonical path with the file totals —
+	// exact for a single era. nil for hand-built fileEntries (tests).
+	byPath map[string]*pathEra
 }
 
 type extContribution struct {
@@ -77,6 +92,31 @@ type extContribution struct {
 	recentChurn float64
 	firstChange time.Time
 	lastChange  time.Time
+}
+
+// pathEra is one path's contribution to a file lineage (see byPath): the
+// churn attributed while the file lived at that path, plus the per-month
+// breakdown the test-ratio trend needs to place each era in time.
+type pathEra struct {
+	churn      int64
+	monthChurn map[string]int64 // "YYYY-MM" → churn
+}
+
+// eachEra invokes f once per (path, churn, monthChurn) era of the file so
+// callers can attribute role per era. A renamed lineage iterates its
+// byPath entries (the distinct pre-merge paths it held); an unrenamed file
+// (byPath dropped in finalizeDataset) yields a single era for its
+// canonical path with the file totals. canonical is the file's ds.files
+// key. Used by the test-stat functions to keep a cross-boundary rename
+// from mislabeling pre-rename history.
+func (fe *fileEntry) eachEra(canonical string, f func(path string, churn int64, monthChurn map[string]int64)) {
+	if len(fe.byPath) == 0 {
+		f(canonical, fe.additions+fe.deletions, fe.monthChurn)
+		return
+	}
+	for p, pe := range fe.byPath {
+		f(p, pe.churn, pe.monthChurn)
+	}
 }
 
 type filePair struct{ a, b string }
@@ -434,6 +474,19 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 			}
 			ec.churn += cf.Additions + cf.Deletions
 
+			// byPath: attribute this change to the path the file had AT THIS
+			// COMMIT (pre-rename), so the per-era role split survives the
+			// applyRenames merge. Same lifecycle as byExt above.
+			if fe.byPath == nil {
+				fe.byPath = make(map[string]*pathEra)
+			}
+			pe, ok := fe.byPath[path]
+			if !ok {
+				pe = &pathEra{monthChurn: make(map[string]int64)}
+				fe.byPath[path] = pe
+			}
+			pe.churn += cf.Additions + cf.Deletions
+
 			cm := ds.commits[cf.Commit]
 			if cm != nil {
 				// Only record a devLines entry when the change actually
@@ -482,6 +535,7 @@ func streamLoadInto(ds *Dataset, r io.Reader, opt LoadOptions, pathPrefix string
 						ec.firstChange = cm.date
 					}
 					fe.monthChurn[commitMonthKey] += cf.Additions + cf.Deletions
+					pe.monthChurn[commitMonthKey] += cf.Additions + cf.Deletions
 				}
 			}
 
@@ -522,6 +576,17 @@ func finalizeDataset(ds *Dataset) {
 	applyRenames(ds)
 	// UniqueFileCount reflects post-merge canonical paths.
 	ds.UniqueFileCount = len(ds.files)
+
+	// Drop byPath for files that only ever held one path: a single era's
+	// role is exactly the canonical path's role, so the test stats can fall
+	// back to the file totals and skip the per-path map. Only renamed
+	// lineages (the minority) keep byPath, so the per-era split costs
+	// memory only where it changes the answer.
+	for _, fe := range ds.files {
+		if len(fe.byPath) <= 1 {
+			fe.byPath = nil
+		}
+	}
 
 	for email, cs := range ds.contributors {
 		cs.ActiveDays = len(ds.contribDays[email])
@@ -746,6 +811,28 @@ func mergeFileEntry(dst, src *fileEntry) {
 				}
 			} else {
 				dst.byExt[ext] = srcEC
+			}
+		}
+	}
+
+	// byPath: union per-path eras. A rename gives src and dst distinct path
+	// keys, so this is normally a pointer transfer; the same-key branch
+	// (a path reused across a merged lineage) sums defensively.
+	if src.byPath != nil {
+		if dst.byPath == nil {
+			dst.byPath = make(map[string]*pathEra, len(src.byPath))
+		}
+		for p, srcPE := range src.byPath {
+			if dstPE, ok := dst.byPath[p]; ok {
+				dstPE.churn += srcPE.churn
+				if dstPE.monthChurn == nil {
+					dstPE.monthChurn = make(map[string]int64, len(srcPE.monthChurn))
+				}
+				for m, c := range srcPE.monthChurn {
+					dstPE.monthChurn[m] += c
+				}
+			} else {
+				dst.byPath[p] = srcPE
 			}
 		}
 	}

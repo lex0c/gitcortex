@@ -179,6 +179,44 @@ func TestTestRatioOverTime(t *testing.T) {
 	}
 }
 
+// A file renamed across the test/source boundary (src/foo.go → foo_test.go)
+// must attribute pre-rename churn to source and post-rename churn to test,
+// not classify its whole history by the final (test) name. Exercised via
+// byPath, which the loader populates for renamed lineages.
+func TestRenameAcrossTestBoundary(t *testing.T) {
+	ds := &Dataset{files: map[string]*fileEntry{
+		// Canonical (final) path is a test file, but the lineage was
+		// production code for most of its life.
+		"foo_test.go": {byPath: map[string]*pathEra{
+			"foo.go":      {churn: 100, monthChurn: map[string]int64{"2024-01": 100}},
+			"foo_test.go": {churn: 30, monthChurn: map[string]int64{"2024-06": 30}},
+		}},
+		"bar.go": {additions: 50, monthChurn: map[string]int64{"2024-03": 50}}, // unrenamed → fallback
+	}}
+
+	s := ComputeTestSummary(ds, NewTestConfig(nil), 0)
+	// Pre-rename 100 stays SOURCE; only the 30 post-rename is test.
+	if s.TestChurn != 30 || s.SourceChurn != 150 {
+		t.Errorf("churn: test=%d source=%d, want 30/150 (pre-rename 100 must stay source)", s.TestChurn, s.SourceChurn)
+	}
+	// The renamed lineage counts as both a test file and a source file.
+	if s.TestFiles != 1 || s.SourceFiles != 2 {
+		t.Errorf("files: test=%d source=%d, want 1/2", s.TestFiles, s.SourceFiles)
+	}
+
+	tr := TestRatioOverTime(ds, NewTestConfig(nil), "month")
+	got := map[string]TestRatioBucket{}
+	for _, b := range tr {
+		got[b.Period] = b
+	}
+	if b := got["2024-01"]; b.SourceChurn != 100 || b.TestChurn != 0 {
+		t.Errorf("2024-01 = %+v, want source=100 test=0 (pre-rename month must be source)", b)
+	}
+	if b := got["2024-06"]; b.TestChurn != 30 || b.SourceChurn != 0 {
+		t.Errorf("2024-06 = %+v, want test=30 source=0", b)
+	}
+}
+
 // --test-glob overrides count their matches as tests unconditionally,
 // even when the path is data the built-in rules would call "other".
 func TestTestConfigExtraGlobs(t *testing.T) {

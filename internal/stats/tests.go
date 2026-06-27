@@ -348,12 +348,14 @@ func safeRatio(num, den int64) float64 {
 	return float64(num) / float64(den)
 }
 
-// ComputeTestSummary classifies every tracked file once and aggregates
-// the test/source ratio overall and per language. Churn is whole-file
-// (additions+deletions) attributed to the file's canonical path; unlike
-// ExtensionStats it does not split a rename-across-extensions lineage,
-// because a file is wholly a test or wholly source — the per-era split
-// would not change which side of the ratio it lands on.
+// ComputeTestSummary aggregates the test/source ratio overall and per
+// language. Churn is attributed PER ERA via fileEntry.eachEra: when a file
+// was renamed across the test/source boundary (src/foo.go → foo_test.go),
+// each era's churn is classified by the path it held at the time, so
+// pre-rename production churn is not miscounted as test. A lineage is
+// counted once per role it ever held — and once per (ext, role) in the
+// language breakdown — matching ExtensionStats' "once per bucket"; a
+// lineage that was only ever RoleOther counts toward OtherFiles.
 //
 // langTop bounds the ByLanguage slice (0 = all), ranking languages by
 // combined test+source churn so the busiest languages surface first.
@@ -374,21 +376,51 @@ func ComputeTestSummary(ds *Dataset, cfg TestConfig, langTop int) TestSummary {
 
 	var s TestSummary
 	for path, fe := range ds.files {
-		churn := fe.additions + fe.deletions
-		switch classifyTestRole(path, cfg) {
-		case RoleTest:
+		var hadTest, hadSource bool
+		// seen dedups per-(ext,role) file counts within a multi-era lineage
+		// so one renamed file isn't counted twice in a language bucket;
+		// only allocated for the rare multi-path case.
+		var seen map[string]bool
+		if fe.byPath != nil {
+			seen = make(map[string]bool, len(fe.byPath))
+		}
+		fe.eachEra(path, func(p string, churn int64, _ map[string]int64) {
+			role := classifyTestRole(p, cfg)
+			if role == RoleOther {
+				return
+			}
+			ext := extractExtension(p)
+			la := getLang(ext)
+			if role == RoleTest {
+				s.TestChurn += churn
+				la.testChurn += churn
+				hadTest = true
+			} else {
+				s.SourceChurn += churn
+				la.sourceChurn += churn
+				hadSource = true
+			}
+			// Per-language file count, deduped within the lineage.
+			if seen != nil {
+				k := ext + "\x00" + string(role)
+				if seen[k] {
+					return
+				}
+				seen[k] = true
+			}
+			if role == RoleTest {
+				la.testFiles++
+			} else {
+				la.sourceFiles++
+			}
+		})
+		if hadTest {
 			s.TestFiles++
-			s.TestChurn += churn
-			la := getLang(extractExtension(path))
-			la.testFiles++
-			la.testChurn += churn
-		case RoleSource:
+		}
+		if hadSource {
 			s.SourceFiles++
-			s.SourceChurn += churn
-			la := getLang(extractExtension(path))
-			la.sourceFiles++
-			la.sourceChurn += churn
-		default:
+		}
+		if !hadTest && !hadSource {
 			s.OtherFiles++
 		}
 	}
@@ -429,10 +461,14 @@ type TestRatioBucket struct {
 // life of the repo — "is this codebase getting more or less tested?".
 //
 // Resolution is monthly because the only per-file time series retained on
-// the Dataset is fileEntry.monthChurn (keyed "YYYY-MM"). granularity
+// the Dataset is the per-month churn (keyed "YYYY-MM"). granularity
 // "year" rolls months up to "YYYY"; "month" passes through; finer values
 // ("day"/"week") have no backing data and fall back to monthly buckets.
-// RoleOther files are skipped so the denominator matches ComputeTestSummary.
+// RoleOther eras are skipped so the denominator matches ComputeTestSummary.
+// Churn is split PER ERA (fileEntry.eachEra), so a file renamed across the
+// test/source boundary contributes its pre-rename months to its old role
+// and post-rename months to its new role, rather than labeling all of
+// history by the final name.
 func TestRatioOverTime(ds *Dataset, cfg TestConfig, granularity string) []TestRatioBucket {
 	type acc struct{ test, source int64 }
 	buckets := map[string]*acc{}
@@ -445,23 +481,25 @@ func TestRatioOverTime(ds *Dataset, cfg TestConfig, granularity string) []TestRa
 	}
 
 	for path, fe := range ds.files {
-		role := classifyTestRole(path, cfg)
-		if role == RoleOther {
-			continue
-		}
-		for month, churn := range fe.monthChurn {
-			k := periodKey(month)
-			b, ok := buckets[k]
-			if !ok {
-				b = &acc{}
-				buckets[k] = b
+		fe.eachEra(path, func(p string, _ int64, monthChurn map[string]int64) {
+			role := classifyTestRole(p, cfg)
+			if role == RoleOther {
+				return
 			}
-			if role == RoleTest {
-				b.test += churn
-			} else {
-				b.source += churn
+			for month, churn := range monthChurn {
+				k := periodKey(month)
+				b, ok := buckets[k]
+				if !ok {
+					b = &acc{}
+					buckets[k] = b
+				}
+				if role == RoleTest {
+					b.test += churn
+				} else {
+					b.source += churn
+				}
 			}
-		}
+		})
 	}
 
 	keys := make([]string, 0, len(buckets))
