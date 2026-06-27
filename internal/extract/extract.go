@@ -35,6 +35,13 @@ type Config struct {
 	FirstParent      bool
 	Mailmap          bool
 	IgnorePatterns   []string
+	// BlobSizes, when true, resolves per-blob byte sizes via
+	// `git cat-file --batch-check` and emits them as old_size/new_size.
+	// It is off by default: the lookup dominates extract wall time
+	// (the process blocks on the cat-file pipe) and no gitcortex stat
+	// consumes the sizes. Enable only when an external consumer of the
+	// JSONL needs blob sizes.
+	BlobSizes bool
 }
 
 type State struct {
@@ -164,11 +171,18 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 		}
 	}()
 
-	resolver, err := git.NewBlobSizeResolver(ctx, cfg.Repo)
-	if err != nil {
-		return fmt.Errorf("start blob resolver: %w", err)
+	// Blob-size resolution is opt-in: it is the dominant cost of extract
+	// (cat-file pipe round-trips) and nothing in the analysis path reads
+	// the resulting sizes. When disabled, resolver stays nil and the
+	// per-commit Resolve call is skipped entirely.
+	var resolver *git.BlobSizeResolver
+	if cfg.BlobSizes {
+		resolver, err = git.NewBlobSizeResolver(ctx, cfg.Repo)
+		if err != nil {
+			return fmt.Errorf("start blob resolver: %w", err)
+		}
+		defer resolver.Close()
 	}
-	defer resolver.Close()
 
 	checkpointInterval := cfg.BatchSize
 	if checkpointInterval <= 0 {
@@ -194,10 +208,13 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 			break
 		}
 
-		sizeMap, err := resolver.Resolve(commit.Raw)
-		if err != nil {
-			log.Printf("warning: blob sizes failed for %s: %v", commit.Meta.SHA, err)
-			sizeMap = map[string]int64{}
+		var sizeMap map[string]int64
+		if resolver != nil {
+			sizeMap, err = resolver.Resolve(commit.Raw)
+			if err != nil {
+				log.Printf("warning: blob sizes failed for %s: %v", commit.Meta.SHA, err)
+				sizeMap = map[string]int64{}
+			}
 		}
 
 		if err := emitCommit(writer, commit, sizeMap, devCache, cfg.IgnorePatterns); err != nil {
@@ -232,6 +249,22 @@ func streamExtract(ctx context.Context, cfg Config, initialState State, writer *
 	log.Printf("done; processed %d commits in %s", processedCount-initialState.CommitOffset, elapsed.Round(time.Millisecond))
 
 	return nil
+}
+
+// resolvedSize returns a pointer to the blob size for hash when the resolver
+// produced one (so a genuine 0-byte blob is preserved), or nil when the hash
+// was not resolved — a null hash, a lookup failure, or blob sizes disabled
+// (sizeMap nil). nil serializes to an omitted field; a non-nil pointer to 0
+// serializes as "...":0, which a --blob-sizes consumer must be able to see.
+func resolvedSize(sizeMap map[string]int64, hash string) *int64 {
+	if sizeMap == nil {
+		return nil
+	}
+	v, ok := sizeMap[hash]
+	if !ok {
+		return nil
+	}
+	return &v
 }
 
 func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[string]int64, devCache map[string]struct{}, ignorePatterns []string) error {
@@ -304,6 +337,14 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 			deletions = stats.Deletions
 		}
 
+		// Emit a size only for hashes the resolver actually returned. A
+		// hash present in sizeMap carries its true size, which may be 0 for
+		// an empty blob; one absent (null hash, unresolved, or blob sizes
+		// disabled so sizeMap is nil) leaves the field nil → omitted. The
+		// two-value lookup is what keeps a real 0 distinct from "absent".
+		oldSize := resolvedSize(sizeMap, entry.OldHash)
+		newSize := resolvedSize(sizeMap, entry.NewHash)
+
 		if err := writeJSON(writer, model.CommitFileInfo{
 			Type:         model.CommitFileType,
 			Commit:       commit.Meta.SHA,
@@ -312,8 +353,8 @@ func emitCommit(writer *bufio.Writer, commit *git.StreamCommit, sizeMap map[stri
 			Status:       entry.Status,
 			OldHash:      entry.OldHash,
 			NewHash:      entry.NewHash,
-			OldSize:      sizeMap[entry.OldHash],
-			NewSize:      sizeMap[entry.NewHash],
+			OldSize:      oldSize,
+			NewSize:      newSize,
 			Additions:    additions,
 			Deletions:    deletions,
 		}); err != nil {

@@ -32,8 +32,13 @@ type CommitFileInfo struct {
 	Status       string `json:"status"`
 	OldHash      string `json:"old_hash"`
 	NewHash      string `json:"new_hash"`
-	OldSize      int64  `json:"old_size"`
-	NewSize      int64  `json:"new_size"`
+	// OldSize/NewSize are pointers so the JSON can distinguish three
+	// states: absent (nil → not resolved, e.g. blob sizes disabled or a
+	// null hash) vs. a resolved value, which may legitimately be 0 for an
+	// empty blob. A scalar int64 with omitempty would collapse a real
+	// 0-byte size into "absent", breaking the --blob-sizes contract.
+	OldSize      *int64 `json:"old_size,omitempty"`
+	NewSize      *int64 `json:"new_size,omitempty"`
 	Additions    int64  `json:"additions"`
 	Deletions    int64  `json:"deletions"`
 }

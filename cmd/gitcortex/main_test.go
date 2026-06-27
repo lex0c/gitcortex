@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,86 @@ import (
 	"github.com/lex0c/gitcortex/internal/scan"
 	"github.com/lex0c/gitcortex/internal/stats"
 )
+
+// renderStatsJSON fans the (showAll) stats across goroutines and writes them
+// into a shared map under a mutex. This guards that path two ways that the
+// rest of the suite did not cover: (1) run under `go test -race` it trips the
+// detector on any unsynchronized access; (2) running it repeatedly and
+// asserting byte-identical output catches a dropped/racy map write that would
+// silently omit a stat or reorder bytes. encoding/json sorts map keys, so a
+// correct parallel run is deterministic — any diff here is a real defect.
+func TestRenderStatsJSON_ParallelDeterministicAndComplete(t *testing.T) {
+	// Non-trivial fixture: 4 commits, 2 devs, 3 files, with a.go/b.go
+	// co-changing twice (coupling edge) and alice/bob sharing files
+	// (dev-network edge) so every showAll stat produces real output.
+	fixture := strings.Join([]string{
+		`{"type":"dev","dev_id":"d1","name":"Alice","email":"alice@x.com"}`,
+		`{"type":"dev","dev_id":"d2","name":"Bob","email":"bob@x.com"}`,
+		`{"type":"commit","sha":"c1","author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-01T10:00:00Z","additions":15,"deletions":0,"files_changed":2}`,
+		`{"type":"commit_file","commit":"c1","path_current":"a.go","path_previous":"a.go","status":"M","additions":10,"deletions":0}`,
+		`{"type":"commit_file","commit":"c1","path_current":"b.go","path_previous":"b.go","status":"M","additions":5,"deletions":0}`,
+		`{"type":"commit","sha":"c2","author_name":"Bob","author_email":"bob@x.com","author_date":"2024-01-02T10:00:00Z","additions":11,"deletions":1,"files_changed":2}`,
+		`{"type":"commit_file","commit":"c2","path_current":"a.go","path_previous":"a.go","status":"M","additions":3,"deletions":1}`,
+		`{"type":"commit_file","commit":"c2","path_current":"c.go","path_previous":"c.go","status":"M","additions":8,"deletions":0}`,
+		`{"type":"commit","sha":"c3","author_name":"Alice","author_email":"alice@x.com","author_date":"2024-01-03T10:00:00Z","additions":6,"deletions":3,"files_changed":2}`,
+		`{"type":"commit_file","commit":"c3","path_current":"a.go","path_previous":"a.go","status":"M","additions":2,"deletions":2}`,
+		`{"type":"commit_file","commit":"c3","path_current":"b.go","path_previous":"b.go","status":"M","additions":4,"deletions":1}`,
+		`{"type":"commit","sha":"c4","author_name":"Bob","author_email":"bob@x.com","author_date":"2024-02-01T10:00:00Z","additions":1,"deletions":1,"files_changed":1}`,
+		`{"type":"commit_file","commit":"c4","path_current":"c.go","path_previous":"c.go","status":"M","additions":1,"deletions":1}`,
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fixture.jsonl")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := stats.LoadJSONL(path)
+	if err != nil {
+		t.Fatalf("LoadJSONL: %v", err)
+	}
+
+	sf := &statsFlags{
+		format: "json", topN: 10, granularity: "month", stat: "",
+		couplingMaxFiles: 50, couplingMinChanges: 1, churnHalfLife: 90,
+		networkMinFiles: 1, treeDepth: 3,
+	}
+
+	render := func() string {
+		var buf bytes.Buffer
+		f := stats.NewFormatter(&buf, "json")
+		if err := renderStatsJSON(f, ds, sf); err != nil {
+			t.Fatalf("renderStatsJSON: %v", err)
+		}
+		return buf.String()
+	}
+
+	// Determinism: many runs over the same Dataset must be byte-identical.
+	// A racy map write or lost goroutine result would diverge here, and
+	// -race would flag the access.
+	first := render()
+	for i := 0; i < 12; i++ {
+		if got := render(); got != first {
+			t.Fatalf("run %d diverged from first run — parallel assembly is not deterministic", i)
+		}
+	}
+
+	// Completeness: every showAll stat must be present. A dropped parallel
+	// write would silently omit one — this asserts the full inventory landed.
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(first), &out); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	want := []string{
+		"summary", "contributors", "hotspots", "directories", "extensions",
+		"tests", "activity", "busfactor", "coupling", "churn_risk",
+		"working_patterns", "dev_network", "pareto", "top_commits",
+	}
+	for _, k := range want {
+		if _, ok := out[k]; !ok {
+			t.Errorf("showAll output missing key %q (parallel write dropped?)", k)
+		}
+	}
+}
 
 // scanCmd must validate --since BEFORE running the discovery walk
 // and extract pool. Without the early check, an obvious typo like

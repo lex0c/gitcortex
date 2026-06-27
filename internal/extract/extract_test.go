@@ -1,10 +1,90 @@
 package extract
 
 import (
+	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/lex0c/gitcortex/internal/git"
 )
+
+// emitCommit drives the blob-size gating: when the resolver is disabled the
+// caller passes a nil sizeMap, and old_size/new_size must be absent from the
+// JSONL (omitempty), not emitted as ":0". When sizes are supplied they must
+// appear. A regression here would either resurrect the per-line dead bytes or
+// drop sizes that --blob-sizes promised.
+func TestEmitCommitBlobSizeGating(t *testing.T) {
+	commit := &git.StreamCommit{
+		Meta: git.CommitMeta{
+			SHA:         "abc123",
+			AuthorName:  "Alice",
+			AuthorEmail: "alice@example.com",
+			AuthorDate:  "2024-01-01T00:00:00Z",
+		},
+		Raw: []git.RawEntry{{
+			Status:  "M",
+			OldHash: "aaa",
+			NewHash: "bbb",
+			PathOld: "src/main.go",
+			PathNew: "src/main.go",
+		}},
+		Numstats: map[string]git.NumstatEntry{
+			"src/main.go": {Additions: 10, Deletions: 3},
+		},
+	}
+
+	render := func(sizeMap map[string]int64) string {
+		var buf bytes.Buffer
+		w := bufio.NewWriter(&buf)
+		if err := emitCommit(w, commit, sizeMap, map[string]struct{}{}, nil); err != nil {
+			t.Fatalf("emitCommit: %v", err)
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		return buf.String()
+	}
+
+	// Disabled (nil map): no size fields at all.
+	off := render(nil)
+	if strings.Contains(off, "old_size") || strings.Contains(off, "new_size") {
+		t.Errorf("disabled path emitted size fields:\n%s", off)
+	}
+	// Sanity: the file record (and its churn) is still present.
+	if !strings.Contains(off, `"path_current":"src/main.go"`) || !strings.Contains(off, `"additions":10`) {
+		t.Errorf("disabled path dropped non-size file data:\n%s", off)
+	}
+
+	// Enabled: sizes flow through.
+	on := render(map[string]int64{"aaa": 1024, "bbb": 2048})
+	if !strings.Contains(on, `"old_size":1024`) || !strings.Contains(on, `"new_size":2048`) {
+		t.Errorf("enabled path missing sizes:\n%s", on)
+	}
+
+	// Resolved 0 (empty blob) MUST be emitted, not collapsed to "absent".
+	// This is the contract --blob-sizes promises: a 0-byte blob is a real,
+	// distinguishable size. A scalar omitempty int would drop it here.
+	zero := render(map[string]int64{"aaa": 0, "bbb": 2048})
+	if !strings.Contains(zero, `"old_size":0`) {
+		t.Errorf("resolved 0-byte size was dropped (omitempty regression):\n%s", zero)
+	}
+	if !strings.Contains(zero, `"new_size":2048`) {
+		t.Errorf("enabled path missing non-zero size:\n%s", zero)
+	}
+
+	// A hash absent from the map (null hash / unresolved) stays omitted even
+	// when blob sizes are on — "no blob" must not masquerade as a 0-byte one.
+	absent := render(map[string]int64{"bbb": 2048})
+	if strings.Contains(absent, "old_size") {
+		t.Errorf("unresolved hash emitted a size; should be absent:\n%s", absent)
+	}
+	if !strings.Contains(absent, `"new_size":2048`) {
+		t.Errorf("enabled path missing the resolved size:\n%s", absent)
+	}
+}
 
 func TestLoadStateEmpty(t *testing.T) {
 	s, err := LoadState("/nonexistent/path", -1, "")

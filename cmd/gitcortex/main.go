@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -84,6 +85,7 @@ func extractCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.CommandTimeout, "command-timeout", extract.DefaultCommandTimeout, "Maximum duration for git commands")
 	cmd.Flags().BoolVar(&cfg.FirstParent, "first-parent", false, "Restrict to first-parent chain")
 	cmd.Flags().BoolVar(&cfg.Mailmap, "mailmap", false, "Use .mailmap to normalize author/committer identities")
+	cmd.Flags().BoolVar(&cfg.BlobSizes, "blob-sizes", false, "Resolve per-blob byte sizes via cat-file (off by default; dominates extract time and is unused by stats)")
 	cmd.Flags().StringSliceVar(&cfg.IgnorePatterns, "ignore", nil, "Glob patterns to exclude files (e.g. package-lock.json, *.min.js)")
 
 	return cmd
@@ -423,58 +425,82 @@ func renderStatsJSON(f *stats.Formatter, ds *stats.Dataset, sf *statsFlags) erro
 	showAll := sf.stat == ""
 	report := make(map[string]interface{})
 
+	// Each selected stat is an independent pure read over the immutable
+	// Dataset, so compute them concurrently and guard only the brief map
+	// write. In the common showAll path this fans ~13 passes across cores
+	// instead of running serially. JSON output is unaffected: encoding/json
+	// sorts map keys, so completion order doesn't change the bytes.
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	put := func(key string, compute func() interface{}) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v := compute()
+			mu.Lock()
+			report[key] = v
+			mu.Unlock()
+		}()
+	}
+
 	if showAll || sf.stat == "summary" {
-		report["summary"] = stats.ComputeSummary(ds)
+		put("summary", func() interface{} { return stats.ComputeSummary(ds) })
 	}
 	if showAll || sf.stat == "contributors" {
-		report["contributors"] = stats.TopContributors(ds, sf.topN)
+		put("contributors", func() interface{} { return stats.TopContributors(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "hotspots" {
-		report["hotspots"] = stats.FileHotspots(ds, sf.topN)
+		put("hotspots", func() interface{} { return stats.FileHotspots(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "directories" {
-		report["directories"] = stats.DirectoryStats(ds, sf.topN)
+		put("directories", func() interface{} { return stats.DirectoryStats(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "extensions" {
-		report["extensions"] = stats.ExtensionStats(ds, sf.topN)
+		put("extensions", func() interface{} { return stats.ExtensionStats(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "tests" {
-		cfg := stats.NewTestConfig(sf.testGlobs)
-		report["tests"] = map[string]interface{}{
-			"summary": stats.ComputeTestSummary(ds, cfg, sf.topN),
-			"trend":   stats.TestRatioOverTime(ds, cfg, sf.granularity),
-		}
+		put("tests", func() interface{} {
+			cfg := stats.NewTestConfig(sf.testGlobs)
+			return map[string]interface{}{
+				"summary": stats.ComputeTestSummary(ds, cfg, sf.topN),
+				"trend":   stats.TestRatioOverTime(ds, cfg, sf.granularity),
+			}
+		})
 	}
 	if showAll || sf.stat == "activity" {
-		report["activity"] = stats.ActivityOverTime(ds, sf.granularity)
+		put("activity", func() interface{} { return stats.ActivityOverTime(ds, sf.granularity) })
 	}
 	if showAll || sf.stat == "busfactor" {
-		report["busfactor"] = stats.BusFactor(ds, sf.topN)
+		put("busfactor", func() interface{} { return stats.BusFactor(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "coupling" {
-		report["coupling"] = stats.FileCoupling(ds, sf.topN, sf.couplingMinChanges)
+		put("coupling", func() interface{} { return stats.FileCoupling(ds, sf.topN, sf.couplingMinChanges) })
 	}
 	if showAll || sf.stat == "churn-risk" {
-		report["churn_risk"] = stats.ChurnRisk(ds, sf.topN)
+		put("churn_risk", func() interface{} { return stats.ChurnRisk(ds, sf.topN) })
 	}
 	if showAll || sf.stat == "working-patterns" {
-		report["working_patterns"] = stats.WorkingPatterns(ds)
+		put("working_patterns", func() interface{} { return stats.WorkingPatterns(ds) })
 	}
 	if showAll || sf.stat == "dev-network" {
-		report["dev_network"] = stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles)
+		put("dev_network", func() interface{} { return stats.DeveloperNetwork(ds, sf.topN, sf.networkMinFiles) })
 	}
 	if sf.stat == "profile" {
-		report["profiles"] = stats.DevProfiles(ds, sf.email, 0, stats.NewTestConfig(sf.testGlobs))
+		put("profiles", func() interface{} { return stats.DevProfiles(ds, sf.email, 0, stats.NewTestConfig(sf.testGlobs)) })
 	}
 	if showAll || sf.stat == "pareto" {
-		report["pareto"] = reportpkg.ComputePareto(ds)
+		put("pareto", func() interface{} { return reportpkg.ComputePareto(ds) })
 	}
 	if showAll || sf.stat == "top-commits" {
-		report["top_commits"] = stats.TopCommits(ds, sf.topN)
+		put("top_commits", func() interface{} { return stats.TopCommits(ds, sf.topN) })
 	}
 	if sf.stat == "structure" {
-		report["structure"] = reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth)
+		put("structure", func() interface{} { return reportpkg.BuildRepoTree(stats.FileHotspots(ds, 0), sf.treeDepth) })
 	}
+
+	wg.Wait()
 
 	return f.PrintReport(report)
 }
@@ -1190,6 +1216,7 @@ func scanCmd() *cobra.Command {
 		mailmap            bool
 		firstParent        bool
 		includeMessages    bool
+		blobSizes          bool
 		couplingMaxFiles   int
 		couplingMinChanges int
 		churnHalfLife      int
@@ -1272,6 +1299,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 					CommandTimeout:  extract.DefaultCommandTimeout,
 					FirstParent:     firstParent,
 					Mailmap:         mailmap,
+					BlobSizes:       blobSizes,
 					IgnorePatterns:  extractIgnore,
 					StartOffset:     -1,
 				},
@@ -1369,6 +1397,7 @@ breakdown — handy for showing aggregated work across many repos.`,
 	cmd.Flags().IntVar(&batchSize, "batch-size", 1000, "Per-repo extract checkpoint interval")
 	cmd.Flags().BoolVar(&mailmap, "mailmap", false, "Use .mailmap (per repo) to normalize identities")
 	cmd.Flags().BoolVar(&firstParent, "first-parent", false, "Restrict extracts to the first-parent chain")
+	cmd.Flags().BoolVar(&blobSizes, "blob-sizes", false, "Resolve per-blob byte sizes via cat-file (off by default; dominates extract time and is unused by stats)")
 	cmd.Flags().BoolVar(&includeMessages, "include-commit-messages", false, "Include commit messages in JSONL (needed for Top Commits in the consolidated report)")
 	cmd.Flags().IntVar(&couplingMaxFiles, "coupling-max-files", 50, "Max files per commit for coupling analysis (consolidated report)")
 	cmd.Flags().IntVar(&couplingMinChanges, "coupling-min-changes", 5, "Min co-changes for coupling results (consolidated report)")

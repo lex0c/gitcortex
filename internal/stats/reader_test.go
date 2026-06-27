@@ -1,11 +1,78 @@
 package stats
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lex0c/gitcortex/internal/model"
 )
+
+// peekType must agree with a full unmarshal on the discriminator for every
+// line our own marshaller emits (the fast path), and must signal ok=false
+// for anything it can't read cheaply so the caller falls back to a real
+// parse. A disagreement here would silently misroute records during load.
+func TestPeekType(t *testing.T) {
+	// Marshal a real record of each type so the fixtures match the exact
+	// bytes the extractor writes (Type is the first field, so "type" leads).
+	marshal := func(v interface{}) []byte {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
+	}
+	cases := []struct {
+		name string
+		line []byte
+		want string
+	}{
+		{"commit", marshal(model.CommitInfo{Type: model.CommitType, SHA: "abc"}), model.CommitType},
+		{"commit_file", marshal(model.CommitFileInfo{Type: model.CommitFileType, Commit: "abc"}), model.CommitFileType},
+		{"commit_parent", marshal(model.CommitParentInfo{Type: model.CommitParentType, SHA: "abc"}), model.CommitParentType},
+		{"dev", marshal(model.DevInfo{Type: model.DevType, Email: "a@b.c"}), model.DevType},
+	}
+	for _, c := range cases {
+		got, ok := peekType(c.line)
+		if !ok {
+			t.Errorf("%s: fast path missed (would fall back, defeating the optimization): %s", c.name, c.line)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("%s: peekType = %q, want %q", c.name, got, c.want)
+		}
+		// Cross-check against the authoritative full parse.
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(c.line, &probe); err != nil {
+			t.Fatalf("%s: control unmarshal: %v", c.name, err)
+		}
+		if got != probe.Type {
+			t.Errorf("%s: peekType %q disagrees with unmarshal %q", c.name, got, probe.Type)
+		}
+	}
+}
+
+// Lines that don't fit the fast shape must return ok=false (never a wrong
+// type) so the caller's json.Unmarshal fallback handles them.
+func TestPeekTypeFallback(t *testing.T) {
+	fallbacks := []string{
+		`{"sha":"abc","type":"commit"}`, // type not first → fast path declines
+		`{ "type":"commit"}`,            // leading space before key
+		`{"type": "commit"}`,            // space after colon
+		`not json at all`,
+		``,
+		`{"other":"x"}`, // no type key at all
+	}
+	for _, line := range fallbacks {
+		if _, ok := peekType([]byte(line)); ok {
+			t.Errorf("expected fast-path decline (ok=false) for %q", line)
+		}
+	}
+}
 
 func TestTruncateMessage(t *testing.T) {
 	short := "fix: one-line subject"

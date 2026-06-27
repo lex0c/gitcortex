@@ -43,6 +43,30 @@ func loadFixture(t *testing.T) *stats.Dataset {
 	return ds
 }
 
+// Generate runs ~18 independent stat passes concurrently and assembles them
+// into ReportData in fixed order. Under `go test -race` this trips the
+// detector on any unsynchronized access to the Dataset; asserting byte-
+// identical HTML across many runs (modulo the wall-clock stamp) catches a
+// racy or order-dependent result that would make the report nondeterministic.
+func TestGenerate_ParallelDeterministic(t *testing.T) {
+	ds := loadFixture(t)
+	stamp := regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}`)
+	render := func() string {
+		var buf bytes.Buffer
+		if err := Generate(&buf, ds, "testrepo", 10, stats.StatsFlags{CouplingMinChanges: 1, NetworkMinFiles: 1}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		// The GeneratedAt timestamp is the only legitimately varying byte.
+		return stamp.ReplaceAllString(buf.String(), "STAMP")
+	}
+	first := render()
+	for i := 0; i < 12; i++ {
+		if got := render(); got != first {
+			t.Fatalf("run %d diverged — parallel report assembly is not deterministic", i)
+		}
+	}
+}
+
 func TestGenerate_SmokeRender(t *testing.T) {
 	ds := loadFixture(t)
 	var buf bytes.Buffer

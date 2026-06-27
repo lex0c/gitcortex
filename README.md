@@ -6,17 +6,17 @@
 
 See [`docs/PERF.md`](docs/PERF.md) for extended benchmarks.
 
-Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken with a pre-built v2.11.0 binary on a single NVMe-SSD machine (not a controlled lab benchmark; directional, not absolute). `stats`/`report` now include the test-to-source ratio section, so they do slightly more work than pre-v2.11 figures.
+Benchmarked on open-source repositories. `extract` reads bare clones; `stats` and `report` read the resulting JSONL. Measurements taken on a single NVMe-SSD machine with a development build after v2.11.0 — blob-size resolution is now opt-in (`--blob-sizes`), and `stats`/`report` fan their independent metric passes across CPU cores (12 here). Not a controlled lab benchmark — directional, not absolute; `extract` is I/O-bound and carries ~10% run-to-run variance.
 
 | Repository | Commits | Devs | Extract | Stats (JSON) | Report (HTML) | JSONL size |
 |------------|---------|------|---------|-------------|--------------|------------|
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 0.9s | 0.21s | 0.23s | 23K lines / 6.4 MB |
-| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 24s | 1.1s | 1.2s | 95K lines / 29 MB |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 46s | 3.0s | 3.2s | 298K lines / 96 MB |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 1m 58s | 11.1s | 12.0s | 943K lines / 313 MB |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 11m 34s | 1m 24s | 1m 29s | 6.1M lines / 1.9 GB |
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 281 | 0.9s | 0.11s | 0.14s | 23K lines / 6.2 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 19 | 20s | 0.6s | 0.6s | 95K lines / 27 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 131 | 40s | 1.6s | 1.8s | 298K lines / 90 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 5,295 | 1m 51s | 8.1s | 8.5s | 943K lines / 295 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 38,832 | 12m 46s | 47.6s | 48.8s | 6.1M lines / 1.74 GB |
 
-`extract`, `stats`, and `report` scale roughly linearly with dataset size. The per-dev collaborator map in `report` is pre-computed in a single pass over files (O(F × D_per_file²)); on the kubernetes snapshot that adds ~2 seconds over `stats`, on linux ~40 seconds. A previous implementation computed this nested inside the per-dev loop (O(D × F × D_per_file)) and was 6× slower on kubernetes and 11× slower on linux. If you only need the aggregate data, `stats --format json` is always the fastest path; reach for `report` when you actually want the HTML dashboard.
+`extract`, `stats`, and `report` scale roughly linearly with dataset size. Since the post-v2.11.0 work, `stats` and `report` run their independent metric passes concurrently across cores — on this 12-core machine that cut their wall time ~30–49% versus v2.11.0 (e.g. WordPress report 3.2s → 1.8s, Linux 1m29s → 49s) and brings the two within a few percent of each other (`report` does a little more — repo tree, dev network — but it overlaps the other passes). `extract` is unchanged within run-to-run variance: it's bound by the `git log` stream, not the now-optional blob-size lookup. `stats --format json` is the leanest path when you only need aggregate data; reach for `report` when you want the HTML dashboard.
 
 ## Privacy and reliability
 
@@ -107,11 +107,13 @@ The `--mailmap` flag uses git's built-in `.mailmap` support to unify developer i
 
 ### What gitcortex collects from git
 
-Extraction runs two git commands against the local repository and streams their output. No source-code bytes are read.
+Extraction runs one git command against the local repository by default (a
+second only when `--blob-sizes` is set) and streams the output. No source-code
+bytes are read.
 
 ```
 git log -M --raw --numstat --format=<metadata> <branch>    → commits, parents, per-file diffs (counts only)
-git cat-file --batch-check                                 → blob sizes (old/new) for each file change
+git cat-file --batch-check   (only with --blob-sizes)      → blob sizes (old/new) for each file change
 ```
 
 Per-commit metadata (populates the `commit` record):
@@ -130,7 +132,8 @@ Per-file-change metadata (populates the `commit_file` record):
 |---|---|---|
 | `path_current`, `path_previous`, `status` | `git log --raw` | hotspots, directories, extensions, rename tracking (`R100` / `C075` trigger merges) |
 | `additions`, `deletions` | `git log --numstat` | per-file churn, recent churn, coupling |
-| `old_hash`, `new_hash`, `old_size`, `new_size` | `git cat-file --batch-check` | retained but not currently used in stats |
+| `old_hash`, `new_hash` | `git log --raw` | emitted but not consumed by any stat |
+| `old_size`, `new_size` | `git cat-file --batch-check` (opt-in: `--blob-sizes`) | blob byte sizes; **off by default** (the lookup dominated extract time and no stat reads them), so absent from the JSONL unless `--blob-sizes` is passed |
 
 **Not collected:**
 - File contents / diff hunks — only line counts from `--numstat`.
@@ -143,6 +146,7 @@ Per-file-change metadata (populates the `commit_file` record):
 - `--mailmap` — normalizes author/committer names+emails via git's `.mailmap` before recording (off by default; warned when a `.mailmap` exists but the flag is omitted).
 - `--ignore <glob>` — drops matching `commit_file` records entirely at extract time (counts in the `commit` record are recomputed so totals remain consistent).
 - `--first-parent` — traverses only the first-parent chain, skipping merged branch history.
+- `--blob-sizes` — resolves per-blob byte sizes via `git cat-file --batch-check` and emits `old_size`/`new_size` (off by default). The lookup is the bulk of any cat-file cost and no gitcortex stat consumes the sizes, so enable this only when an external consumer of the JSONL needs them.
 
 Full per-record schema (every field, types, enums): see [`docs/RUNBOOK.md`](docs/RUNBOOK.md#jsonl-format).
 
@@ -151,7 +155,7 @@ Output is a JSONL file with one record per line. Four record types:
 ```jsonl
 {"type":"commit","sha":"abc...","tree":"def...","parents":["ghi..."],"author_name":"Alice","author_email":"alice@example.com","author_date":"2024-01-15T10:30:00Z","committer_name":"Alice","committer_email":"alice@example.com","committer_date":"2024-01-15T10:30:00Z","message":"","additions":42,"deletions":7,"files_changed":3}
 {"type":"commit_parent","sha":"abc...","parent_sha":"ghi..."}
-{"type":"commit_file","commit":"abc...","path_current":"src/main.go","path_previous":"src/main.go","status":"M","old_hash":"111...","new_hash":"222...","old_size":1024,"new_size":1087,"additions":10,"deletions":3}
+{"type":"commit_file","commit":"abc...","path_current":"src/main.go","path_previous":"src/main.go","status":"M","old_hash":"111...","new_hash":"222...","additions":10,"deletions":3}
 {"type":"dev","dev_id":"sha256hash...","name":"Alice","email":"alice@example.com"}
 ```
 
@@ -534,12 +538,13 @@ internal/
 
 ### Extraction pipeline
 
-Two long-running git processes for the entire extraction, regardless of repository size:
+One long-running git process for the entire extraction (a second only with
+`--blob-sizes`), regardless of repository size:
 
 ```
 git log --raw --numstat -M --- single stream ---- parse ---- emit JSONL
                                                     |
-git cat-file --batch-check -- long-running ---- resolve blob sizes
+git cat-file --batch-check -- long-running ---- resolve blob sizes  (only with --blob-sizes)
 ```
 
 ### Stats pipeline

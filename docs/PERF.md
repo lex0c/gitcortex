@@ -1,33 +1,68 @@
 # Performance
 
 How `gitcortex` scales across repositories. All measurements below were
-taken on NVMe SSD with the **v2.11.0** binary (LRU blob cache enabled)
-and `--batch-size 1000` (default). The full pipeline (extract → stats →
-report) was timed on each repo in isolation, one repo at a time, so the
-numbers are not skewed by concurrent load. `stats`/`report` since v2.11.0
-also compute the test-to-source ratio section, so they do slightly more
-work than the earlier (v2.3.0) figures these tables replace.
+taken on NVMe SSD with a **development build following v2.11.0** and
+`--batch-size 1000` (default), on a 12-core machine. The full pipeline
+(extract → stats → report) was timed on each repo in isolation, one repo
+at a time, so the numbers are not skewed by concurrent load.
+
+Two changes since v2.11.0 reshape these tables:
+
+- **Blob-size resolution is now opt-in** (`--blob-sizes`). The default
+  extract no longer runs `git cat-file --batch-check`, and the JSONL no
+  longer carries `old_size`/`new_size` — so files are a few percent
+  smaller. Extract wall time is unchanged within run-to-run variance (the
+  `git log` stream dominates, not the blob lookup — see "What drives
+  extract time").
+- **`stats` and `report` parallelize.** Their independent metric passes
+  now run concurrently across cores, and the load path parses each JSONL
+  line once instead of twice. Together these cut `stats`/`report` wall
+  time ~30–49% versus v2.11.0 on this machine.
+
+`extract` is I/O-bound and carries roughly ±10% run-to-run variance;
+treat its figures as directional. `stats`/`report` also include the
+test-to-source ratio section introduced in v2.11.0.
 
 ## Extract benchmarks
 
 Six repositories spanning four orders of magnitude in commit count,
-extracted end-to-end (git log stream, blob size resolution, JSONL
-emission, checkpointing) then analyzed (`stats --format json`, `report`).
-None use `--ignore` filters. Chromium is carried over from the v2.3.0
-run (the repo was not available for this round) for the extreme-scale /
-OOM reference; its filtered extract used the `--ignore` set in footnote †.
+extracted end-to-end (git log stream, JSONL emission, checkpointing;
+blob-size resolution off by default) then analyzed (`stats --format
+json`, `report`). None use `--ignore` filters. Chromium is carried over
+from the v2.3.0 run (the repo was not available for this round) for the
+extreme-scale / OOM reference; its filtered extract used the `--ignore`
+set in footnote †.
 
 | Repository | Commits | Bare size | Extract | Stats (JSON) | Report (HTML) | JSONL |
 |---|---|---|---|---|---|---|
-| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.1s** | 0.01s | 0.02s | 803 lines / 244 KB |
-| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 9.8 MB | **0.9s** | 0.21s | 0.23s | 23k lines / 6.4 MB |
-| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **23.8s** | 1.12s | 1.24s | 95k lines / 29 MB |
-| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **46.4s** | 2.96s | 3.23s | 298k lines / 96 MB |
-| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **1m 58.1s** | 11.1s | 12.0s | 943k lines / 313 MB |
-| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **11m 34.3s** | 1m 23.7s | 1m 29.2s | 6.1M lines / 1.9 GB |
+| [gitcortex](https://github.com/lex0c/gitcortex) (self) | 189 | 620 KB | **0.1s** | 0.01s | 0.02s | 803 lines / 231 KB |
+| [Pi-hole](https://github.com/pi-hole/pi-hole) | 7,077 | 9.8 MB | **0.9s** | 0.11s | 0.14s | 23k lines / 6.2 MB |
+| [Praat](https://github.com/praat/praat) | 10,221 | 490 MB | **20.1s** | 0.57s | 0.64s | 95k lines / 27 MB |
+| [WordPress](https://github.com/WordPress/WordPress) | 52,466 | 629 MB | **40.3s** | 1.58s | 1.76s | 298k lines / 90 MB |
+| [Kubernetes](https://github.com/kubernetes/kubernetes) | 137,016 | 1.3 GB | **1m 50.6s** | 8.07s | 8.47s | 943k lines / 295 MB |
+| [Linux kernel](https://github.com/torvalds/linux) | 1,438,634 | 6.3 GB | **12m 45.6s** | 47.6s | 48.8s | 6.1M lines / 1.74 GB |
 | [Chromium](https://chromium.googlesource.com/chromium/src) †◇ | 1,738,421 | 61 GB | **1h 55m 52s** | OOM ‡ | OOM ‡ | 12.3M lines / 4.4 GB |
 
-◇ Chromium figures are from the v2.3.0 run, not re-measured this round.
+◇ Chromium figures are from the v2.3.0 run (with blob sizes on, the
+default at the time), not re-measured this round.
+
+**`stats`/`report` vs v2.11.0** (same machine, same repos) — the
+parallelization + single-parse load:
+
+| Repository | Stats v2.11.0 → now | Report v2.11.0 → now |
+|---|---|---|
+| Pi-hole | 0.21s → **0.11s** (−48%) | 0.23s → **0.14s** (−39%) |
+| Praat | 1.12s → **0.57s** (−49%) | 1.24s → **0.64s** (−48%) |
+| WordPress | 2.96s → **1.58s** (−47%) | 3.23s → **1.76s** (−46%) |
+| Kubernetes | 11.1s → **8.07s** (−27%) | 12.0s → **8.47s** (−29%) |
+| Linux | 1m 23.7s → **47.6s** (−43%) | 1m 29.2s → **48.8s** (−45%) |
+
+The win is largest on mid-size repos where compute dominates; on
+Kubernetes and Linux the single-threaded JSONL load (one big file) is a
+growing share of the total and Amdahl-caps the gain — parallelizing that
+load is the next lever. Extract rows are within ±10% run-to-run variance
+of v2.11.0 (most came out faster here, Linux slower — all noise; the
+default no longer does any blob lookup, so no extract work was added).
 
 † Chromium was extracted with `--ignore 'third_party/*' --ignore 'out/*'
 --ignore 'node_modules/*' --ignore '*.min.js' --ignore '*.min.css'
@@ -52,10 +87,10 @@ per second** — normalizing by actual work rather than commit count:
 | Repository | Records/sec (avg) |
 |---|---|
 | Pi-hole | ~25,600 |
-| Linux kernel | ~8,750 |
-| Kubernetes | ~7,990 |
-| WordPress | ~6,425 |
-| Praat | ~3,990 |
+| Kubernetes | ~8,530 |
+| Linux kernel | ~7,940 |
+| WordPress | ~7,400 |
+| Praat | ~4,720 |
 | Chromium | ~1,775 ◇ |
 | gitcortex (self) | noisy † |
 
@@ -65,31 +100,42 @@ extract table because it's useful to see the tool exercising itself —
 the dogfood benchmark. ◇ Chromium carried from v2.3.0.
 
 Small repos benefit from the entire working set fitting in OS page
-cache. Linux (6 GB) and Kubernetes (1.3 GB) mostly fit. Chromium
-(61 GB bare) exceeds most workstations' available cache, so
-`cat-file --batch-check` lookups land on SSD more often than not —
-hence the 4× drop in records/sec vs. Linux.
+cache. Linux (6 GB) and Kubernetes (1.3 GB) mostly fit. The carried-over
+Chromium figure (61 GB bare, measured before blob sizes went opt-in)
+exceeds most workstations' available cache, so its `cat-file
+--batch-check` lookups landed on SSD more often than not — part of the 4×
+drop in records/sec vs. Linux. The current default skips that lookup
+entirely, so a re-measured Chromium would close some of that gap; the
+`git log` stream over 61 GB of packfiles remains the floor.
 
 ## What drives extract time
 
-Extract is an I/O-bound pipeline with three stages:
+Extract is dominated by a single stage: the **`git log -M --raw
+--numstat`** stream. Git computes a rename-detected diff for every commit
+server-side and streams the result; gitcortex parses it newest-first and
+emits JSONL. The packfile reads are sequential and cheap on SSD (200+
+MB/s), but git's own diff + rename-detection work over the full history
+is the real cost — it shows up as *git's* CPU while gitcortex sits at 5–10%
+blocking on the log pipe. **JSONL emission** is buffered writes,
+negligible by comparison.
 
-1. **`git log --raw --numstat`** streams commit history newest-first.
-   Sequential read of packfiles, cheap on SSD (typically 200+ MB/s
-   reading rate from the filesystem).
-2. **`cat-file --batch-check`** resolves blob sizes. For each unique
-   hash in each commit, gitcortex writes a hash to stdin and reads
-   back a `<hash> blob <size>` line. Each lookup triggers a small
-   random read into the packfile index plus the object header.
-3. **JSONL emission** is buffered writes, negligible relative to
-   the two above.
+Blob-size resolution via **`git cat-file --batch-check`** (opt-in since
+the post-v2.11.0 build) is a *minor* component, not the bottleneck.
+Measured on WordPress, same machine, back to back:
 
-CPU usage stays between 5% and 10% across all runs — the process
-blocks on the `cat-file` pipe the vast majority of wall time. The
-LRU blob cache (v2.3.0) removes redundant pipe round-trips when the
-same hash appears across consecutive commits, which is the common
-case: a file unchanged across N commits would otherwise be queried
-N times.
+| WordPress extract | wall time | JSONL |
+|---|---|---|
+| default (cat-file off) | 44.2s | 90 MB |
+| `--blob-sizes` (cat-file on) | 42.9s | 96 MB |
+
+The two are within run-to-run variance — the cat-file run was even
+slightly *faster* (warmer cache, ran second). An earlier version of this
+doc claimed extract "blocks on the cat-file pipe the vast majority of
+wall time"; that did not hold up. Disabling cat-file did not materially
+change wall time, because the LRU blob cache (below) already removed
+almost all of its pipe round-trips. With the default now skipping the
+lookup outright, the JSONL is a few percent smaller and one subprocess is
+gone — but extract speed is set by `git log`, not blob resolution.
 
 ## Chromium rate trajectory
 
@@ -121,18 +167,21 @@ its modern counterpart.
 
 ## LRU blob cache (v2.3.0)
 
-The v2.3.0 resolver adds a 50,000-entry LRU of `hash → blob size`.
-Git content-addresses blobs, so `hash → size` is a pure function,
-making the cache provably safe — extract output is byte-identical
-with or without it, only faster.
+Relevant only with `--blob-sizes` (since the post-v2.11.0 build the
+resolver is off by default). When enabled, the resolver carries a
+50,000-entry LRU of `hash → blob size`. Git content-addresses blobs, so
+`hash → size` is a pure function, making the cache provably safe —
+extract output is byte-identical with or without it, only faster.
 
-Measured impact on WordPress (52k commits, warm packfiles, SSD):
-**50.0s → 46.3s wall time (-7.4%)**. The cache removes pipe
-round-trips for blobs that persist across consecutive commits
-(the common case: most files change rarely).
+Measured impact back when blob resolution was the default — WordPress
+(52k commits, warm packfiles, SSD): **50.0s → 46.3s wall time (-7.4%)**.
+The cache removes pipe round-trips for blobs that persist across
+consecutive commits (the common case: most files change rarely). This is
+also *why* disabling cat-file outright now saves so little: the cache had
+already eliminated most of its cost.
 
-Memory cost: ~7 MB for the 50k-entry cache regardless of repository
-size.
+Memory cost: ~7 MB for the 50k-entry cache, and only when `--blob-sizes`
+is passed.
 
 ## Memory limits
 
@@ -166,10 +215,19 @@ Post-v2.3.0 optimizations reduce several hot spots:
   the rename merge, not per file at ingest** — so the unrenamed majority
   (and runs that never read test stats) allocate nothing extra. The
   test-to-source section itself adds modest CPU to `stats`/`report`.
+- **(post-v2.11.0) Single-parse JSONL load** — each line is type-detected
+  from its prefix and unmarshalled once instead of twice, roughly halving
+  the load phase's transient allocations and CPU. This is a throughput
+  win, not a peak-RSS one: peak is still set by the retained `Dataset`.
+- **(post-v2.11.0) Parallel `stats`/`report` compute** — the independent
+  metric passes run concurrently. They were already all held in memory at
+  once before rendering, so concurrency does not raise peak RSS; Chromium
+  still OOMs for the same reason (`monthChurn`), just no sooner.
 
-Together these changes made the Linux report finish cleanly (~1m 29s on
-v2.11.0) on a machine where it previously died at 0 bytes. **Chromium
-remains out of reach** for `stats` and `report` on a 15 GB machine.
+Together these changes made the Linux report finish cleanly (~49s now,
+~1m 29s on v2.11.0) on a machine where it previously died at 0 bytes.
+**Chromium remains out of reach** for `stats` and `report` on a 15 GB
+machine.
 The dominant remaining hog is `fileEntry.monthChurn` — a per-month
 activity map on every file, used only to compute the trend dimension
 of the Churn Risk classification. Scaling `O(files × months_active)`,
@@ -191,17 +249,25 @@ hundred MB of `Dataset` in memory. Chromium is the exception.
 ## Practical guidance
 
 - **Filter aggressively with `--ignore`.** Vendor directories, build
-  outputs, and generated paths are both the biggest source of noise
-  in stats and the biggest chunk of extract time. gitcortex skips
-  them at emit time, so each `--ignore` saves `cat-file` round-trips
-  and JSONL bytes.
+  outputs, and generated paths are both the biggest source of noise in
+  stats and a real chunk of extract work (git still diffs them) and JSONL
+  bytes. gitcortex skips them at emit time, so each `--ignore` shrinks the
+  output and the downstream `stats`/`report` load.
+- **Leave `--blob-sizes` off unless you need it.** It's off by default;
+  enabling it adds a `cat-file` subprocess and `old_size`/`new_size` to
+  every file record. No gitcortex stat reads those — turn it on only for
+  an external consumer of the JSONL.
+- **`stats`/`report` use all your cores.** The metric passes run
+  concurrently, so more cores = faster analysis; the single-threaded
+  JSONL load is the part that doesn't scale with cores. `stats --format
+  json` is the leanest path when you only need aggregate data.
 - **Extract is resumable.** State is checkpointed every
   `--batch-size` commits (default 1000). If a run is interrupted,
   rerunning with the same flags continues from the last checkpoint
   — important on multi-hour runs like Chromium.
-- **Memory stays low.** The resolver cache uses ~7 MB; the commit
-  stream has no unbounded buffers. Even Chromium extract peaks
-  around 25 MB RSS.
+- **Memory stays low.** The commit stream has no unbounded buffers (the
+  ~7 MB resolver cache only exists with `--blob-sizes`). Even Chromium
+  extract peaks around 25 MB RSS.
 - **Plan capacity by records/second, not commits/second.** The
   commits/second metric is dominated by repository content: import-
   heavy histories artificially depress it even when the underlying
