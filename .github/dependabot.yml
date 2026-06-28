@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Go module dependencies. Keeps cobra/pflag and their transitive deps
+  # patched; pairs with the govulncheck gate in ci.yml.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # GitHub Actions versions. When the actions are later SHA-pinned, this
+  # is what bumps the pinned SHAs (and annotates them with the version).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
