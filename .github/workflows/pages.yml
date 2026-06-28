@@ -38,7 +38,7 @@ jobs:
           mkdir -p _site
           ./gitcortex report --input data.jsonl --output _site/index.html --top 30
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
