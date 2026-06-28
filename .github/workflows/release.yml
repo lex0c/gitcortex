@@ -18,21 +18,36 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Test
         run: go test ./... -count=1
 
+      # CGO_ENABLED=0 -> fully static binaries (no libc dependency, run on
+      # any Linux). -s -w strips the symbol table and DWARF: ~25-30%
+      # smaller artifacts. Go panic stack traces survive (they use the
+      # embedded pclntab, not ELF/DWARF) — only interactive debuggers
+      # (delve/gdb) lose symbols, which we never run against a release.
       - name: Build binaries
+        env:
+          CGO_ENABLED: 0
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
-          LDFLAGS="-X main.version=$VERSION"
+          LDFLAGS="-s -w -X main.version=$VERSION"
 
           GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/gitcortex-linux-amd64       ./cmd/gitcortex/
           GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/gitcortex-linux-arm64       ./cmd/gitcortex/
           GOOS=darwin  GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/gitcortex-darwin-amd64      ./cmd/gitcortex/
           GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/gitcortex-darwin-arm64      ./cmd/gitcortex/
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/gitcortex-windows-amd64.exe ./cmd/gitcortex/
+
+      # Publish checksums so downloads can be verified:
+      #   sha256sum -c SHA256SUMS
+      - name: Checksums
+        run: cd dist && sha256sum gitcortex-* > SHA256SUMS
 
       - name: Create release
         uses: softprops/action-gh-release@v2
